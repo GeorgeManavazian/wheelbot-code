@@ -1,0 +1,58 @@
+{
+  "playground": {
+    "sha256": "55b14fd2dcdf9a43428920c09177eaa097dd4410f581f06f0146686f567ec518",
+    "rows": 55380,
+    "start": "2010-01-04",
+    "end": "2020-12-31",
+    "tickers": [
+      "DBC",
+      "EEM",
+      "EFA",
+      "GLD",
+      "HYG",
+      "IEF",
+      "IWM",
+      "LQD",
+      "QQQ",
+      "SHY",
+      "SLV",
+      "SPY",
+      "TLT",
+      "VNQ",
+      "XLE",
+      "XLF",
+      "XLI",
+      "XLK",
+      "XLU",
+      "XLV"
+    ]
+  },
+  "exam": {
+    "sha256": "2de86099088eb20c476e11acc19c0317b8d5fe503c697f4f6265a9acbb3cbad4",
+    "rows": 27600,
+    "start": "2021-01-04",
+    "end": "2026-07-02",
+    "tickers": [
+      "DBC",
+      "EEM",
+      "EFA",
+      "GLD",
+      "HYG",
+      "IEF",
+      "IWM",
+      "LQD",
+      "QQQ",
+      "SHY",
+      "SLV",
+      "SPY",
+      "TLT",
+      "VNQ",
+      "XLE",
+      "XLF",
+      "XLI",
+      "XLK",
+      "XLU",
+      "XLV"
+    ]
+  }
+}
