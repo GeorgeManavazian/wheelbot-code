@@ -10,7 +10,7 @@ NaN closes for a live-universe ticker are a data bug -> hard error.
 Tickers with NaN (pre-inception) are dropped from the strategy window
 per-day, so strategies only ever see tradeable instruments.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -35,6 +35,13 @@ def run_backtest(long_df: pd.DataFrame, strategy, config: BacktestConfig = None)
     config = config or BacktestConfig()
     closes = to_wide(long_df, "close")
     opens = to_wide(long_df, "open")
+
+    if closes.iloc[0].isna().any():
+        missing = closes.columns[closes.iloc[0].isna()].tolist()
+        raise ValueError(
+            f"universe must be complete from the first bar; NaN at start for {missing}. "
+            "The expanding strategy window hides a column with any NaN in history."
+        )
 
     positions: dict[str, int] = {}
     cash = config.initial_cash

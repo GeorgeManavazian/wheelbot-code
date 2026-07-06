@@ -67,3 +67,12 @@ def test_nan_price_in_window_raises():
     df = make_long(opens=[100, 100, 100], closes=[100, float("nan"), 100])
     with pytest.raises(ValueError, match="NaN"):
         run_backtest(df, BuyDayOneThenHold(), BacktestConfig())
+
+
+def test_universe_incomplete_at_first_bar_raises():
+    a = make_long(opens=[100, 100, 100], closes=[100, 100, 100])
+    b = make_long(opens=[100, 100], closes=[100, 100], ticker="B",
+                  start=str(a["date"][1].date()))
+    df = pd.concat([a, b], ignore_index=True)
+    with pytest.raises(ValueError, match="first bar"):
+        run_backtest(df, BuyDayOneThenHold(), BacktestConfig())
