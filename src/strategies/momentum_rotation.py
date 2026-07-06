@@ -25,6 +25,22 @@ def momentum_score(closes: pd.Series) -> float:
 class MomentumRotation(Strategy):
     name = "momentum_rotation"
     DEFAULTS = {"lookback": 125, "top_n": 3, "vol_window": 20, "min_score": 0.0}
+    description = """\
+**What it does:** Once a month, ranks every ETF by trend quality — the slope
+of its recent price path times how smooth that path is (regression R²). Buys
+the `top_n` best scorers above `min_score`, giving smaller weights to the
+more volatile ones. If nothing scores well, holds cash.
+
+**Why it should work:** Cross-sectional momentum — recent winners keep
+winning over 1–12 month horizons — is one of the most documented effects in
+markets. The smoothness filter prefers steady climbers over one-headline
+spikes, and inverse-volatility sizing keeps any single holding from
+dominating risk.
+
+**When it fails:** Momentum crashes — violent reversals after panics, where
+beaten-down losers rocket and past winners lag. Holding only 2–3 ETFs means
+one bad holding hurts; monthly rebalancing reacts slowly to fast turns.
+"""
 
     def target_weights(self, window):
         if not self.is_month_start(window):

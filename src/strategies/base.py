@@ -7,6 +7,7 @@ The engine fills at next open — strategies never touch prices or shares.
 class Strategy:
     name = "base"
     DEFAULTS: dict = {}
+    description = ""  # plain language: What it does / Why it should work / When it fails
 
     def __init__(self, **params):
         unknown = set(params) - set(self.DEFAULTS)
