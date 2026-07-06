@@ -8,6 +8,7 @@ class Strategy:
     name = "base"
     DEFAULTS: dict = {}
     description = ""  # plain language: What it does / Why it should work / When it fails
+    display_name = ""  # human name shown in the dashboard, e.g. "Trend Following"
 
     def __init__(self, **params):
         unknown = set(params) - set(self.DEFAULTS)

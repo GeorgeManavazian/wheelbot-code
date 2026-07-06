@@ -24,6 +24,7 @@ def momentum_score(closes: pd.Series) -> float:
 
 class MomentumRotation(Strategy):
     name = "momentum_rotation"
+    display_name = "Momentum Rotation"
     DEFAULTS = {"lookback": 125, "top_n": 3, "vol_window": 20, "min_score": 0.0}
     description = """\
 **What it does:** Once a month, ranks every ETF by trend quality — the slope

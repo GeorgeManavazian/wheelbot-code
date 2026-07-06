@@ -8,6 +8,7 @@ from src.strategies.base import Strategy
 
 class TSTrend(Strategy):
     name = "ts_trend"
+    display_name = "Trend Following"
     DEFAULTS = {"lookback": 125}
     description = """\
 **What it does:** Once a month, checks each ETF in the basket: is today's

@@ -15,3 +15,8 @@ def test_every_concrete_strategy_has_full_description():
         assert len(desc) > 100, f"{cls.name}: description missing or too thin"
         for part in REQUIRED_PARTS:
             assert part in desc, f"{cls.name}: description lacks '{part}' section"
+
+
+def test_every_concrete_strategy_has_display_name():
+    for cls in Strategy.__subclasses__():
+        assert getattr(cls, "display_name", ""), f"{cls.name}: display_name missing"
