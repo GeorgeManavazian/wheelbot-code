@@ -67,13 +67,19 @@ def render():
     eq = result.equity
     fig = px.line(eq, title="Equity — growth of $100k (log scale)", log_y=True)
     fig.update_traces(line_color=color, showlegend=False)
+    spy_eq, _ = shared.spy_benchmark()
+    if spy_eq is not None:
+        fig.add_scatter(x=spy_eq.index, y=spy_eq.values, mode="lines",
+                        name="S&P 500 buy & hold",
+                        line=dict(color=style.MUTED, width=1.5, dash="dot"))
+    fig.update_yaxes(title="$")
     st.plotly_chart(style.apply_plotly_defaults(fig))
 
     dd = eq / eq.cummax() - 1
     fig = px.area(dd, title="Drawdown — % below record high")
     fig.update_traces(line_color=style.NEG, fillcolor="rgba(220,38,38,0.25)",
                       showlegend=False)
-    fig.update_yaxes(tickformat=".0%")
+    fig.update_yaxes(tickformat=".0%", title="% below peak")
     st.plotly_chart(style.apply_plotly_defaults(fig))
 
     monthly = eq.resample("ME").last().pct_change().dropna()

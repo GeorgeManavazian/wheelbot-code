@@ -4,6 +4,8 @@ Technical labels like momentum_rotation(lookback=63,...) remain the join key
 everywhere in the data; these helpers only change what the owner SEES.
 """
 import math
+import re
+from datetime import datetime
 
 from dashboard.recompute import STRATEGIES
 
@@ -30,6 +32,20 @@ def friendly_label(row: dict) -> str:
     if _has(row, "min_score") and float(row["min_score"]) > 0:
         parts.append(f"min score {row['min_score']:g}")
     return " · ".join(parts)
+
+
+BATCH_RE = re.compile(r"leaderboard_(\d{8})-(\d{6})_([0-9a-f]+)\.csv$")
+
+
+def batch_label(filename: str) -> str:
+    """'leaderboard_20260705-224738_42e964f.csv' -> 'Jul 5 2026, 22:47 · 42e964f'.
+    Anything unparseable passes through unchanged."""
+    m = BATCH_RE.match(filename)
+    if not m:
+        return filename
+    d, t, sha = m.groups()
+    dt = datetime.strptime(d + t, "%Y%m%d%H%M%S")
+    return f"{dt.strftime('%b')} {dt.day} {dt.year}, {dt:%H:%M} · {sha}"
 
 
 def friendly_map(ok) -> dict:

@@ -45,3 +45,15 @@ def test_friendly_map_disambiguates_collisions():
     assert m["a"] == "Trend Following · 3mo (a)"
     assert m["b"] == "Trend Following · 3mo (b)"
     assert m["c"] == "Trend Following · 6mo"
+
+
+def test_batch_label_happy_path():
+    from dashboard.naming import batch_label
+    assert batch_label("leaderboard_20260705-224738_42e964f.csv") == \
+        "Jul 5 2026, 22:47 · 42e964f"
+
+
+def test_batch_label_garbage_passthrough():
+    from dashboard.naming import batch_label
+    assert batch_label("something_else.csv") == "something_else.csv"
+    assert batch_label("") == ""

@@ -1,7 +1,8 @@
 """Streamlit-side caching wrappers around the pure loader/recompute modules."""
 import streamlit as st
 
-from dashboard import loader, recompute
+from dashboard import benchmark, loader, recompute
+from src.batch.runner import luck_sharpe
 from src.engine.data import load_playground
 
 
@@ -23,3 +24,19 @@ def run_result(row: dict):
 
 def current_lb():
     return leaderboard_df(str(st.session_state["lb_path"]))
+
+
+@st.cache_data
+def spy_benchmark():
+    """(equity, leaderboard-row dict) for SPY buy-hold; (None, None) if absent."""
+    eq = benchmark.spy_equity(playground())
+    if eq is None:
+        return None, None
+    return eq, benchmark.benchmark_row(eq)
+
+
+def luck_threshold() -> float:
+    """Same n_runs/years the leaderboard banner uses."""
+    dates = playground()["date"]
+    years = (dates.max() - dates.min()).days / 365.25
+    return luck_sharpe(len(current_lb()), years)

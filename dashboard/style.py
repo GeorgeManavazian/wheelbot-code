@@ -23,6 +23,17 @@ def family_color(name: str) -> str:
     return FAMILY_COLORS.get(name, MUTED)
 
 
+def shade_family(color: str, i: int, n: int) -> str:
+    """i-th of n same-family shades: ±12% brightness steps around the base."""
+    if n <= 1:
+        return color
+    r, g, b = (int(color[j:j + 2], 16) for j in (1, 3, 5))
+    f = 1 + 0.12 * (i - (n - 1) / 2)
+    def mix(c):
+        return max(0, min(255, round(c * f)))
+    return f"#{mix(r):02x}{mix(g):02x}{mix(b):02x}"
+
+
 def _shade(rgb: str, invert: bool = False):
     """Column shader: normalizes values, returns rgba backgrounds.
 
@@ -46,15 +57,40 @@ def _shade(rgb: str, invert: bool = False):
     return apply
 
 
-def style_metrics(df):
-    """Styler: green shading for strong sharpe/cagr, red for deep drawdowns."""
+def _sharpe_shade_absolute(luck: float):
+    """Below luck line: gray (noise). Luck→1.0: pale→mid green. >1: strong."""
+    def apply(col):
+        out = []
+        for v in col.astype(float):
+            if v != v:
+                out.append("")
+            elif v < luck:
+                d = min((luck - v) / max(luck, 1e-9), 1.0)
+                out.append(f"background-color: rgba(100, 116, 139, {0.06 + 0.18 * d:.2f})")
+            else:
+                frac = 1.0 if luck >= 1 else min((v - luck) / (1.0 - luck), 1.0)
+                out.append(f"background-color: rgba(22, 163, 74, {0.15 + 0.35 * frac:.2f})")
+        return out
+    return apply
+
+
+def style_metrics(df, luck_sharpe=None, highlight_label=None):
+    """Styler: honest sharpe shading (absolute vs luck line when given),
+    relative green for cagr, red for drawdowns, optional row tint."""
     fmt = {c: f for c, f in FORMATS.items() if c in df.columns}
     styler = df.style.format(fmt, na_rep="—")
-    for col in ("sharpe", "cagr"):
-        if col in df.columns:
-            styler = styler.apply(_shade("22, 163, 74"), subset=[col])
+    if highlight_label is not None and "label" in df.columns:
+        def tint(row):
+            hit = row["label"] == highlight_label
+            return ["background-color: #F1F5F9" if hit else ""] * len(row)
+        styler = styler.apply(tint, axis=1)   # first, so column shades win
+    if "sharpe" in df.columns:
+        shader = (_sharpe_shade_absolute(luck_sharpe) if luck_sharpe is not None
+                  else _shade("22, 163, 74"))
+        styler = styler.apply(shader, subset=["sharpe"])
+    if "cagr" in df.columns:
+        styler = styler.apply(_shade("22, 163, 74"), subset=["cagr"])
     if "max_dd" in df.columns:
-        # max_dd is negative; invert so the deepest loss gets the strongest red
         styler = styler.apply(_shade("220, 38, 38", invert=True), subset=["max_dd"])
     return styler
 
