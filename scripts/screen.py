@@ -24,8 +24,15 @@ GRIDS = [
 def main():
     long_df = load_playground()
     strategies = [s for cls, grid in GRIDS for s in expand_grid(cls, grid)]
+    
+    Path("results").mkdir(exist_ok=True)
+    sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                         capture_output=True, text=True).stdout.strip()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out = Path(f"results/leaderboard_{stamp}_{sha}.csv")
     print(f"running {len(strategies)} backtests on playground…")
-    lb = run_batch(strategies, long_df)
+    print(f"streaming per-run results to {out}")
+    lb = run_batch(strategies, long_df, out_csv=out)
 
     years = (long_df["date"].max() - long_df["date"].min()).days / 365.25
     print()
@@ -38,12 +45,6 @@ def main():
                 print(f"\nPlateau: {cls.name} / {param} (sharpe)")
                 print(plateau_table(lb, cls.name, param).round(2).to_string())
 
-    Path("results").mkdir(exist_ok=True)
-    sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                         capture_output=True, text=True).stdout.strip()
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out = Path(f"results/leaderboard_{stamp}_{sha}.csv")
-    lb.to_csv(out, index=False)
     print(f"\nsaved {out}")
 
 

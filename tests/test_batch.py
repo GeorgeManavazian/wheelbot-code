@@ -58,3 +58,12 @@ def test_plateau_table_pivots_param_vs_metric():
                    BacktestConfig(slippage_bps=0))
     tab = plateau_table(lb, "ts_trend", "lookback")
     assert list(tab.columns) == [20, 40, 60]
+
+
+def test_run_batch_streams_incremental_csv(tmp_path):
+    out = tmp_path / "lb.csv"
+    lb = run_batch(expand_grid(TSTrend, {"lookback": [20, 40]}), make_long(),
+                   BacktestConfig(slippage_bps=0), out_csv=out)
+    streamed = pd.read_csv(out)
+    assert len(streamed) == 2
+    assert set(lb.columns) == set(streamed.columns)

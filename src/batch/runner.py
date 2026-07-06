@@ -15,26 +15,38 @@ from src.engine.backtest import run_backtest
 from src.engine.metrics import summarize
 
 
+METRIC_COLS = ["cagr", "max_dd", "sharpe", "n_trades", "turnover",
+               "exposure", "positive_years", "total_years", "sample_flag"]
+
+
 def expand_grid(cls, grid: dict) -> list:
     keys = sorted(grid)
     return [cls(**dict(zip(keys, combo)))
             for combo in itertools.product(*(grid[k] for k in keys))]
 
 
-def run_batch(strategies: list, long_df: pd.DataFrame, config=None) -> pd.DataFrame:
+def run_batch(strategies: list, long_df: pd.DataFrame, config=None,
+              out_csv=None) -> pd.DataFrame:
+    param_cols = sorted({k for s in strategies for k in s.params})
+    columns = ["label", "name", *param_cols, *METRIC_COLS, "error"]
     rows = []
-    for strat in strategies:
+    for i, strat in enumerate(strategies, 1):
         row = {"label": strat.label(), "name": strat.name, **strat.params,
                "error": ""}
         try:
             row.update(summarize(run_backtest(long_df, strat, config)))
+            print(f"[{i}/{len(strategies)}] {strat.label()} "
+                  f"sharpe={row['sharpe']:.2f} cagr={row['cagr']:.1%}")
         except Exception as e:
             row["error"] = f"{type(e).__name__}: {e}"
+            print(f"[{i}/{len(strategies)}] {strat.label()} ERROR: {row['error']}")
             traceback.print_exc()
         rows.append(row)
-    lb = pd.DataFrame(rows)
-    if "sharpe" in lb.columns:
-        lb = lb.sort_values("sharpe", ascending=False, na_position="last")
+        if out_csv:
+            pd.DataFrame([row]).reindex(columns=columns).to_csv(
+                out_csv, mode="a", header=(i == 1), index=False)
+    lb = pd.DataFrame(rows).reindex(columns=columns)
+    lb = lb.sort_values("sharpe", ascending=False, na_position="last")
     return lb.reset_index(drop=True)
 
 
