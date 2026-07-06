@@ -36,3 +36,13 @@ def test_benchmark_row_fields():
                 "best_year", "worst_year", "top2_share", "n_trades"):
         assert key in row
     assert FRIENDLY.startswith("S&P 500")
+
+
+def test_benchmark_excluded_from_luck_count():
+    """The SPY benchmark row must never inflate the multiple-testing pool:
+    luck_threshold counts leaderboard runs only, not the injected benchmark."""
+    from dashboard import benchmark as bm
+    # benchmark_row carries a sentinel label that is not a real screening run
+    row = bm.benchmark_row(bm.spy_equity(_playground()))
+    assert row["label"] == bm.LABEL          # sentinel, distinct from run labels
+    assert row["name"] == "benchmark"        # excluded family, not a strategy

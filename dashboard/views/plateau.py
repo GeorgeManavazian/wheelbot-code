@@ -65,16 +65,15 @@ def render():
         kwargs = {}
         if metric == "sharpe":
             # absolute, luck-anchored scale: red below the line, green past it
-            kwargs = dict(zmin=0.0,
-                          zmax=max(1.0, float(table.max().max())),
-                          color_continuous_midpoint=luck)
+            zmax = max(1.0, luck, float(table.max().max()))
+            kwargs = dict(zmin=0.0, zmax=zmax, color_continuous_midpoint=luck)
         fig = px.imshow(table, text_auto=".2f", aspect="auto",
                         color_continuous_scale="RdYlGn",
                         labels={"x": param, "y": ylab, "color": metric},
                         **kwargs)
         if metric == "sharpe":
             fig.update_coloraxes(colorbar=dict(
-                tickvals=[0.0, luck, max(1.0, float(table.max().max()))],
+                tickvals=[0.0, luck, zmax],
                 ticktext=["0", f"luck {luck:.2f}", "1.0+"]))
         st.plotly_chart(style.apply_plotly_defaults(fig))
 

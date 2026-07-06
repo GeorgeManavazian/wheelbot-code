@@ -2,7 +2,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from dashboard import benchmark, loader, naming, recompute, shared, style
+from dashboard import loader, naming, recompute, shared, style
 
 METRICS = ["sharpe", "cagr", "max_dd", "n_trades", "turnover", "exposure",
            "positive_years", "total_years", "sample_flag"]
