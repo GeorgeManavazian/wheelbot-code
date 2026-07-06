@@ -8,7 +8,6 @@ import itertools
 import math
 import traceback
 
-import numpy as np
 import pandas as pd
 
 from src.engine.backtest import run_backtest
@@ -44,7 +43,8 @@ def run_batch(strategies: list, long_df: pd.DataFrame, config=None,
         rows.append(row)
         if out_csv:
             pd.DataFrame([row]).reindex(columns=columns).to_csv(
-                out_csv, mode="a", header=(i == 1), index=False)
+                out_csv, mode="w" if i == 1 else "a", header=(i == 1),
+                index=False)
     lb = pd.DataFrame(rows).reindex(columns=columns)
     lb = lb.sort_values("sharpe", ascending=False, na_position="last")
     return lb.reset_index(drop=True)
@@ -65,7 +65,7 @@ def plateau_table(leaderboard: pd.DataFrame, name: str, param: str,
     fam = fam.dropna(axis=1, how="all")  # other families' param cols are all-NaN here
     other = [c for c in fam.columns
              if c not in {param, metric, "label", "name", "error"}
-             and c in _param_cols(fam, name)]
+             and c in _param_cols(fam)]
     index = other if other else None
     if index is None:
         fam["_"] = "all"
@@ -73,8 +73,6 @@ def plateau_table(leaderboard: pd.DataFrame, name: str, param: str,
     return fam.pivot_table(index=index, columns=param, values=metric)
 
 
-def _param_cols(fam: pd.DataFrame, name: str) -> set:
-    metric_cols = {"cagr", "max_dd", "sharpe", "n_trades", "turnover",
-                   "exposure", "positive_years", "total_years", "sample_flag"}
+def _param_cols(fam: pd.DataFrame) -> set:
     return {c for c in fam.columns
-            if c not in metric_cols | {"label", "name", "error"}}
+            if c not in set(METRIC_COLS) | {"label", "name", "error"}}

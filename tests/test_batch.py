@@ -65,5 +65,10 @@ def test_run_batch_streams_incremental_csv(tmp_path):
     lb = run_batch(expand_grid(TSTrend, {"lookback": [20, 40]}), make_long(),
                    BacktestConfig(slippage_bps=0), out_csv=out)
     streamed = pd.read_csv(out)
+    streamed["error"] = streamed["error"].fillna("")
     assert len(streamed) == 2
     assert set(lb.columns) == set(streamed.columns)
+    # streamed rows must equal the final leaderboard rows (order aside)
+    a = streamed.sort_values("label").reset_index(drop=True)[sorted(lb.columns)]
+    b = lb.sort_values("label").reset_index(drop=True)[sorted(lb.columns)]
+    pd.testing.assert_frame_equal(a, b, check_dtype=False)
