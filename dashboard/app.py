@@ -2,7 +2,7 @@
 Run from the repo root (loader looks for ./results)."""
 import streamlit as st
 
-from dashboard import loader
+from dashboard import loader, naming
 from dashboard.views import compare, leaderboard, plateau, run_detail
 
 st.set_page_config(page_title="ETF Bot Research", layout="wide")
@@ -16,7 +16,7 @@ if not paths:
     st.stop()
 
 names = [p.name for p in paths]
-choice = st.sidebar.selectbox("Batch", names)  # newest first
+choice = st.sidebar.selectbox("Batch", names, format_func=naming.batch_label)
 st.session_state["lb_path"] = paths[names.index(choice)]
 
 pages = {
