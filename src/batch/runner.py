@@ -51,8 +51,13 @@ def run_batch(strategies: list, long_df: pd.DataFrame, config=None,
     return lb.reset_index(drop=True)
 
 
+def luck_sharpe(n_runs: int, years: float) -> float:
+    """Expected best Sharpe from pure luck across n_runs independent tries."""
+    return math.sqrt(2 * math.log(max(n_runs, 2)) / years)
+
+
 def luck_warning(n_runs: int, years: float) -> str:
-    exp_max = math.sqrt(2 * math.log(max(n_runs, 2)) / years)
+    exp_max = luck_sharpe(n_runs, years)
     return (f"MULTIPLE-TESTING WARNING: {n_runs} runs on {years:.0f}y of data -> "
             f"best-by-pure-luck Sharpe ~{exp_max:.2f} — results below that "
             f"line are indistinguishable from noise.")

@@ -72,3 +72,14 @@ def test_run_batch_streams_incremental_csv(tmp_path):
     a = streamed.sort_values("label").reset_index(drop=True)[sorted(lb.columns)]
     b = lb.sort_values("label").reset_index(drop=True)[sorted(lb.columns)]
     pd.testing.assert_frame_equal(a, b, check_dtype=False)
+
+
+def test_luck_sharpe_extraction():
+    from src.batch.runner import luck_sharpe, luck_warning
+    import math
+    # formula: sqrt(2*ln(max(n,2))/years)
+    assert luck_sharpe(31, 11.0) == pytest.approx(
+        math.sqrt(2 * math.log(31) / 11.0))
+    assert luck_sharpe(1, 10.0) == luck_sharpe(2, 10.0)  # n clamped to 2
+    # warning string still embeds the same number, unchanged format
+    assert f"~{luck_sharpe(31, 11.0):.2f}" in luck_warning(31, 11.0)
