@@ -58,6 +58,16 @@ etf-bot/
 3. Run detail / compare: `recompute.py` maps a leaderboard row's `name` + param columns back to a strategy class (strategy registry keyed by `name`), instantiates with params, runs `run_backtest` on playground data, caches the `BacktestResult`.
 4. **Playground data only.** The dashboard never uses the `--exam` path; the exam seal is untouched.
 
+## Strategy descriptions (owner requirement)
+
+Every strategy plugin carries a plain-language `description` class attribute with three parts:
+
+1. **What it does** — the rule, in one or two sentences a non-programmer can follow.
+2. **Why it should work** — the economic/behavioral rationale (e.g. "momentum persists because investors under-react to news").
+3. **When it fails** — known weak regimes (e.g. "whipsaws sideways markets; 2011, 2015 were bad for trend").
+
+The dashboard shows the description on the run-detail view and as an expandable row/tooltip on the leaderboard. Writing descriptions for the two existing strategies (`ts_trend`, `momentum_rotation`) is part of the dashboard build. A strategy without a description fails a unit test — the field is mandatory, not optional polish.
+
 ## Views
 
 1. **Leaderboard** — full leaderboard table, sortable by any metric; honesty columns (`n_trades`, `sample_flag`, `positive_years/total_years`) always visible; the engine's multiple-testing luck warning rendered as a permanent banner; crashed runs (non-empty `error`) in a separate red section. Row select → run detail.
@@ -79,6 +89,7 @@ etf-bot/
 
 ## Build order
 
+0. `description` attribute on Strategy base + both existing strategies + mandatory-description test.
 1. `loader.py` + tests.
 2. `recompute.py` (registry, cache, stale guard) + tests.
 3. Leaderboard view + app shell.
