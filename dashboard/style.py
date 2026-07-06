@@ -23,16 +23,39 @@ def family_color(name: str) -> str:
     return FAMILY_COLORS.get(name, MUTED)
 
 
+def _shade(rgb: str, invert: bool = False):
+    """Column shader: normalizes values, returns rgba backgrounds.
+
+    No matplotlib dependency (pandas' background_gradient needs it);
+    alpha stays ≤0.5 so the numbers underneath remain readable.
+    """
+    def apply(col):
+        vals = col.astype(float)
+        lo, hi = vals.min(), vals.max()
+        span = hi - lo
+
+        def cell(v):
+            if span == 0 or v != v:  # constant column or NaN
+                return ""
+            frac = (v - lo) / span
+            if invert:
+                frac = 1 - frac
+            return f"background-color: rgba({rgb}, {0.08 + 0.42 * frac:.2f})"
+
+        return [cell(v) for v in vals]
+    return apply
+
+
 def style_metrics(df):
     """Styler: green shading for strong sharpe/cagr, red for deep drawdowns."""
     fmt = {c: f for c, f in FORMATS.items() if c in df.columns}
     styler = df.style.format(fmt, na_rep="—")
     for col in ("sharpe", "cagr"):
         if col in df.columns:
-            styler = styler.background_gradient(subset=[col], cmap="Greens")
+            styler = styler.apply(_shade("22, 163, 74"), subset=[col])
     if "max_dd" in df.columns:
-        # max_dd is negative; reversed Reds puts darkest red on the deepest loss
-        styler = styler.background_gradient(subset=["max_dd"], cmap="Reds_r")
+        # max_dd is negative; invert so the deepest loss gets the strongest red
+        styler = styler.apply(_shade("220, 38, 38", invert=True), subset=["max_dd"])
     return styler
 
 
