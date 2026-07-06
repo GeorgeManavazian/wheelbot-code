@@ -46,6 +46,8 @@ def check_stale(row: dict, result) -> list[str]:
     problems = []
     for m in CHECK_METRICS:
         want, got = float(row[m]), float(stats[m])
+        if math.isnan(want) and math.isnan(got):
+            continue
         if not math.isclose(want, got, rel_tol=RTOL, abs_tol=1e-9):
             problems.append(
                 f"{m}: leaderboard {want:.6f} vs recomputed {got:.6f}")

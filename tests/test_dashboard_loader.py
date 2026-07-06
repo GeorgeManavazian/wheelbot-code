@@ -2,9 +2,9 @@ import pandas as pd
 
 from dashboard import loader
 
-CSV = """label,name,lookback,cagr,max_dd,sharpe,n_trades,turnover,exposure,positive_years,total_years,sample_flag,error
-ts_trend(lookback=63),ts_trend,63,0.08,-0.15,0.9,120,1.5,0.7,8,10,OK,
-ts_trend(lookback=125),ts_trend,125,,,,,,,,,,"ValueError: boom"
+CSV = """label,name,lookback,cagr,max_dd,sharpe,n_trades,turnover,exposure,positive_years,total_years,best_year,worst_year,top2_share,sample_flag,error
+ts_trend(lookback=63),ts_trend,63,0.08,-0.15,0.9,120,1.5,0.7,8,10,0.21,-0.08,0.35,OK,
+ts_trend(lookback=125),ts_trend,125,,,,,,,,,,,,,"ValueError: boom"
 """
 
 

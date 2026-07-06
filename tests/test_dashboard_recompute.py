@@ -55,3 +55,19 @@ def test_round_trip_is_fresh_and_tampered_row_is_stale():
     tampered = {**row, "sharpe": row["sharpe"] + 0.1}
     problems = recompute.check_stale(tampered, result)
     assert problems and "sharpe" in problems[0]
+
+
+def test_check_stale_nan_both_sides_not_stale(monkeypatch):
+    """NaN on both sides must NOT fire a false stale alarm (math.isclose(nan,nan)==False)."""
+    long_df = synthetic_long_df()
+    row = make_row(TSTrend(lookback=20), long_df)
+    row["sharpe"] = float("nan")
+    # Patch summarize so the recomputed stats also have NaN sharpe
+    nan_stats = {**row, "sharpe": float("nan")}
+    monkeypatch.setattr(recompute, "summarize", lambda _: nan_stats)
+    dummy_result = object()
+    assert recompute.check_stale(row, dummy_result) == []
+    # Non-NaN mismatch elsewhere still reports
+    row2 = {**row, "cagr": row["cagr"] + 0.5}
+    problems = recompute.check_stale(row2, dummy_result)
+    assert problems and "cagr" in problems[0]
