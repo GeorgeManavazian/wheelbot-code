@@ -6,7 +6,10 @@ import pandas as pd
 
 def list_leaderboards(results_dir="results") -> list[Path]:
     """All leaderboard CSVs, newest first (filenames embed the timestamp)."""
-    return sorted(Path(results_dir).glob("leaderboard_*.csv"), reverse=True)
+    d = Path(results_dir)
+    if not d.is_dir():
+        return []
+    return sorted(d.glob("leaderboard_*.csv"), reverse=True)
 
 
 def load_leaderboard(path) -> pd.DataFrame:
@@ -15,7 +18,7 @@ def load_leaderboard(path) -> pd.DataFrame:
     return lb
 
 
-def split_errors(lb: pd.DataFrame):
+def split_errors(lb: pd.DataFrame) -> tuple:
     """(ok_rows, error_rows) — crashed runs are shown, never dropped."""
     ok = lb[lb["error"] == ""].reset_index(drop=True)
     bad = lb[lb["error"] != ""].reset_index(drop=True)
