@@ -9,7 +9,7 @@ import pandas as pd
 
 
 def execute_rebalance(positions, cash, targets, open_prices, slippage_bps):
-    if sum(targets.values()) > 1.0 + 0.1:
+    if sum(targets.values()) > 1.0 + 1e-9:
         raise ValueError(f"target weights sum to {sum(targets.values()):.4f} > 1.0")
     if any(w < 0 for w in targets.values()):
         raise ValueError("negative weight = shorting, not allowed in v1")

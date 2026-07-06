@@ -39,16 +39,13 @@ def test_sells_execute_before_buys():
 
 
 def test_insufficient_cash_reduces_buy(capsys):
-    # target 100% of a 10k portfolio but only 500 cash free (rest untouched holding C)
+    # full switch A -> B with 100 bps slippage: sell 100 A @ 99 -> cash 9900,
+    # target B = floor(10000/101) = 99 shares costing 9999 -> capped to 98
     pos, cash, trades = execute_rebalance(
-        {"C": 95}, 500.0, {"C": 0.95, "B": 0.05},
-        pd.Series({"C": 100.0, "B": 300.0}), slippage_bps=0)
-    # target B = 0.05*10000 = 500 -> 1 share at 300, affordable. Now make it not:
-    pos2, cash2, _ = execute_rebalance(
-        {"C": 95}, 500.0, {"C": 0.95, "B": 0.10},
-        pd.Series({"C": 100.0, "B": 300.0}), slippage_bps=0)
-    # target B = 1000 -> 3 shares = 900, affordable within 500? No: buys capped at cash
-    assert pos2["B"] == 1  # floor(500/300)
+        {"A": 100}, 0.0, {"B": 1.0},
+        pd.Series({"A": 100.0, "B": 100.0}), slippage_bps=100)
+    assert pos == {"B": 98}
+    assert cash == pytest.approx(9_900.0 - 98 * 101.0)
     assert "WARNING" in capsys.readouterr().out
 
 
