@@ -39,7 +39,10 @@ def execute_rebalance(positions, cash, targets, open_prices, slippage_bps):
             positions[t] = target_shares[t]
             if positions[t] == 0:
                 del positions[t]
-    # then buys, capped at cash
+    # then buys, capped at cash. NB: buy targets are recomputed at the
+    # SLIPPED price (you can only afford what you actually pay for), while
+    # sell targets above use the unslipped open. Intentional asymmetry —
+    # pinned by test_buy_pays_slippage.
     for t in sorted(target_shares):
         # For buys, recalculate target using slipped price to get correct share count
         target_at_slip = math.floor(targets.get(t, 0) * value / (open_prices[t] * (1 + slip)))
@@ -55,4 +58,5 @@ def execute_rebalance(positions, cash, targets, open_prices, slippage_bps):
             cash -= diff * price
             trades.append({"ticker": t, "side": "buy", "shares": diff, "price": price})
             positions[t] = positions.get(t, 0) + diff
+    positions = {t: sh for t, sh in positions.items() if sh != 0}
     return positions, cash, trades
