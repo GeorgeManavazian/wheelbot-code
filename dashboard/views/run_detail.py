@@ -71,7 +71,7 @@ def render():
     if spy_eq is not None:
         fig.add_scatter(x=spy_eq.index, y=spy_eq.values, mode="lines",
                         name="S&P 500 buy & hold",
-                        line=dict(color=style.MUTED, width=1.5))
+                        line=dict(color=style.MUTED, width=1.5, dash="dot"))
     fig.update_yaxes(title="$")
     st.plotly_chart(style.apply_plotly_defaults(fig))
 
