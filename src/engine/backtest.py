@@ -6,9 +6,8 @@ Timeline per bar T (except the last):
 Equity is marked at each day's close. Same-bar fills are impossible:
 the fill price row (T+1) is never inside the strategy's window (<= T).
 
-NaN closes for a live-universe ticker are a data bug -> hard error.
-Tickers with NaN (pre-inception) are dropped from the strategy window
-per-day, so strategies only ever see tradeable instruments.
+NaN closes anywhere are a data bug -> hard error. The universe must be
+complete from the first bar; nothing is silently dropped or interpolated.
 """
 from dataclasses import dataclass
 
@@ -60,17 +59,16 @@ def run_backtest(long_df: pd.DataFrame, strategy, config: BacktestConfig = None)
 
         # 2. mark at close
         row = closes.loc[date]
-        for t in positions:
-            if pd.isna(row[t]):
-                raise ValueError(f"NaN close for held ticker {t} on {date.date()}")
+        if row.isna().any():
+            bad = closes.columns[row.isna()].tolist()
+            raise ValueError(f"NaN close for {bad} on {date.date()}")
         pos_value = sum(sh * row[t] for t, sh in positions.items())
         equity.append(cash + pos_value)
         holdings.append(pos_value)
 
         # 3. decide (skip last bar — no next open to fill at)
         if i < len(closes.index) - 1:
-            window = closes.iloc[: i + 1]
-            window = window.dropna(axis=1, how="any").copy()  # pre-inception cols out; copy = mutation-proof
+            window = closes.iloc[: i + 1].copy()  # copy = mutation-proof
             targets = strategy.target_weights(window)
             if targets is not None:
                 for t in targets:

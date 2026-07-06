@@ -15,7 +15,8 @@ from src.engine.metrics import summarize
 
 
 METRIC_COLS = ["cagr", "max_dd", "sharpe", "n_trades", "turnover",
-               "exposure", "positive_years", "total_years", "sample_flag"]
+               "exposure", "positive_years", "total_years",
+               "best_year", "worst_year", "top2_share", "sample_flag"]
 
 
 def expand_grid(cls, grid: dict) -> list:

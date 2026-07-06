@@ -46,6 +46,9 @@ def avg_exposure(holdings_value: pd.Series, equity: pd.Series) -> float:
 
 def summarize(result) -> dict:
     yr = yearly_returns(result.equity)
+    pos_years = yr[yr > 0]
+    top2_share = (yr.nlargest(2).sum() / pos_years.sum()
+                  if len(pos_years) and pos_years.sum() > 0 else float("nan"))
     n = len(result.trades)
     flag = "OK" if n >= 100 else ("LOW <100" if n >= 30 else "INSUFFICIENT <30")
     return {
@@ -57,5 +60,8 @@ def summarize(result) -> dict:
         "exposure": avg_exposure(result.holdings_value, result.equity),
         "positive_years": int((yr > 0).sum()),
         "total_years": len(yr),
+        "best_year": yr.max(),
+        "worst_year": yr.min(),
+        "top2_share": top2_share,
         "sample_flag": flag,
     }

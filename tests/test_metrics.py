@@ -55,3 +55,4 @@ def test_summarize_flags_small_sample():
     assert s["n_trades"] == 5
     assert s["sample_flag"] == "INSUFFICIENT <30"
     assert s["exposure"] == pytest.approx(0.5)
+    assert {"best_year", "worst_year", "top2_share"} <= set(s)

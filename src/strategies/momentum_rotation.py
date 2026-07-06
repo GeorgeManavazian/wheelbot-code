@@ -42,6 +42,7 @@ class MomentumRotation(Strategy):
 
         vol = (window[top.index].pct_change()
                .iloc[-self.params["vol_window"]:].std())
+        vol = vol.clip(lower=1e-9)  # a 20d flat price would give inf weight
         inv = 1.0 / vol
         weights = inv / inv.sum()
         return weights.to_dict()
