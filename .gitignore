@@ -2,6 +2,4 @@
 .venv/
 __pycache__/
 data/raw/
-data/playground/*.parquet
-data/exam/*.parquet
 results/
