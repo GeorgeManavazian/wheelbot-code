@@ -51,7 +51,10 @@ def persist_verdict(verdict: dict, run_dir: str) -> pathlib.Path:
         raise FileExistsError(f"{d}/SEALED already exists; refusing overwrite")
     d.mkdir(parents=True, exist_ok=True)
     vpath = d / "verdict.json"
-    vpath.write_text(json.dumps(verdict, indent=2))
-    (d / "SEALED").write_text("sealed\n")
-    vpath.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)  # 444
+    vpath.write_text(json.dumps(verdict, indent=2), encoding="utf-8")
+    sealed = d / "SEALED"
+    sealed.write_text("sealed\n", encoding="utf-8")
+    ro = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH  # 444
+    vpath.chmod(ro)
+    sealed.chmod(ro)
     return d

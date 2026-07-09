@@ -54,3 +54,12 @@ def test_persist_refuses_overwrite(tmp_path):
     with pytest.raises(FileExistsError):
         persist_verdict({"pass": True, "shelf": False, "dsr": 1, "fwer": 0, "k_effective": 5,
                          "regime_kill": False, "calmar_overall": 1.0, "notes": {}}, str(d))
+
+def test_persist_verdict_sentinel_also_readonly(tmp_path):
+    import stat
+    persist_verdict({"pass": True, "shelf": False, "watch": False,
+                     "dsr": 1, "fwer": 0, "k_effective": 5,
+                     "regime_kill": False, "calmar_overall": 1.0, "notes": {}},
+                    str(tmp_path / "run_z"))
+    mode = (tmp_path / "run_z" / "SEALED").stat().st_mode
+    assert not (mode & stat.S_IWUSR)
