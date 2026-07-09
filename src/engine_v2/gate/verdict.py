@@ -11,7 +11,7 @@ from .regime_eval import per_regime_sharpe, regime_kill
 
 DSR_PASS = 0.95
 DSR_WATCH_LO = 0.80
-FWER_PASS = 0.20
+FWER_PASS = 0.05
 K_MIN = 5
 
 def _best_trial_returns(trial_return_matrix: pd.DataFrame) -> pd.Series:
@@ -34,7 +34,7 @@ def compute_verdict(trial_return_matrix: pd.DataFrame,
     fwer_val = fwer(K_eff, alpha=0.05)
     reg_tbl = per_regime_sharpe(best, regime_labels)
     reg_killed = regime_kill(reg_tbl)
-    is_pass = (dsr > DSR_PASS and fwer_val < FWER_PASS
+    is_pass = (dsr > DSR_PASS and fwer_val <= FWER_PASS
                and not reg_killed and calmar_overall >= 1.0)
     is_watch = (not is_pass) and (
         DSR_WATCH_LO <= dsr <= DSR_PASS or reg_killed
