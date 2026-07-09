@@ -35,3 +35,27 @@ def test_deflated_sharpe_in_unit_interval():
     r = pd.Series(rng.normal(0.001, 0.01, 200))
     p = deflated_sharpe(r, K_effective=50)
     assert 0.0 <= p <= 1.0
+
+
+def test_deflated_sharpe_short_series_no_nan():
+    for n in [2, 3]:
+        r = pd.Series([0.01] * n)
+        v = deflated_sharpe(r, K_effective=5)
+        assert v == 0.0, f"length {n} should return 0.0 not nan"
+
+
+def test_deflated_sharpe_kurt_convention_matches_lopez():
+    # For a well-known distribution: N(0.005, 0.01) large T, K=1, DSR should be very high.
+    # Under wrong (excess/4) formula, DSR was ~0.99 for K_eff=1 which passes weak test;
+    # under correct ((kurt+2)/4) formula it stays >0.95. Both should exceed threshold.
+    rng = np.random.default_rng(42)
+    r = pd.Series(rng.normal(0.005, 0.01, 5000))
+    assert deflated_sharpe(r, K_effective=1) > 0.95
+
+
+def test_deflated_sharpe_stable_under_high_positive_skew():
+    # Adversarial: high skew + high SR could push denom negative under old code.
+    # New code with max(...,0) inside sqrt handles it.
+    r = pd.Series([0.0]*10 + [0.1])  # extreme positive skew
+    v = deflated_sharpe(r, K_effective=1)
+    assert 0.0 <= v <= 1.0

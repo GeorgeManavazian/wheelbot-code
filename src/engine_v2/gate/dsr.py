@@ -21,14 +21,16 @@ def expected_max_sr(K: int, mean_sr: float = 0.0, std_sr: float = 1.0) -> float:
 
 def deflated_sharpe(returns: pd.Series, K_effective: int, T: int | None = None) -> float:
     returns = returns.dropna()
-    if len(returns) < 2:
+    if len(returns) < 4:
         return 0.0
     sr = returns.mean() / (returns.std(ddof=1) + 1e-12)
-    T = T or len(returns)
+    T = T if (T is not None and T >= 4) else len(returns)
     skew = float(returns.skew())
     kurt = float(returns.kurt())  # excess kurtosis
     e_max = expected_max_sr(K_effective, mean_sr=0.0, std_sr=1.0 / sqrt(T))
     num = (sr - e_max) * sqrt(T - 1)
-    den = sqrt(1 - skew * sr + ((kurt) / 4) * sr * sr)
-    z = num / (den + 1e-12)
+    den = sqrt(max(1 - skew * sr + ((kurt + 2) / 4) * sr * sr, 0.0))
+    if den == 0.0:
+        return 1.0 if num > 0 else (0.0 if num < 0 else 0.5)
+    z = num / den
     return float(norm.cdf(z))
