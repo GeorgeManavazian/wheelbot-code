@@ -17,8 +17,9 @@ def test_mp_denoise_preserves_shape_and_symmetry():
     assert d.shape == cov.shape
     assert np.allclose(d.values, d.values.T, atol=1e-8)
 
-def test_mp_denoise_reduces_condition_number():
-    rng = np.random.default_rng(0)
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+def test_mp_denoise_reduces_condition_number(seed):
+    rng = np.random.default_rng(seed)
     cov = _synthetic_cov(10, 400, rng)
     k_raw = np.linalg.cond(cov.values)
     k_den = np.linalg.cond(mp_denoise(cov, T=400).values)

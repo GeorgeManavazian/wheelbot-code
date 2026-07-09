@@ -26,8 +26,10 @@ def mp_denoise(cov: pd.DataFrame, T: int) -> pd.DataFrame:
     if noise_mask.any():
         avg = eigvals[noise_mask].mean()
         eigvals = np.where(noise_mask, avg, eigvals)
-    corr_denoised = eigvecs @ np.diag(eigvals) @ eigvecs.T
+    corr_denoised = np.einsum('ij,j,kj->ik', eigvecs, eigvals, eigvecs)
     corr_denoised = (corr_denoised + corr_denoised.T) / 2
+    d = np.sqrt(np.diag(corr_denoised))
+    corr_denoised = corr_denoised / np.outer(d, d)  # restore unit diagonal
     cov_denoised = corr_denoised * np.outer(stds, stds)
     return pd.DataFrame(cov_denoised, index=cov.index, columns=cov.columns)
 
@@ -48,14 +50,12 @@ def nco_weights(cov: pd.DataFrame, mu: pd.Series | None = None) -> pd.Series:
         clusters.setdefault(int(lbl), []).append(name)
     intra_w = pd.Series(0.0, index=cov.index)
     cluster_cov = pd.DataFrame(0.0, index=list(clusters), columns=list(clusters))
-    cluster_mean = pd.Series(0.0, index=list(clusters))
     for cid, members in clusters.items():
         sub = cov_d.loc[members, members]
         w = _inverse_variance(sub)
         intra_w.loc[members] = w
         cluster_var = float(w @ sub.values @ w.values)
         cluster_cov.loc[cid, cid] = cluster_var
-        cluster_mean.loc[cid] = 1.0
     inter_w = _inverse_variance(cluster_cov)
     final = pd.Series(0.0, index=cov.index)
     for cid, members in clusters.items():
