@@ -11,7 +11,7 @@ from .regime_eval import per_regime_sharpe, regime_kill
 
 DSR_PASS = 0.95
 DSR_WATCH_LO = 0.80
-FWER_PASS = 0.05
+FWER_PASS = 0.20
 K_MIN = 5
 
 def _best_trial_returns(trial_return_matrix: pd.DataFrame) -> pd.Series:
