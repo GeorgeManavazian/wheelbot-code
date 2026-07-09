@@ -35,8 +35,9 @@ def onc_cluster(corr: pd.DataFrame, max_k: int | None = None) -> tuple[int, np.n
     return best_k, best_labels
 
 def k_effective(trial_return_matrix: pd.DataFrame) -> int:
-    if trial_return_matrix.shape[1] < 2:
-        return 1
+    n = trial_return_matrix.shape[1]
+    if n <= 2:
+        return n
     corr = trial_return_matrix.corr().fillna(0)
     k, _ = onc_cluster(corr)
     return int(k)

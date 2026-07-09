@@ -33,3 +33,12 @@ def test_k_effective_of_iid_is_high():
     df.columns = [f"t{i}" for i in range(20)]
     k = k_effective(df)
     assert k >= 5
+
+def test_k_effective_two_uncorrelated_series():
+    rng = np.random.default_rng(2)
+    df = pd.DataFrame(rng.normal(0, 1, (500, 2)), columns=["a", "b"])
+    assert k_effective(df) == 2
+
+def test_k_effective_single_series():
+    df = pd.DataFrame({"a": [1.0, 2.0, 3.0]})
+    assert k_effective(df) == 1
