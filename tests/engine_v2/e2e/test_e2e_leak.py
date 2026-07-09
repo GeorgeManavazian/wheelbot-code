@@ -1,6 +1,5 @@
 import pandas as pd
 import pytest
-from src.engine_v2.backtest.loop import run_trial
 
 class LeakStrat:
     display_name = "leaker"; mechanism = "peek"; parameter_grid = {}; holding_period_cap = 1

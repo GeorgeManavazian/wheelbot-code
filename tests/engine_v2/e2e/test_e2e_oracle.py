@@ -8,7 +8,10 @@ import pandas as pd
 from src.engine_v2.gate.verdict import compute_verdict
 
 
-def test_single_oracle_trial_passes():
+def test_single_trial_hits_kmin_guard():
+    """K_MIN=5 means single-trial cases always return insufficient_trials
+    and shelf=True. Verifies the short-circuit path.
+    """
     n = 800
     idx = pd.date_range("2010-01-01", periods=n, freq="B")
     rng = np.random.default_rng(42)
@@ -21,28 +24,19 @@ def test_single_oracle_trial_passes():
         index=idx,
     )
     v = compute_verdict(trm, reg, calmar_overall=2.5)
-    # K_eff=1 (single column) → FWER = 0.05 exactly → gate uses <=
-    assert v["k_effective"] == 1
-    # Single trial fails K_MIN=5 by design → insufficient_trials short-circuits
-    # and returns sentinel fwer=1.0 / dsr=0.0. Only assert raw metrics when the
-    # gate actually ran the computation.
-    if v["notes"].get("insufficient_trials"):
-        assert v["pass"] is False
-        assert v["shelf"] is True
-    else:
-        assert v["fwer"] <= 0.05
-        assert v["dsr"] > 0.95
-        assert v["pass"] is True
+    assert v["notes"].get("insufficient_trials") is True
+    assert v["shelf"] is True
+    assert v["pass"] is False
 
 
-def test_five_uncorrelated_oracles_gate_behavior():
-    # 5 trials, all with independent noise: K_eff likely > 1.
-    # We assert on the machinery, not a specific verdict — the point is
-    # that FWER correction proportionally deflates confidence in the best.
+def test_five_oracles_produce_strong_dsr():
+    """5 genuine-oracle trials with real edge (mean=0.003, sd=0.001, T=800).
+    Under FWER correction with K_eff>=1, DSR should still be >0.90 given the
+    signal strength. Verdict state machine exclusivity is checked too.
+    """
     n = 800
     idx = pd.date_range("2010-01-01", periods=n, freq="B")
     rng = np.random.default_rng(0)
-    # Independent noise per column → moderate to low correlation
     ret_matrix = np.full((n, 5), 0.003) + rng.normal(0, 0.001, (n, 5))
     trm = pd.DataFrame(ret_matrix, index=idx, columns=[f"t{i}" for i in range(5)])
     reg = pd.DataFrame(
@@ -52,6 +46,7 @@ def test_five_uncorrelated_oracles_gate_behavior():
         index=idx,
     )
     v = compute_verdict(trm, reg, calmar_overall=2.5)
-    assert v["k_effective"] >= 1
-    assert v["fwer"] >= 0.05
-    assert 0.0 <= v["dsr"] <= 1.0
+    assert v["dsr"] > 0.90
+    # verdict states are mutually exclusive
+    states = [v["pass"], v["watch"], v["shelf"]]
+    assert sum(states) == 1
