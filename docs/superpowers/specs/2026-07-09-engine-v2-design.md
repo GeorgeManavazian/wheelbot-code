@@ -92,7 +92,8 @@ Isolation guarantees:
 class Strategy(Protocol):
     display_name: str        # mandatory, plain language
     mechanism: str           # mandatory, why edge persists
-    parameter_grid: dict     # for CPCV trial expansion
+    parameter_grid: dict     # for CPCV trial expansion (may be empty → K = CPCV combos only)
+    holding_period_cap: int  # days, drives CPCV purge/embargo
 
     def forecast(self, bars: DataFrame, asof: Timestamp) -> Series:
         """Returns per-instrument forecast in [-20, +20].
@@ -144,7 +145,7 @@ forecast (±20)
 
 **Stage 1 — Walk-Forward CPCV**
 - History chopped into N=10 folds
-- Purge = max label horizon in days; embargo = same
+- Purge = max of (strategy holding period, feature lookback window) in days; embargo = same. For strategies with no labeled horizon (pure signal-driven), purge defaults to holding-period cap declared in the plugin.
 - All (N choose k) train/test combos for k=2
 - Per trial: fills → P&L → per-trade returns
 
