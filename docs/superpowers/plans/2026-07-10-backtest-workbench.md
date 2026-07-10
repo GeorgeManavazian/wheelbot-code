@@ -14,12 +14,15 @@
 - No CPCV, DSR, FWER, NCO, or `compute_verdict` on the workbench path. The Run page must never import `gate/` or `orchestrator.run_backtest`.
 - Bars are a pandas DataFrame with MultiIndex columns `(ticker, field)` where `field ∈ {Open,High,Low,Close,...}`, DatetimeIndex rows — the shape the fixture and `_simulate` already use.
 - Frequency-awareness: annualization derives from median bar spacing; default `periods_per_year=252` preserves all existing behavior on daily bars.
+- **Primary data is the real universe** `fixtures/bars_etf_universe_2010_2026.parquet` (20 ETFs, 2010–2026). The small `bars_2007_2010_small.parquet` (SPY/TLT/GLD) is retained ONLY as the fast unit-test bed. The workbench's default `DataSource` points at the universe file.
+- **Standing evaluation methodology (owner, durable — `backtest-judge-on-recent`):** judge on the RECENT window (~last 5y, headline), keep FULL history for context, and ALWAYS expose **year-by-year Sharpe** (decay curve). Never headline one blended multi-year number. The `Result`/metrics layer must implement this — it is independent of `scripts/evaluate.py` (which is archived).
+- `RECENT_START = "2021-07-01"` for the recent-window headline on the 2010–2026 universe.
 - Archive means `git mv` into `archive/`, never delete (owner decision: park not delete).
 - Every task ends green: `.venv/bin/pytest tests/engine_v2/ -q` (plus the task's own new test) passes before commit.
 
 ---
 
-### Task 1: `DataSource` interface + `FixtureSource`
+### Task 1: `DataSource` interface + `ParquetSource` (+ real-universe default)
 
 **Files:**
 - Create: `src/engine_v2/data/source.py`
@@ -29,28 +32,39 @@
 - Consumes: existing `src/engine_v2/data/loader.py::load_bars(tickers, start, end, source, path)`.
 - Produces:
   - `class DataSource(Protocol)` with `load(tickers, start, end) -> pd.DataFrame`, `available_tickers() -> list[str]`, `date_range() -> tuple[pd.Timestamp, pd.Timestamp]`.
-  - `class FixtureSource(path="fixtures/bars_2007_2010_small.parquet")` implementing all three.
+  - Module constants `FIXTURE_PATH` (small 3yr test bed) and `UNIVERSE_PATH` (real 20-ETF 2010–2026).
+  - `class ParquetSource(path=UNIVERSE_PATH)` implementing all three.
+  - `def default_source() -> ParquetSource` returning the real-universe source (what the Run page uses).
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # tests/engine_v2/test_source.py
 import pandas as pd
-from src.engine_v2.data.source import FixtureSource
+from src.engine_v2.data.source import ParquetSource, default_source, FIXTURE_PATH, UNIVERSE_PATH
 
 def test_fixture_source_lists_tickers_and_range():
-    src = FixtureSource()
+    src = ParquetSource(FIXTURE_PATH)
     assert set(src.available_tickers()) == {"SPY", "TLT", "GLD"}
     lo, hi = src.date_range()
     assert lo == pd.Timestamp("2007-01-03")
     assert hi == pd.Timestamp("2010-12-30")
 
 def test_fixture_source_load_slices():
-    src = FixtureSource()
+    src = ParquetSource(FIXTURE_PATH)
     bars = src.load(["SPY", "TLT"], "2008-01-01", "2008-12-31")
     assert set(bars.columns.get_level_values(0)) == {"SPY", "TLT"}
     assert bars.index.min() >= pd.Timestamp("2008-01-01")
     assert bars.index.max() <= pd.Timestamp("2008-12-31")
+
+def test_default_source_is_real_universe():
+    src = default_source()
+    tk = set(src.available_tickers())
+    assert {"SPY", "QQQ", "IWM", "TLT", "GLD"} <= tk
+    assert len(tk) == 20
+    lo, hi = src.date_range()
+    assert lo == pd.Timestamp("2010-01-04")
+    assert hi >= pd.Timestamp("2026-06-30")
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -63,20 +77,25 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'src.engine_v2.data.sou
 ```python
 # src/engine_v2/data/source.py
 """Pluggable bar source. Workbench code depends on this Protocol, never on a
-concrete loader, so an intraday source (ThetaData / Schwab) drops in later."""
+concrete loader, so an intraday source (ThetaData / Schwab) drops in later.
+The default source is the real 20-ETF daily universe; the small fixture is the
+fast unit-test bed only."""
 from __future__ import annotations
 from typing import Protocol
 import pandas as pd
 from .loader import load_bars
+
+FIXTURE_PATH = "fixtures/bars_2007_2010_small.parquet"
+UNIVERSE_PATH = "fixtures/bars_etf_universe_2010_2026.parquet"
 
 class DataSource(Protocol):
     def load(self, tickers, start, end) -> pd.DataFrame: ...
     def available_tickers(self) -> list[str]: ...
     def date_range(self) -> tuple[pd.Timestamp, pd.Timestamp]: ...
 
-class FixtureSource:
-    """DataSource backed by the checked-in fixture parquet."""
-    def __init__(self, path: str = "fixtures/bars_2007_2010_small.parquet"):
+class ParquetSource:
+    """DataSource backed by a checked-in parquet of MultiIndex (ticker, field) bars."""
+    def __init__(self, path: str = UNIVERSE_PATH):
         self.path = path
         self._df = pd.read_parquet(path)
 
@@ -88,18 +107,24 @@ class FixtureSource:
 
     def date_range(self) -> tuple[pd.Timestamp, pd.Timestamp]:
         return self._df.index.min(), self._df.index.max()
+
+def default_source() -> ParquetSource:
+    """The real 20-ETF 2010–2026 universe — what the dashboard runs on."""
+    return ParquetSource(UNIVERSE_PATH)
 ```
+
+Note: `load_bars` enforces `MODERN_ERA_START = 2007-01-01`; the universe starts 2010, so no conflict. `load_bars` raises `KeyError` for tickers absent from the file — this is the unknown-ticker path the Run page surfaces.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/bin/pytest tests/engine_v2/test_source.py -v`
-Expected: PASS (2 passed)
+Expected: PASS (3 passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/engine_v2/data/source.py tests/engine_v2/test_source.py
-git commit -m "feat: pluggable DataSource + FixtureSource"
+git commit -m "feat: pluggable DataSource + ParquetSource (real-universe default)"
 ```
 
 ---
@@ -119,6 +144,7 @@ git commit -m "feat: pluggable DataSource + FixtureSource"
   - `max_drawdown(equity: pd.Series) -> float`  (negative fraction)
   - `drawdown_series(equity: pd.Series) -> pd.Series`
   - `yearly_returns(equity: pd.Series) -> pd.Series`  (index = year int, value = fractional return)
+  - `yearly_sharpe(returns: pd.Series, periods_per_year: float) -> pd.Series`  (index = year int, value = annualized Sharpe — the decay curve the standing methodology requires)
   - `buy_hold_equity(bars: pd.DataFrame, weights: dict[str, float], starting_equity: float) -> pd.Series`
   - `regime_breakdown(returns: pd.Series, bars: pd.DataFrame, periods_per_year: float) -> pd.DataFrame`
 
@@ -160,6 +186,14 @@ def test_yearly_returns_splits_by_year():
     equity = pd.Series(np.linspace(100, 121, len(idx)), index=idx)
     yr = m.yearly_returns(equity)
     assert set(yr.index) == {2010, 2011}
+
+def test_yearly_sharpe_one_per_year():
+    idx = pd.date_range("2010-01-01", "2011-12-31", freq="B")
+    rng = np.random.default_rng(0)
+    rets = pd.Series(rng.normal(0.0005, 0.01, len(idx)), index=idx)
+    ys = m.yearly_sharpe(rets, 252)
+    assert set(ys.index) == {2010, 2011}
+    assert ys.notna().all()
 
 def test_buy_hold_matches_hand_calc():
     idx = _daily(3)
@@ -232,6 +266,15 @@ def yearly_returns(equity: pd.Series) -> pd.Series:
     first, last = by_year.first(), by_year.last()
     return (last / first - 1.0).rename("return")
 
+def yearly_sharpe(returns: pd.Series, periods_per_year: float) -> pd.Series:
+    """Annualized Sharpe per calendar year — the decay curve the standing
+    methodology requires. One value per year present in the index."""
+    r = returns.dropna()
+    if len(r) == 0:
+        return pd.Series(dtype=float)
+    out = {y: sharpe(grp, periods_per_year) for y, grp in r.groupby(r.index.year)}
+    return pd.Series(out, name="sharpe")
+
 def buy_hold_equity(bars: pd.DataFrame, weights: dict, starting_equity: float) -> pd.Series:
     eq = None
     for tkr, w in weights.items():
@@ -277,8 +320,8 @@ git commit -m "feat: frequency-aware gate-free metrics"
 **Interfaces:**
 - Consumes: `orchestrator.position_history`, `BacktestConfig`; `metrics_simple.*`; `strategy.protocol.validate_plugin`.
 - Produces:
-  - `@dataclass Result` with fields: `equity: pd.Series`, `returns: pd.Series`, `trades: int`, `cagr: float`, `sharpe: float`, `max_drawdown: float`, `yearly: pd.Series`, `regime: pd.DataFrame`, `benchmarks: dict[str, pd.Series]`, `periods_per_year: float`.
-  - `run_simple(strategy_cls, bars, config=None, params=None, periods_per_year=None) -> Result`.
+  - `@dataclass Result` with fields: `equity: pd.Series`, `returns: pd.Series`, `trades: int`, `cagr: float`, `sharpe: float`, `max_drawdown: float`, `yearly: pd.Series`, `yearly_sharpe: pd.Series`, `recent: dict` (keys `start`, `cagr`, `sharpe`, `max_drawdown`), `regime: pd.DataFrame`, `benchmarks: dict[str, pd.Series]`, `periods_per_year: float`. Per the standing methodology, `recent` is the HEADLINE and `yearly_sharpe` is the decay curve.
+  - `run_simple(strategy_cls, bars, config=None, params=None, periods_per_year=None, recent_start="2021-07-01") -> Result`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -306,6 +349,14 @@ def test_run_simple_has_gate_free_diagnostics():
     assert set(res.benchmarks) == {"SPY", "60_40"}
     assert res.trades > 0
     assert -1.0 <= res.max_drawdown <= 0.0
+
+def test_run_simple_carries_recent_and_yearly_sharpe():
+    # recent_start inside the fixture window (2007-2010) so the slice is non-empty
+    res = run_simple(Strat, BARS, params={}, recent_start="2009-01-01")
+    assert set(res.recent) == {"start", "cagr", "sharpe", "max_drawdown"}
+    assert res.recent["start"] == "2009-01-01"
+    assert len(res.yearly_sharpe) >= 1
+    assert res.yearly_sharpe.index.min() >= 2007
 
 def test_higher_spread_lowers_end_equity():
     lo = run_simple(Strat, BARS, config=BacktestConfig(spread_bps_per_side=0.0), params={})
@@ -372,6 +423,8 @@ class Result:
     sharpe: float
     max_drawdown: float
     yearly: pd.Series
+    yearly_sharpe: pd.Series
+    recent: dict
     regime: pd.DataFrame
     benchmarks: dict
     periods_per_year: float
@@ -379,7 +432,8 @@ class Result:
 def run_simple(strategy_cls, bars: pd.DataFrame,
                config: BacktestConfig | None = None,
                params: dict | None = None,
-               periods_per_year: float | None = None) -> Result:
+               periods_per_year: float | None = None,
+               recent_start: str = "2021-07-01") -> Result:
     validate_plugin(strategy_cls)
     cfg = config or BacktestConfig()
     ppy = periods_per_year or m.infer_periods_per_year(bars.index)
@@ -387,6 +441,16 @@ def run_simple(strategy_cls, bars: pd.DataFrame,
     hist = position_history(strategy_cls, params or {}, bars, bars.index, cfg, ppy)
     equity = hist["equity"]
     returns = equity.pct_change().fillna(0.0)
+
+    # Standing methodology: recent window is the HEADLINE; keep full history too.
+    eq_recent = equity[equity.index >= recent_start]
+    ret_recent = returns[returns.index >= recent_start]
+    recent = {
+        "start": recent_start,
+        "cagr": m.cagr(eq_recent, ppy),
+        "sharpe": m.sharpe(ret_recent, ppy),
+        "max_drawdown": m.max_drawdown(eq_recent),
+    }
 
     benchmarks = {"SPY": m.buy_hold_equity(bars, {"SPY": 1.0}, cfg.starting_equity)}
     if "TLT" in set(bars.columns.get_level_values(0)):
@@ -401,6 +465,8 @@ def run_simple(strategy_cls, bars: pd.DataFrame,
         sharpe=m.sharpe(returns, ppy),
         max_drawdown=m.max_drawdown(equity),
         yearly=m.yearly_returns(equity),
+        yearly_sharpe=m.yearly_sharpe(returns, ppy),
+        recent=recent,
         regime=m.regime_breakdown(returns, bars, ppy),
         benchmarks=benchmarks,
         periods_per_year=ppy,
@@ -464,9 +530,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'src.engine_v2.strategy
 
 - [ ] **Step 3: Write minimal implementation**
 
-First confirm the gap plugin's class name:
-Run: `grep -n "^class" src/engine_v2/strategy/gap_pattern.py`
-Use the printed class name in the import below (shown here as `GapPatternTypeA`; replace if different).
+(Class names confirmed: `CounterTrendDipBuy` in `counter_trend.py`, `GapPatternTypeA` in `gap_pattern.py`.)
 
 ```python
 # src/engine_v2/strategy/registry.py
@@ -474,7 +538,7 @@ Use the printed class name in the import below (shown here as `GapPatternTypeA`;
 package + one line here. The dashboard reads STRATEGIES to build its dropdown."""
 from __future__ import annotations
 from .counter_trend import CounterTrendDipBuy
-from .gap_pattern import GapPatternTypeA  # replace with actual class name if different
+from .gap_pattern import GapPatternTypeA
 
 _PLUGINS = [CounterTrendDipBuy, GapPatternTypeA]
 
@@ -506,8 +570,8 @@ git commit -m "feat: strategy registry"
 - Test: `tests/test_workbench_dashboard.py`
 
 **Interfaces:**
-- Consumes: `strategy.registry.STRATEGIES/get_strategy`, `data.source.FixtureSource`, `backtest.simple.run_simple`, `backtest.orchestrator.BacktestConfig`.
-- Produces: `dashboard/views/run.py::render()` (Streamlit page), reachable as the default page.
+- Consumes: `strategy.registry.STRATEGIES/get_strategy`, `data.source.default_source`, `backtest.simple.run_simple`, `backtest.orchestrator.BacktestConfig`.
+- Produces: `dashboard/views/run.py::render()` (Streamlit page), reachable as the default page. Widgets carry stable `key=`s (`strategy`, `tickers`, `date_range`, `spread`, `borrow`, `run_backtest`) so tests can drive them.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -516,15 +580,16 @@ git commit -m "feat: strategy registry"
 from streamlit.testing.v1 import AppTest
 
 def test_run_page_renders_without_crash():
-    at = AppTest.from_file("dashboard/app.py").run(timeout=30)
+    at = AppTest.from_file("dashboard/app.py").run(timeout=60)
     assert not at.exception
 
 def test_run_page_produces_a_result_on_run():
-    at = AppTest.from_file("dashboard/app.py").run(timeout=30)
-    # find and click the Run button; then a metric should be present
-    at.button(key="run_backtest").click().run(timeout=60)
+    at = AppTest.from_file("dashboard/app.py").run(timeout=60)
+    # narrow scope so the smoke run is fast: 2 tickers, default (full) date range
+    at.multiselect(key="tickers").set_value(["SPY", "TLT"]).run(timeout=60)
+    at.button(key="run_backtest").click().run(timeout=120)
     assert not at.exception
-    assert len(at.metric) >= 1  # CAGR / Sharpe / maxDD tiles rendered
+    assert len(at.metric) >= 1  # recent-headline CAGR / Sharpe / maxDD tiles rendered
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -537,48 +602,59 @@ Expected: FAIL — no `run_backtest` button / page not wired.
 ```python
 # dashboard/views/run.py
 """Run page: pick strategy + tickers + dates + cost knobs, click Run, see
-gate-free diagnostics. Calls run_simple in-process — no CSV round-trip."""
+gate-free diagnostics on the real 20-ETF universe. Calls run_simple
+in-process — no CSV round-trip. Headline = recent window; also shows the
+year-by-year Sharpe decay curve (standing methodology)."""
 import streamlit as st
 from src.engine_v2.strategy.registry import STRATEGIES, get_strategy
-from src.engine_v2.data.source import FixtureSource
+from src.engine_v2.data.source import default_source
 from src.engine_v2.backtest.simple import run_simple
 from src.engine_v2.backtest.orchestrator import BacktestConfig
 
 def render():
     st.title("Run a backtest")
-    src = FixtureSource()
+    src = default_source()
     tickers_all = src.available_tickers()
     lo, hi = src.date_range()
 
-    name = st.selectbox("Strategy", list(STRATEGIES))
+    name = st.selectbox("Strategy", list(STRATEGIES), key="strategy")
     st.caption(get_strategy(name).mechanism)
-    tickers = st.multiselect("Universe", tickers_all, default=tickers_all)
-    start, end = st.select_slider(
-        "Date range", options=list(src.load(tickers_all, lo, hi).index),
-        value=(lo, hi), format_func=lambda d: d.date().isoformat())
-    spread = st.number_input("Spread (bps/side)", 0.0, 100.0, 1.0, 0.5)
-    borrow = st.number_input("Borrow (bps/yr)", 0.0, 2000.0, 50.0, 10.0)
+    tickers = st.multiselect("Universe", tickers_all, default=tickers_all, key="tickers")
+    start, end = st.slider("Date range", min_value=lo.to_pydatetime(),
+                           max_value=hi.to_pydatetime(),
+                           value=(lo.to_pydatetime(), hi.to_pydatetime()),
+                           key="date_range")
+    spread = st.number_input("Spread (bps/side)", 0.0, 100.0, 1.0, 0.5, key="spread")
+    borrow = st.number_input("Borrow (bps/yr)", 0.0, 2000.0, 50.0, 10.0, key="borrow")
 
     if st.button("Run", key="run_backtest", type="primary"):
+        if not tickers:
+            st.warning("Pick at least one ticker.")
+            st.stop()
         bars = src.load(tickers, start, end)
         cfg = BacktestConfig(spread_bps_per_side=spread, borrow_bps_annual=borrow)
         res = run_simple(get_strategy(name), bars, config=cfg)
 
+        st.subheader(f"Headline — recent since {res.recent['start']}")
         c1, c2, c3 = st.columns(3)
-        c1.metric("CAGR", f"{res.cagr:.2%}")
-        c2.metric("Sharpe", f"{res.sharpe:.2f}")
-        c3.metric("Max drawdown", f"{res.max_drawdown:.2%}")
+        c1.metric("CAGR", f"{res.recent['cagr']:.2%}")
+        c2.metric("Sharpe", f"{res.recent['sharpe']:.2f}")
+        c3.metric("Max drawdown", f"{res.recent['max_drawdown']:.2%}")
+        st.caption(f"Full history: CAGR {res.cagr:.2%} · Sharpe {res.sharpe:.2f} · "
+                   f"maxDD {res.max_drawdown:.2%} · trades {res.trades}")
 
         curve = res.equity.rename("strategy").to_frame()
         for bname, series in res.benchmarks.items():
             curve[bname] = series
         st.subheader("Equity curve")
         st.line_chart(curve)
-        st.subheader("Year-by-year")
+        st.subheader("Year-by-year Sharpe (decay curve)")
+        st.bar_chart(res.yearly_sharpe)
+        st.subheader("Year-by-year return")
         st.bar_chart(res.yearly)
         st.subheader("By regime")
         st.dataframe(res.regime, use_container_width=True)
-        st.caption(f"Trades: {res.trades}  ·  bars/yr ≈ {res.periods_per_year:.0f}")
+        st.caption(f"bars/yr ≈ {res.periods_per_year:.0f}")
 ```
 
 - [ ] **Step 4: Rewire `app.py` to default to the Run page**
@@ -693,16 +769,18 @@ git commit -m "refactor: archive parked gate + v1 engine; workbench is the live 
 ## Self-Review
 
 **Spec coverage:**
-- `DataSource` + `FixtureSource` → Task 1 ✓
+- `DataSource` + `ParquetSource` + real-universe default → Task 1 ✓
 - `run_simple` seam bypassing gate → Task 3 ✓
-- `Result` + metrics (CAGR/Sharpe/maxDD/yearly/per-regime/benchmarks) → Tasks 2, 3 ✓
+- `Result` + metrics (CAGR/Sharpe/maxDD/yearly return + yearly Sharpe/per-regime/benchmarks) → Tasks 2, 3 ✓
+- Standing methodology (recent-window headline + year-by-year Sharpe) → Tasks 2, 3, 5 ✓
+- Real 20-ETF universe as primary data → Tasks 1, 5 ✓
 - Frequency-aware annualization (metrics + `_instrument_sigma`) → Tasks 2, 3 ✓
 - Strategy registry → Task 4 ✓
 - Dashboard Run page + default + dynamic pickers → Task 5 ✓
-- Archive noise (gate, verdict, v1, scripts, old pages) → Task 6 ✓
-- Data pull dropped/deferred → not a task, correct ✓
+- Archive noise (gate, verdict, v1, scripts incl. evaluate.py, old pages) → Task 6 ✓
+- Real data pull (yfinance) dropped/deferred; intraday still absent → not a task, correct ✓
 - Non-goals (no CPCV/DSR/FWER/NCO/verdict on path) → enforced in Task 6 Step 2 + Global Constraints ✓
 
-**Placeholder scan:** one deliberate lookup — the gap plugin class name in Task 4 (Step 3 prints it before use). No TBD/TODO/"handle edge cases".
+**Placeholder scan:** none. Gap plugin class name confirmed `GapPatternTypeA` (Task 4). No TBD/TODO/"handle edge cases".
 
-**Type consistency:** `Result` fields (Task 3) match what the Run page reads (Task 5): `equity`, `cagr`, `sharpe`, `max_drawdown`, `yearly`, `regime`, `benchmarks`, `trades`, `periods_per_year`. `run_simple`/`position_history` signatures carry `periods_per_year` consistently (Tasks 2/3). `metrics_simple` function names match their call sites in `simple.py`.
+**Type consistency:** `Result` fields (Task 3) match what the Run page reads (Task 5): `equity`, `cagr`, `sharpe`, `max_drawdown`, `yearly`, `yearly_sharpe`, `recent` (dict: `start`/`cagr`/`sharpe`/`max_drawdown`), `regime`, `benchmarks`, `trades`, `periods_per_year`. `run_simple`/`position_history` signatures carry `periods_per_year` consistently (Tasks 2/3); `run_simple` also takes `recent_start`. `metrics_simple` function names (`yearly_sharpe` added) match their call sites in `simple.py`. Task 1 exposes `default_source`/`ParquetSource`/`FIXTURE_PATH`/`UNIVERSE_PATH` as Task 5 imports them.
