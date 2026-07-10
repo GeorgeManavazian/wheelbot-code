@@ -10,7 +10,7 @@ from ..sizing.guardrails import (
     check_speed_limit, enforce_account_cap, SpeedLimitViolation,
     HARD_ACCOUNT_CAP,
 )
-from ..execution.sim import Order, fill_order
+from ..execution.sim import Order, fill_order, bid_ask
 from ..execution.shorting import HTBRegistry, apply_short_guard
 from .cpcv import make_folds, cpcv_combos, purged_train_index
 from .loop import expand_trials
@@ -20,6 +20,11 @@ from ..data.regime import tag_regime
 STARTING_EQUITY = 100_000.0
 
 
+# Default half-spread per side, in bps. 1bp suits large liquid ETFs (SPY/TLT/GLD:
+# penny-wide quotes on $100+ prices). Override per ticker for thinner names.
+DEFAULT_HALF_SPREAD_BPS = 1.0
+
+
 @dataclass
 class BacktestConfig:
     target_risk: float = DEFAULT_TARGET_RISK
@@ -27,18 +32,23 @@ class BacktestConfig:
     cpcv_k: int = 2
     starting_equity: float = STARTING_EQUITY
     htb: HTBRegistry = field(default_factory=HTBRegistry)
+    spread_bps_per_side: float = DEFAULT_HALF_SPREAD_BPS
+    spread_bps_by_ticker: dict = field(default_factory=dict)
+
+    def half_spread_bps(self, ticker: str) -> float:
+        return self.spread_bps_by_ticker.get(ticker, self.spread_bps_per_side)
 
 
 def _fill_at_close_via_sim(ticker: str, side: str, qty: float,
-                           close: float, adv: float,
+                           close: float, adv: float, half_spread_bps: float,
                            date: pd.Timestamp, htb: HTBRegistry):
-    """Route through execution/sim. Uses close as both bid and ask
-    (single price bar limitation) but the same-code-path invariant holds."""
+    """Route through execution/sim, crossing a real bid-ask spread around the close."""
     o = Order(ticker=ticker, side=side, kind="market", qty=qty)
     o = apply_short_guard(o, date, htb)
     if o is None:
         return None
-    return fill_order(o, bid=close, ask=close, adv=adv)
+    bid, ask = bid_ask(close, half_spread_bps)
+    return fill_order(o, bid=bid, ask=ask, adv=adv)
 
 
 def _instrument_sigma(bars, tkr, asof) -> float:
@@ -97,9 +107,10 @@ def _simulate(strategy_cls, params, bars, test_index, cfg: BacktestConfig):
             if abs(delta) * close > 1e-9:
                 side = "buy" if delta > 0 else "sell"
                 fill = _fill_at_close_via_sim(tkr, side, abs(delta), close, adv,
-                                              asof, cfg.htb)
+                                              cfg.half_spread_bps(tkr), asof, cfg.htb)
                 if fill is not None:
-                    equity -= abs(delta) * abs(fill.price - close)  # slippage on the trade
+                    # fill.price is offset from the mid (close) by spread + slippage
+                    equity -= abs(delta) * abs(fill.price - close)
                     traded += abs(delta)
                     new_qty = held + delta
                     qty[tkr] = new_qty
