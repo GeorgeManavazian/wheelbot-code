@@ -41,35 +41,91 @@ def _fill_at_close_via_sim(ticker: str, side: str, qty: float,
     return fill_order(o, bid=close, ask=close, adv=adv)
 
 
-def _fold_trial_returns(strategy_cls, params, bars, test_index, cfg: BacktestConfig):
-    """Run one CPCV fold. Applies sizing via size_position, then fills through
-    execution/sim, then rolls equity forward. Returns per-date returns series."""
+def _instrument_sigma(bars, tkr, asof) -> float:
+    past = bars[tkr]["Close"].loc[:asof].pct_change().dropna().tail(60)
+    return float(past.std() * (252 ** 0.5)) if len(past) >= 20 else 0.20
+
+
+def _simulate(strategy_cls, params, bars, test_index, cfg: BacktestConfig):
+    """Run one CPCV fold, carrying position state across bars.
+
+    Convention: decide and trade at the close of bar t, then hold to the close of
+    bar t+1. So P&L on bar t is qty_held * (close_t - close_{t-1}), booked BEFORE
+    the bar's rebalance. Costs are charged only on the change in position.
+
+    Yields one row per bar: equity after mark-to-market and trading, the resulting
+    position, and shares traded.
+    """
     strat = strategy_cls(**params)
+    cap = getattr(strategy_cls, "holding_period_cap", None) or 10 ** 9
+    tickers = set(bars.columns.get_level_values(0))
+    adv = 1e9  # fixture proxy; real ingest supplies per-ticker ADV
+
     equity = cfg.starting_equity
-    equity_series = []
-    prev_equity = equity
+    qty: dict[str, float] = {}
+    bars_held: dict[str, int] = {}
+    prev_close: dict[str, float] = {}
+    rows = []
+
     for asof in test_index:
-        visible = bars.loc[:asof]
+        # 1) mark existing positions to market against the previous close
+        for tkr, q in qty.items():
+            if q == 0.0 or tkr not in prev_close:
+                continue
+            equity += q * (float(bars[tkr]["Close"].loc[asof]) - prev_close[tkr])
+
+        # 2) rebalance at this bar's close
+        visible = bars.loc[:asof]  # no look-ahead: inclusive of asof only
         fc = strat.forecast(visible, asof)
+        traded = 0.0
         for tkr, f in fc.items():
-            if tkr not in bars.columns.get_level_values(0):
+            if tkr not in tickers:
                 continue
             close = float(bars[tkr]["Close"].loc[asof])
-            past = bars[tkr]["Close"].loc[:asof].pct_change().dropna().tail(60)
-            sigma = float(past.std() * (252 ** 0.5)) if len(past) >= 20 else 0.20
-            notional = size_position(float(f), equity, sigma,
-                                     target_risk=cfg.target_risk)
-            side = "buy" if notional > 0 else "sell"
-            qty = abs(notional) / close if close > 0 else 0.0
-            adv = 1e9  # fixture proxy; real ingest supplies per-ticker ADV
-            fill = _fill_at_close_via_sim(tkr, side, qty, close, adv, asof, cfg.htb)
-            if fill is not None:
-                equity -= fill.slippage_bps / 1e4 * abs(notional)
-        equity_series.append((asof, equity))
-        prev_equity = equity
-    df = pd.DataFrame(equity_series, columns=["asof", "equity"]).set_index("asof")
-    df["ret"] = df["equity"].pct_change().fillna(0.0)
-    return df["ret"]
+            held = qty.get(tkr, 0.0)
+
+            if held != 0.0 and bars_held.get(tkr, 0) >= cap:
+                target_notional = 0.0  # time exit
+            else:
+                target_notional = size_position(
+                    float(f), equity, _instrument_sigma(bars, tkr, asof),
+                    target_risk=cfg.target_risk,
+                )
+            target_qty = target_notional / close if close > 0 else 0.0
+            delta = target_qty - held
+
+            if abs(delta) * close > 1e-9:
+                side = "buy" if delta > 0 else "sell"
+                fill = _fill_at_close_via_sim(tkr, side, abs(delta), close, adv,
+                                              asof, cfg.htb)
+                if fill is not None:
+                    equity -= abs(delta) * abs(fill.price - close)  # slippage on the trade
+                    traded += abs(delta)
+                    new_qty = held + delta
+                    qty[tkr] = new_qty
+                    bars_held[tkr] = 0 if new_qty == 0.0 else bars_held.get(tkr, 0)
+
+            if qty.get(tkr, 0.0) != 0.0:
+                bars_held[tkr] = bars_held.get(tkr, 0) + 1
+
+        for tkr in tickers:
+            prev_close[tkr] = float(bars[tkr]["Close"].loc[asof])
+
+        rows.append({"asof": asof, "equity": equity, "traded": traded,
+                     "qty": sum(qty.values())})
+
+    return pd.DataFrame(rows).set_index("asof")
+
+
+def _fold_trial_returns(strategy_cls, params, bars, test_index, cfg: BacktestConfig):
+    """Per-date return series for one CPCV fold."""
+    df = _simulate(strategy_cls, params, bars, test_index, cfg)
+    return df["equity"].pct_change().fillna(0.0).rename("ret")
+
+
+def position_history(strategy_cls, params, bars, test_index, cfg: BacktestConfig):
+    """Per-bar equity, net position and shares traded. For tests and diagnostics."""
+    return _simulate(strategy_cls, params, bars, test_index, cfg)
 
 
 def run_backtest(strategy_cls, bars: pd.DataFrame,
