@@ -31,7 +31,7 @@ def cagr(equity: pd.Series, periods_per_year: float) -> float:
 def sharpe(returns: pd.Series, periods_per_year: float) -> float:
     r = returns.dropna()
     if len(r) < 2:
-        return 0.0
+        return float("nan")
     sd = float(r.std())
     if sd < 1e-10 or np.isnan(sd):
         return 0.0

@@ -47,3 +47,7 @@ def test_buy_hold_matches_hand_calc():
     bars = pd.DataFrame([[100.0], [110.0], [121.0]], index=idx, columns=cols)
     eq = m.buy_hold_equity(bars, {"SPY": 1.0}, 100_000.0)
     assert eq.iloc[-1] == pytest.approx(121_000.0)
+
+def test_sharpe_too_short_is_nan():
+    assert np.isnan(m.sharpe(pd.Series([], dtype=float), 252))
+    assert np.isnan(m.sharpe(pd.Series([0.01]), 252))
