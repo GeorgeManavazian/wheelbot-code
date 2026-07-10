@@ -6,7 +6,13 @@ import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_samples
 
-def fwer(K_effective: int, alpha: float = 0.05) -> float:
+def fwer(K_effective: int, alpha: float) -> float:
+    """Sidak familywise error: alpha_K = 1 - (1 - alpha)^K.
+
+    `alpha` is the strategy's OWN observed single-trial p-value (see
+    dsr.observed_alpha) -- never a constant. Passing a fixed alpha makes the
+    result a function of K alone, and any gate on it unreachable.
+    """
     if K_effective <= 0:
         return 0.0
     return float(1 - (1 - alpha) ** K_effective)
