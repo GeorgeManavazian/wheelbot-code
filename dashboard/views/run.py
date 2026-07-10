@@ -30,7 +30,9 @@ def render():
             st.stop()
         bars = src.load(tickers, start, end)
         cfg = BacktestConfig(spread_bps_per_side=spread, borrow_bps_annual=borrow)
-        res = run_simple(get_strategy(name), bars, config=cfg)
+        bench_tickers = [t for t in ("SPY", "TLT") if t in tickers_all]
+        bench_bars = src.load(bench_tickers, start, end) if bench_tickers else None
+        res = run_simple(get_strategy(name), bars, config=cfg, benchmark_bars=bench_bars)
 
         st.subheader(f"Headline — recent since {res.recent['start']}")
         c1, c2, c3 = st.columns(3)

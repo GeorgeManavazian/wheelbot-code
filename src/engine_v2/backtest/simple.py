@@ -26,7 +26,8 @@ def run_simple(strategy_cls, bars: pd.DataFrame,
                config: BacktestConfig | None = None,
                params: dict | None = None,
                periods_per_year: float | None = None,
-               recent_start: str = "2021-07-01") -> Result:
+               recent_start: str = "2021-07-01",
+               benchmark_bars: pd.DataFrame | None = None) -> Result:
     validate_plugin(strategy_cls)
     cfg = config or BacktestConfig()
     ppy = periods_per_year or m.infer_periods_per_year(bars.index)
@@ -45,10 +46,25 @@ def run_simple(strategy_cls, bars: pd.DataFrame,
         "max_drawdown": m.max_drawdown(eq_recent),
     }
 
-    benchmarks = {"SPY": m.buy_hold_equity(bars, {"SPY": 1.0}, cfg.starting_equity)}
-    if "TLT" in set(bars.columns.get_level_values(0)):
+    bench = benchmark_bars if benchmark_bars is not None else bars
+    bench_tickers = set(bench.columns.get_level_values(0))
+    benchmarks = {}
+    if "SPY" in bench_tickers:
+        benchmarks["SPY"] = m.buy_hold_equity(bench, {"SPY": 1.0}, cfg.starting_equity)
+    if "SPY" in bench_tickers and "TLT" in bench_tickers:
         benchmarks["60_40"] = m.buy_hold_equity(
-            bars, {"SPY": 0.6, "TLT": 0.4}, cfg.starting_equity)
+            bench, {"SPY": 0.6, "TLT": 0.4}, cfg.starting_equity)
+
+    # regime tagging needs SPY as the market benchmark; prefer the strategy's own
+    # bars (original behavior) and fall back to the benchmark override, but never
+    # crash if SPY is absent from both (e.g. a non-SPY universe with no override).
+    strategy_tickers = set(bars.columns.get_level_values(0))
+    if "SPY" in strategy_tickers:
+        regime = m.regime_breakdown(returns, bars, ppy)
+    elif "SPY" in bench_tickers:
+        regime = m.regime_breakdown(returns, bench, ppy)
+    else:
+        regime = pd.DataFrame(columns=["dimension", "regime", "sharpe", "mean_ret", "bars"])
 
     return Result(
         equity=equity,
@@ -60,7 +76,7 @@ def run_simple(strategy_cls, bars: pd.DataFrame,
         yearly=m.yearly_returns(equity),
         yearly_sharpe=m.yearly_sharpe(returns, ppy),
         recent=recent,
-        regime=m.regime_breakdown(returns, bars, ppy),
+        regime=regime,
         benchmarks=benchmarks,
         periods_per_year=ppy,
     )

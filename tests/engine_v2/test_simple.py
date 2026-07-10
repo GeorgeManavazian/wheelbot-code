@@ -33,3 +33,16 @@ def test_higher_spread_lowers_end_equity():
     lo = run_simple(Strat, BARS, config=BacktestConfig(spread_bps_per_side=0.0), params={})
     hi = run_simple(Strat, BARS, config=BacktestConfig(spread_bps_per_side=50.0), params={})
     assert hi.equity.iloc[-1] < lo.equity.iloc[-1]
+
+def test_run_simple_no_spy_universe_does_not_crash():
+    # universe without SPY/TLT must not raise; benchmarks just omit them
+    gld = BARS.loc[:, pd.IndexSlice["GLD", :]]
+    res = run_simple(Strat, gld, params={})
+    assert "SPY" not in res.benchmarks
+
+def test_run_simple_benchmark_bars_override_shows_spy():
+    # strategy runs on GLD only, but benchmark_bars carries SPY+TLT -> benchmark present
+    gld = BARS.loc[:, pd.IndexSlice["GLD", :]]
+    res = run_simple(Strat, gld, params={}, benchmark_bars=BARS)
+    assert "SPY" in res.benchmarks
+    assert "60_40" in res.benchmarks
