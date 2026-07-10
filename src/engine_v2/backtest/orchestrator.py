@@ -58,12 +58,13 @@ def _fill_at_close_via_sim(ticker: str, side: str, qty: float,
     return fill_order(o, bid=bid, ask=ask, adv=adv)
 
 
-def _instrument_sigma(bars, tkr, asof) -> float:
+def _instrument_sigma(bars, tkr, asof, periods_per_year: float = 252.0) -> float:
     past = bars[tkr]["Close"].loc[:asof].pct_change().dropna().tail(60)
-    return float(past.std() * (252 ** 0.5)) if len(past) >= 20 else 0.20
+    return float(past.std() * (periods_per_year ** 0.5)) if len(past) >= 20 else 0.20
 
 
-def _simulate(strategy_cls, params, bars, test_index, cfg: BacktestConfig):
+def _simulate(strategy_cls, params, bars, test_index, cfg: BacktestConfig,
+              periods_per_year: float = 252.0):
     """Run one CPCV fold, carrying position state across bars.
 
     Convention: decide and trade at the close of bar t, then hold to the close of
@@ -109,7 +110,8 @@ def _simulate(strategy_cls, params, bars, test_index, cfg: BacktestConfig):
                 target_notional = 0.0  # time exit
             else:
                 target_notional = size_position(
-                    float(f), equity, _instrument_sigma(bars, tkr, asof),
+                    float(f), equity,
+                    _instrument_sigma(bars, tkr, asof, periods_per_year),
                     target_risk=cfg.target_risk,
                 )
             target_qty = target_notional / close if close > 0 else 0.0
@@ -145,9 +147,10 @@ def _fold_trial_returns(strategy_cls, params, bars, test_index, cfg: BacktestCon
     return df["equity"].pct_change().fillna(0.0).rename("ret")
 
 
-def position_history(strategy_cls, params, bars, test_index, cfg: BacktestConfig):
+def position_history(strategy_cls, params, bars, test_index, cfg: BacktestConfig,
+                     periods_per_year: float = 252.0):
     """Per-bar equity, net position and shares traded. For tests and diagnostics."""
-    return _simulate(strategy_cls, params, bars, test_index, cfg)
+    return _simulate(strategy_cls, params, bars, test_index, cfg, periods_per_year)
 
 
 def run_backtest(strategy_cls, bars: pd.DataFrame,
