@@ -11,7 +11,7 @@ from ..sizing.guardrails import (
     HARD_ACCOUNT_CAP,
 )
 from ..execution.sim import Order, fill_order, bid_ask
-from ..execution.shorting import HTBRegistry, apply_short_guard
+from ..execution.shorting import HTBRegistry, apply_short_guard, daily_borrow_fee
 from .cpcv import make_folds, cpcv_combos, purged_train_index
 from .loop import expand_trials
 from ..gate.verdict import compute_verdict
@@ -34,9 +34,16 @@ class BacktestConfig:
     htb: HTBRegistry = field(default_factory=HTBRegistry)
     spread_bps_per_side: float = DEFAULT_HALF_SPREAD_BPS
     spread_bps_by_ticker: dict = field(default_factory=dict)
+    # Annualized stock-borrow rate for short positions. 50bps ~ general-collateral
+    # liquid ETF. Override per ticker for hard-to-borrow names.
+    borrow_bps_annual: float = 50.0
+    borrow_bps_by_ticker: dict = field(default_factory=dict)
 
     def half_spread_bps(self, ticker: str) -> float:
         return self.spread_bps_by_ticker.get(ticker, self.spread_bps_per_side)
+
+    def borrow_bps(self, ticker: str) -> float:
+        return self.borrow_bps_by_ticker.get(ticker, self.borrow_bps_annual)
 
 
 def _fill_at_close_via_sim(ticker: str, side: str, qty: float,
@@ -78,11 +85,15 @@ def _simulate(strategy_cls, params, bars, test_index, cfg: BacktestConfig):
     rows = []
 
     for asof in test_index:
-        # 1) mark existing positions to market against the previous close
+        # 1) mark existing positions to market against the previous close, and
+        #    charge one day of borrow on any short still open at this bar's close
         for tkr, q in qty.items():
             if q == 0.0 or tkr not in prev_close:
                 continue
-            equity += q * (float(bars[tkr]["Close"].loc[asof]) - prev_close[tkr])
+            close_now = float(bars[tkr]["Close"].loc[asof])
+            equity += q * (close_now - prev_close[tkr])
+            if q < 0.0:
+                equity -= daily_borrow_fee(abs(q) * close_now, cfg.borrow_bps(tkr))
 
         # 2) rebalance at this bar's close
         visible = bars.loc[:asof]  # no look-ahead: inclusive of asof only
