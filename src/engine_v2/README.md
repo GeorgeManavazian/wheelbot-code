@@ -15,5 +15,5 @@ real cost model, per-regime verdict. See
 ## Run
 ```
 python scripts/build_fixtures.py            # one-shot fixture build
-pytest tests/engine_v2/ -v                  # unit + integ + e2e
+make test-v2                                # unit + integ + e2e + coverage gate (≥85%)
 ```
