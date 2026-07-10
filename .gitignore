@@ -3,3 +3,7 @@
 __pycache__/
 data/raw/
 results/
+.coverage
+.superpowers/
+logs/
+splits/
