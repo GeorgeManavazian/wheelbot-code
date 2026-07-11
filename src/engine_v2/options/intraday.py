@@ -63,8 +63,9 @@ def held_contracts(result) -> list:
         elif t.action in CLOSE and cur is not None:
             held.append((cur[0], cur[1], cur[2], cur[3], pd.Timestamp(t.date)))
             cur = None
-    if cur is not None:  # still open at window end
-        held.append((cur[0], cur[1], cur[2], cur[3], cur[3]))
+    if cur is not None:  # still open at window end -> hold through the last activity date
+        last_date = max((pd.Timestamp(t.date) for t in result.trades), default=cur[3])
+        held.append((cur[0], cur[1], cur[2], cur[3], max(last_date, cur[3])))
     return held
 
 def run_wheel_intraday(chain, cfg, intraday_df):
