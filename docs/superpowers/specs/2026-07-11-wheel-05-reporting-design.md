@@ -46,9 +46,13 @@ New module `src/engine_v2/options/report.py`:
 
 Reuses `src.engine_v2.backtest.metrics_simple` (`cagr, sharpe, max_drawdown, yearly_returns, yearly_sharpe, infer_periods_per_year`). Imports the wheel types + metrics_simple + pandas. NOT the gate.
 
-## Optional (flag): dashboard page
+## Dashboard page (IN SCOPE — owner wants the report in the dashboard)
 
-A Streamlit "Wheel" page (pick config → run → show equity vs SPY, year-by-year, wheel stats, trade log) is a natural follow-on but is **out of scope for this sub-project** unless requested — keep reporting headless first (a `WheelReport` + `format_report`), wire the dashboard later.
+A Streamlit **"Wheel" page** added to the existing workbench (`dashboard/app.py` + `dashboard/views/wheel.py`):
+- **Data source** selector: the committed `fixtures/spy_wheel_cycle.parquet` (always available) and the full pull `data/options/spy_greeks_eod_all.parquet` (shown when it exists, after the bulk pull's `--concat`). Guard with a friendly message if the full file isn't built yet.
+- **Config inputs:** put/call delta, dte_min/max, take-profit % (with a "hold to expiry" = None option), commission/contract, starting capital.
+- **On Run:** `run_wheel` → `wheel_report`, rendered: recent-headline metric tiles (CAGR/Sharpe/maxDD), **equity curve vs SPY buy-hold**, year-by-year return bars, wheel-stats block, and the **trade log** as a table.
+- Reuses `wheel_report` (headless core stays the single source of truth); the page is a thin view. `format_report` remains for headless/logging use.
 
 ## Testing
 
