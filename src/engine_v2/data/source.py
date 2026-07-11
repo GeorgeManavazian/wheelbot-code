@@ -9,6 +9,8 @@ from .loader import load_bars
 
 FIXTURE_PATH = "fixtures/bars_2007_2010_small.parquet"
 UNIVERSE_PATH = "fixtures/bars_etf_universe_2010_2026.parquet"
+INTRADAY_PATH = "data/intraday/intraday_1m.parquet"
+INTRADAY_FIXTURE_PATH = "fixtures/intraday_1m_small.parquet"
 
 class DataSource(Protocol):
     def load(self, tickers, start, end) -> pd.DataFrame: ...
@@ -33,3 +35,9 @@ class ParquetSource:
 def default_source() -> ParquetSource:
     """The real 20-ETF 2010–2026 universe — what the dashboard runs on."""
     return ParquetSource(UNIVERSE_PATH)
+
+def intraday_source(path: str = INTRADAY_PATH) -> ParquetSource:
+    """1-minute SPY/QQQ bars (Databento, RTH, tz-naive ET). Requires the cache
+    built by scripts/build_intraday_cache.py; the committed fixture path is for
+    tests."""
+    return ParquetSource(path)
