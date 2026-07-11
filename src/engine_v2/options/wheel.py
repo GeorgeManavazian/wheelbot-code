@@ -56,7 +56,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig) -> WheelResult:
         spot = float(und.get(d))
 
         # 1) manage an existing short: take-profit, then expiry resolution
-        just_closed_tp = False
+        closed_today = None  # contract closed via TP this day (block same-day churn into it)
         if short is not None:
             c = short["contract"]; n = short["contracts"]
             mark = option_mark(chain, d, c)
@@ -66,7 +66,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig) -> WheelResult:
                 trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
                                     c, n, mark.ask, cash))
                 short = None
-                just_closed_tp = True
+                closed_today = c
             if short is not None and d == c.expiry:
                 if c.right == "P":
                     if spot < c.strike:
@@ -82,14 +82,14 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig) -> WheelResult:
                         trades.append(Trade(d, "CALL_EXPIRED", c, n, 0.0, cash))
                 short = None
 
-        # 2) open a new short if flat and eligible (skip same-day re-entry right
-        # after an early take-profit close — a fresh entry should wait for the
-        # next day's chain, not reuse the row that just triggered the close)
-        if short is None and not just_closed_tp:
+        # 2) open a new short if flat and eligible. Same-day re-entry after a
+        # take-profit close IS allowed (redeploy freed capital), but never back
+        # into the identical contract just closed — that would be pure spread churn.
+        if short is None:
             if phase == "PUT":
                 c = select_strike_by_delta(chain, d, "P", cfg.put_delta, cfg.dte_min, cfg.dte_max)
                 mark = option_mark(chain, d, c) if c is not None else None
-                if c is not None and mark is not None:
+                if c is not None and c != closed_today and mark is not None:
                     n = int(cash // (c.strike * mult))
                     if n > 0:
                         cash += sell_proceeds(mark, n, cfg)
@@ -98,7 +98,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig) -> WheelResult:
             elif phase == "CALL" and shares >= mult:
                 c = select_strike_by_delta(chain, d, "C", cfg.call_delta, cfg.dte_min, cfg.dte_max)
                 mark = option_mark(chain, d, c) if c is not None else None
-                if c is not None and mark is not None:
+                if c is not None and c != closed_today and mark is not None:
                     n = shares // mult
                     cash += sell_proceeds(mark, n, cfg)
                     short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}

@@ -54,8 +54,26 @@ def test_take_profit_closes_short_put():
     res = run_wheel(_chain(rows), _cfg(take_profit_pct=0.50))
     acts = [t.action for t in res.trades]
     assert acts[:2] == ["SELL_PUT","CLOSE_PUT"]
-    # +200 credit, -90 to close => +110
+    # only the 470/01-19 put exists on 01-03 == the contract just closed, so NO
+    # same-day re-entry (anti-churn guard): +200 credit, -90 to close => +110
     assert res.final_cash == pytest.approx(50_000 + 200 - 90)
+    assert acts.count("SELL_PUT") == 1
+
+def test_take_profit_same_day_reentry_into_different_strike():
+    # sell 470 put; next day it hits take-profit AND a fresh ~0.30-delta 475 put is
+    # available -> re-enter SAME DAY into the different strike (owner chose policy B).
+    rows = [
+        ["2024-01-02","2024-01-19",17,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-03","2024-01-19",16,470,"P",0.80,0.90,0.85,0.85,-0.15,0.1,478.0],
+        ["2024-01-03","2024-01-19",16,475,"P",1.50,1.60,1.55,1.55,-0.30,0.1,478.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(take_profit_pct=0.50))
+    acts = [t.action for t in res.trades]
+    assert acts == ["SELL_PUT","CLOSE_PUT","SELL_PUT"]      # re-entered same day
+    reentry = [t for t in res.trades if t.action == "SELL_PUT"][1]
+    assert reentry.contract.strike == 475.0                 # different strike, not 470
+    # 50000 +200 (sell 470) -90 (close 470) +150 (sell 475) = 50260
+    assert res.final_cash == pytest.approx(50_000 + 200 - 90 + 150)
 
 def test_sizing_multiple_contracts_and_commission():
     # cash 50000, strike 470 -> floor(50000/47000)=1 contract; bump cash to size up
