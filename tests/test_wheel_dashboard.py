@@ -20,3 +20,10 @@ def test_wheel_page_runs_and_renders_metrics():
     at.button(key="run_wheel").click().run(timeout=90)
     assert not at.exception
     assert len(at.metric) >= 1        # recent-headline tiles rendered
+
+
+def test_wheel_page_has_intraday_toggle():
+    at = AppTest.from_file("dashboard/app.py").run(timeout=60)
+    at.switch_page("views/wheel.py").run(timeout=60)
+    assert not at.exception
+    assert any(cb.key == "intraday_tp" for cb in at.checkbox)
