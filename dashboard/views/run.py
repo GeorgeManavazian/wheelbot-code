@@ -2,15 +2,26 @@
 gate-free diagnostics on the real 20-ETF universe. Calls run_simple
 in-process — no CSV round-trip. Headline = recent window; also shows the
 year-by-year Sharpe decay curve (standing methodology)."""
+import os
 import streamlit as st
 from src.engine_v2.strategy.registry import STRATEGIES, get_strategy
-from src.engine_v2.data.source import default_source
+from src.engine_v2.data.source import default_source, intraday_source, INTRADAY_PATH
 from src.engine_v2.backtest.simple import run_simple
 from src.engine_v2.backtest.orchestrator import BacktestConfig
 
 def render():
     st.title("Run a backtest")
-    src = default_source()
+    choice = st.selectbox("Data", ["Daily (20-ETF universe)",
+                                    "Intraday 1-min (SPY/QQQ)"], key="data_source")
+    if choice.startswith("Intraday"):
+        if not os.path.exists(INTRADAY_PATH):
+            st.warning("Intraday cache not built. Run:\n\n"
+                       "`.venv/bin/python -m scripts.build_intraday_cache`\n\n"
+                       "then reload.")
+            st.stop()
+        src = intraday_source()
+    else:
+        src = default_source()
     tickers_all = src.available_tickers()
     lo, hi = src.date_range()
 
