@@ -22,11 +22,13 @@ def test_select_30_delta_put():
     d = sorted(ch["date"].unique())[0]
     c = select_strike_by_delta(ch, d, "P", 0.30, dte_min=1, dte_max=60)
     assert c is not None and c.right == "P"
-    # the selected contract's |delta| is the closest to 0.30 among that day's puts in range
-    day = ch[(ch["date"] == d) & (ch["right"] == "P")]
-    best = (day["delta"].abs() - 0.30).abs().min()
-    got = abs(day.set_index("strike").loc[c.strike, "delta"])
-    assert abs(abs(got) - 0.30) == pytest.approx(best, abs=1e-9)
+    cand = ch[(ch["date"] == d) & (ch["right"] == "P")
+              & (ch["dte"] >= 1) & (ch["dte"] <= 60)]
+    best = (cand["delta"].abs() - 0.30).abs().min()
+    sel = ch[(ch["date"] == d) & (ch["expiry"] == c.expiry)
+             & (ch["strike"] == c.strike) & (ch["right"] == "P")]
+    got = abs(float(sel.iloc[0]["delta"]))
+    assert abs(got - 0.30) == pytest.approx(best, abs=1e-9)
 
 def test_select_returns_none_when_empty():
     ch = _chain()
