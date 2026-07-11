@@ -49,5 +49,6 @@ def test_expiry_underlying():
     d = sorted(ch["date"].unique())[0]
     c = select_strike_by_delta(ch, d, "P", 0.30, dte_min=1, dte_max=60)
     u = expiry_underlying(ch, c)
-    # underlying on the expiry date if present in the fixture, else None — both valid
-    assert (u is None) or (u > 0)
+    # the fixture includes the contract's expiry date, so assert the real value
+    assert u is not None
+    assert u == pytest.approx(472.29, abs=0.01)
