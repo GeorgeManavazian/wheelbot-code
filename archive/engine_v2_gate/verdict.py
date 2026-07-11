@@ -5,7 +5,7 @@ import json
 import pathlib
 import stat
 import pandas as pd
-from .dsr import deflated_sharpe
+from .dsr import deflated_sharpe, moments_degenerate, observed_alpha
 from .fwer import fwer, k_effective
 from .regime_eval import per_regime_sharpe, regime_kill
 
@@ -17,6 +17,14 @@ K_MIN = 5
 def _best_trial_returns(trial_return_matrix: pd.DataFrame) -> pd.Series:
     sharpes = trial_return_matrix.apply(lambda r: r.mean() / (r.std(ddof=1) + 1e-12))
     return trial_return_matrix[sharpes.idxmax()]
+
+
+def _is_degenerate(returns: pd.Series) -> bool:
+    r = returns.dropna()
+    if len(r) < 4:
+        return True
+    sr = float(r.mean() / (r.std(ddof=1) + 1e-12))
+    return moments_degenerate(sr, float(r.skew()), float(r.kurt()))
 
 def compute_verdict(trial_return_matrix: pd.DataFrame,
                     regime_labels: pd.DataFrame,
@@ -30,15 +38,24 @@ def compute_verdict(trial_return_matrix: pd.DataFrame,
                 "regime_kill": False, "calmar_overall": calmar_overall,
                 "notes": notes}
     best = _best_trial_returns(trial_return_matrix)
+    if _is_degenerate(best):
+        notes["degenerate_moments"] = True
+        return {"pass": False, "watch": False, "shelf": True,
+                "dsr": 0.0, "fwer": 1.0, "k_effective": K_eff,
+                "regime_kill": False, "calmar_overall": calmar_overall,
+                "notes": notes}
     dsr = deflated_sharpe(best, K_effective=K_eff)
-    fwer_val = fwer(K_eff, alpha=0.05)
+    # alpha_K = 1 - (1 - alpha)^E[K], where alpha is this strategy's own observed
+    # single-trial p-value. Passing a constant alpha here makes fwer_val a function
+    # of K alone, and the gate a tautology no strategy can clear.
+    fwer_val = fwer(K_eff, alpha=observed_alpha(best))
     reg_tbl = per_regime_sharpe(best, regime_labels)
     reg_killed = regime_kill(reg_tbl)
-    is_pass = (dsr > DSR_PASS and fwer_val <= FWER_PASS
+    is_pass = (dsr > DSR_PASS and fwer_val < FWER_PASS
                and not reg_killed and calmar_overall >= 1.0)
-    is_watch = (not is_pass) and (
-        DSR_WATCH_LO <= dsr <= DSR_PASS or reg_killed
-    )
+    # Watch is "alive but not promoted". Shelf is reserved for dead strategies,
+    # so it must be a floor on DSR -- never a bucket a high-DSR strategy falls into.
+    is_watch = (not is_pass) and dsr >= DSR_WATCH_LO
     is_shelf = not (is_pass or is_watch)
     return {"pass": is_pass, "watch": is_watch, "shelf": is_shelf,
             "dsr": dsr, "fwer": fwer_val, "k_effective": K_eff,

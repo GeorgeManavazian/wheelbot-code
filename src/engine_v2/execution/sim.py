@@ -21,6 +21,14 @@ class Fill:
     slippage_bps: float
     note: str = ""
 
+def bid_ask(close: float, half_spread_bps: float) -> tuple[float, float]:
+    """Bracket the close by half the bid-ask spread on each side. A market order
+    then crosses the full spread (Chan's rule): buy pays the ask, sell hits the bid.
+    Daily bars carry no quotes, so the spread is an assumption, not observed."""
+    h = half_spread_bps / 1e4
+    return close * (1 - h), close * (1 + h)
+
+
 def slippage_bps(order_notional: float, adv: float, a: float, b: float) -> float:
     if adv <= 0:
         return a
