@@ -66,3 +66,7 @@ def held_contracts(result) -> list:
     if cur is not None:  # still open at window end
         held.append((cur[0], cur[1], cur[2], cur[3], cur[3]))
     return held
+
+def run_wheel_intraday(chain, cfg, intraday_df):
+    from .wheel import run_wheel
+    return run_wheel(chain, cfg, intraday=intraday_marks(intraday_df))
