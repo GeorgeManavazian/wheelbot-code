@@ -1,0 +1,2243 @@
+[
+ {
+  "name": "stock_list_symbols",
+  "description": "A symbol can be defined as a unique identifier for a stock / underlying asset. Common terms also include: root, ticker, and underlying. This endpoint returns all traded symbols for stocks. This endpoint is updated overnight.\n\n    List all stock symbols\n\n    Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "required": []
+  }
+ },
+ {
+  "name": "stock_list_dates",
+  "description": "Lists all dates of data that are available for a stock with a given request type and symbol. This endpoint is updated overnight.\n\n    List all dates for a stock quote for a given symbol\n\n    List all dates for a stock trade for multiple symbols\n\n    List all dates for a stock trade for all symbols\n\n    Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "request_type": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    }
+   },
+   "required": [
+    "request_type",
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "stock_snapshot_ohlc",
+  "description": "        Provides a real-time Open, High, Low, Close for the current day.\n* Returns a real-time session OHLC from the [Nasdaq Basic feed](/Articles/Data-And-Requests/The-SIPs) if the account has a [stocks standard or pro subscription](https://www.thetadata.net/subscribe.html#stocks).\n* Returns a 15-minute delayed session OHLC from the [UTP & CTA feeds](/Articles/Data-And-Requests/The-SIPs) if the account has the stocks value subscription.\n* Theta Data resets its snapshot cache at midnight ET every day. This endpoint may not work on a weekend where there were no eligible messages sent over exchange feeds. We recommend using historic requests during the weekend.\n\n            Returns OHLC for stocks for all symbols\n\n            Returns OHLC for a given stock trade from the Nasdaq Basic feed\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "venue": {
+     "type": "string"
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "stock_snapshot_trade",
+  "description": "        Returns a real-time last trade from the [Nasdaq Basic feed](/Articles/Data-And-Requests/The-SIPs) if the account has a [stocks standard or pro subscription](https://www.thetadata.net/subscribe.html#stocks).\n\n- Theta Data resets its snapshot cache at midnight ET every day. This endpoint may not work on a weekend where there were no eligible messages sent over exchange feeds. We recommend using historic requests during the weekend.\n\n            Returns last trade for stocks for a given symbol\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "venue": {
+     "type": "string"
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "stock_snapshot_quote",
+  "description": "        * Returns a real-time last BBO quote from the [Nasdaq Basic feed](/Articles/Data-And-Requests/The-SIPs) if the account has a [stocks standard or pro subscription](https://www.thetadata.net/subscribe.html#stocks).\n* Returns a 15-minute delayed NBBO quote from the [UTP & CTA feeds](/Articles/Data-And-Requests/The-SIPs) account has the [stocks value subscription](https://www.thetadata.net/subscribe.html#stocks) subscription.\n- Theta Data resets its snapshot cache at midnight ET every day. This endpoint may not work on a weekend where there were no eligible messages sent over exchange feeds. We recommend using historic requests during the weekend.\n\n            Returns last quote for stocks for all symbols\n\n            Returns OHLC for a given stock trade from the Nasdaq Basic feed\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "venue": {
+     "type": "string"
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "stock_snapshot_market_value",
+  "description": "        * Returns a real-time market value derived from the last BBO quote from the [Nasdaq Basic feed](/Articles/Data-And-Requests/The-SIPs) if the account has a [stocks standard or pro subscription](https://www.thetadata.net/subscribe.html#stocks).\n* Returns a 15-minute delayed market value derived from an NBBO quote from the [UTP & CTA feeds](/Articles/Data-And-Requests/The-SIPs) if the account has the [stocks value subscription](https://www.thetadata.net/subscribe.html#stocks) subscription.\n- Theta Data resets its snapshot cache at midnight ET every day. This endpoint may not work on a weekend where there were no eligible messages sent over exchange feeds. We recommend using historic requests during the weekend.\n\n            Returns last market value for stocks for all symbols\n\n            Returns market value for a given stock trade from the Nasdaq Basic feed\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "venue": {
+     "type": "string"
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "stock_history_eod",
+  "description": "Since [the equity SIPs](/Articles/Data-And-Requests/The-SIPs.html) only generate a partial EOD report, Theta Data generates a national EOD report at 17:15 ET each day. ``created`` represents the datetime the report was generated and ``last_trade`` represents the datetime of the last trade. The quote in the response represents the last NBBO reported by [CTA or UTP](/Articles/Data-And-Requests/The-SIPs.html) at the time of report generation. You can read more about EOD & OHLC data [here](/Articles/Data-And-Requests/OHLC-EOD.html). Theta Data plans to avail SIP EOD reports in the near future.\n\n    Returns EOD report for a given symbol between specified dates (inclusive)\n\n    Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "start_date",
+    "end_date"
+   ]
+  }
+ },
+ {
+  "name": "stock_history_ohlc",
+  "description": "        - Aggregated OHLC bars that use [SIP rules](/Articles/Data-And-Requests/OHLC-EOD.html) for each bar. Time timestamp of the bar represents the opening time of the bar. For a trade to be part of the bar:  ``bar time`` <= ``trade time`` < ``bar timestamp + ivl``, where ivl is the specified interval size in milliseconds.\n- Set the ``venue`` parameter to ``nqb`` to access current-day real-time historic data from the [Nasdaq Basic feed](/Articles/Data-And-Requests/The-SIPs) if the account has a [stocks standard or pro subscription](https://www.thetadata.net/subscribe.html#stocks).\n- Multi-day requests are limited to 1 month of data.\n\n            Returns OHLC for a given symbol on the specified date with a one minute interval\n\n            Click to open in browser (HTML)\n\n            Returns OHLC for a given symbol between specified dates (inclusive) with a one minute interval\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "date": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "venue": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "stock_history_trade",
+  "description": "        Returns every trade reported by [UTP & CTA](/Articles/Data-And-Requests/The-SIPs). Set the ``venue`` parameter to ``nqb`` to access current-day real-time historic data from the [Nasdaq Basic feed](/Articles/Data-And-Requests/The-SIPs) if the account has a [stocks standard or pro subscription](https://www.thetadata.net/subscribe.html#stocks).\n- Multi-day requests are limited to 1 month of data.\n\n            Returns every trade for a given symbol on specified date\n\n            Click to open in browser (HTML)\n\n            Returns every trade for a given symbol between specified dates (inclusive)\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "date": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "venue": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "stock_history_quote",
+  "description": "        - Returns every NBBO quote reported by [UTP and CTA](/Articles/Data-And-Requests/The-SIPs).\n- If the ``interval`` parameter is specified, the quote for each interval represents the last quote prior to the interval's timestamp.\n- Set the ``venue`` parameter to ``nqb`` to access current-day real-time historic data from the [Nasdaq Basic feed](/Articles/Data-And-Requests/The-SIPs) if the account has a [stocks standard or pro subscription](https://www.thetadata.net/subscribe.html#stocks).\n- Multi-day requests are limited to 1 month of data.\n\n            Returns every quote for a given symbol on the specified date with a one minute interval\n\n            Click to open in browser (HTML)\n\n            Returns every quote for a given symbol between specified dates (inclusive) with a one minute interval\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "date": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "venue": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "stock_history_trade_quote",
+  "description": "        Returns every trade reported by [UTP & CTA](/Articles/Data-And-Requests/The-SIPs) paired with the last BBO quote reported by [UTP or CTA](/Articles/Data-And-Requests/The-SIPs) at the time of trade. A quote is matched with a trade if its timestamp ``<=`` the trade timestamp. If you prefer to match quotes with timestamps that are ``<`` the trade timestamp, specify the ``exclusive`` parameter to ``true``. Set the ``venue`` parameter to ``nqb`` to access current-day real-time historic data from the [Nasdaq Basic feed](/Articles/Data-And-Requests/The-SIPs) if the account has a [stocks standard or pro subscription](https://www.thetadata.net/subscribe.html#stocks).\n- Multi-day requests are limited to 1 month of data.\n\n            Returns every trade quote for a given symbol on specified date\n\n            Click to open in browser (HTML)\n\n            Returns every trade quote for a given symbol between specified dates (inclusive)\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "date": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "exclusive": {
+     "type": "boolean"
+    },
+    "venue": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "stock_at_time_trade",
+  "description": "        #### Real-time request:\n- Returns a real-time session from the [Nasdaq Basic feed](/Articles/Data-And-Requests/The-SIPs.html#nasdaq-basic) if the account has a [stocks standard or pro subscription](https://www.thetadata.net/subscribe.html#stocks).\n- Returns a 15-minute delayed session from the [UTP & CTA feeds](/Articles/Data-And-Requests/The-SIPs.html#equities-cta-utp) account has the [stocks value subscription](https://www.thetadata.net/subscribe.html#stocks) subscription.\n\n#### Historical request:\nReturns the last trade reported by [UTP & CTA feeds](/Articles/Data-And-Requests/The-SIPs.html#equities-cta-utp) at a specified millisecond of the day.\nTrade condition mappings can be found [here](/Articles/Errors-Exchanges-Conditions/Trade-Conditions.html).\n\n            Returns the last trade for a given symbol and specified time of day\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    },
+    "time_of_day": {
+     "type": "string"
+    },
+    "venue": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "start_date",
+    "end_date",
+    "time_of_day"
+   ]
+  }
+ },
+ {
+  "name": "stock_at_time_quote",
+  "description": "        #### Real-time request:\n  - Subscription tier standard or higher will default to NQB.\n  - Real-time last BBO quote at-time_of_day-time from the [Nasdaq Basic feed](/Articles/Data-And-Requests/The-SIPs.html#nasdaq-basic) if the account has a [stocks standard or pro subscription](https://www.thetadata.net/subscribe.html#stocks).\n  - 15-minute delayed NBBO quote at-time_of_day-time from the [UTP & CTA feeds](/Articles/Data-And-Requests/The-SIPs.html#equities-cta-utp) account has the [stocks value subscription](https://www.thetadata.net/subscribe.html#stocks) subscription.\n\n#### Historical request:\n  Returns the last NBBO quote reported by [UTP & CTA feeds](/Articles/Data-And-Requests/The-SIPs.html#equities-cta-utp) at a specified millisecond of the day.\n\n            Returns the last quote for a given symbol between specified dates (inclusive) with a one minute interval\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    },
+    "time_of_day": {
+     "type": "string"
+    },
+    "venue": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "start_date",
+    "end_date",
+    "time_of_day"
+   ]
+  }
+ },
+ {
+  "name": "option_list_symbols",
+  "description": "A symbol can be defined as a unique identifier for a stock / underlying asset. Common terms also include: root, ticker, and underlying. This endpoint returns all traded symbols for options. This endpoint is updated overnight.\n\n    List all symbols for options\n\n    Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "required": []
+  }
+ },
+ {
+  "name": "option_list_dates",
+  "description": "        Lists all dates of data that are available for an option with a given symbol, request type, and expiration.\nThis endpoint is updated overnight.\n\n            List all dates for an option quote for a given symbol and expiration date\n\n            List all dates for an option trade for a given symbol with any expiration date\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "request_type": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "request_type",
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_list_expirations",
+  "description": "        Lists all dates of expirations that are available for an option with a given symbol.\nThis endpoint is updated overnight.\n\n            List all expirations for an option with a given symbol\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "option_list_strikes",
+  "description": "        Lists all strikes that are available for an option with a given symbol and expiration date.\nThis endpoint is updated overnight.\n\n            List all strikes for an option with a given symbol and expiration date\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "expiration": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_list_contracts",
+  "description": "        Lists all contracts that were traded or quoted on a particular date.\n\nIf the ``symbol`` parameter is specified, the returned contracts will be filtered to match the symbol.\nMultiple symbols can be specified by separating them with commas such as ``symbol=AAPL,SPY,AMD``\nThis endpoint is updated real-time.\n\n            List all contracts for an option trade with a given date\n\n            List all contracts for an option quote with a given symbol and date\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "request_type": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "date": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "request_type",
+    "date"
+   ]
+  }
+ },
+ {
+  "name": "option_snapshot_ohlc",
+  "description": "        - Retrieve a real-time last ohlc of an option contract for the trading day.\n- You might need to change the default expiration date to a different date if it is past the current date.\n\n            Returns OHLC for a given option contract\n\n            Returns OHLC for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_snapshot_trade",
+  "description": "        - Retrieve the real-time last trade of an option contract.\n- You might need to change the default expiration date to a different date if it is past the current date.\n- This endpoint will return no data if the market was closed for the day. Theta Data resets the snapshot cache at midnight ET every night.\n\n            Returns last trade for an option contract\n\n            Returns last trade for all option contracts with an expiration of 2027-01-15\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_snapshot_quote",
+  "description": "        - Retrieve a real-time last NBBO quote of an option contract.\n- You might need to change the default expiration date to a different date if it is past the current date.\n- This endpoint will return no data if the market was closed for the day. Theta Data resets the snapshot cache at midnight ET every night.\n\n            Returns last NBBO quote for an option contract\n\n            Returns last NBBO quote for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_snapshot_open_interest",
+  "description": "        - Retrieve the last open interest message of an option contract.\n- Open interest is reported around 06:30 ET every morning by OPRA and reflects the open interest at the of the previous trading day.\n- You might need to change the default expiration date to a different date if it is past the current date.\n- This endpoint will return no data if the market was closed for the day. Theta Data resets the snapshot cache at midnight ET every night.\n\n            Returns open interest for an option contract\n\n            Returns open interest for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_snapshot_market_value",
+  "description": "* Returns a real-time market value derived from the last NBBO quote of an option contract.\n\n    Returns last market value for all option contracts for a given symbol\n\n    Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_snapshot_greeks_implied_volatility",
+  "description": "        Returns implied volatilies calculated using the national best bid, mid, and ask price\nof the option respectively. The underlying price represents whatever the last underlying price was at the\n``underlying_timestamp`` field. You can read more about how Theta Data calculates greeks\n[here](/Articles/Data-And-Requests/Option-Greeks.html).\n\n            Returns implied volatility for an option contract\n\n            Returns implied volatility for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "stock_price": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "min_time": {
+     "type": "string"
+    },
+    "use_market_value": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_snapshot_greeks_all",
+  "description": "        - Retrieve a real-time last greeks calculation for all option contracts that lie on a provided expiration.\n- You might need to change the default expiration date to a different date if it is past the current date. Some quotes are omitted in the example to reduce the space of the sample output.\n- Make `expiration` * if you want to get the snapshot for every expiration chain for the underlying.\n> This endpoint will return no data if the market was closed for the day. Theta Data resets the snapshot cache at midnight ET every night.\n\n            Returns all greeks for an option contract\n\n            Returns all greeks for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "stock_price": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "min_time": {
+     "type": "string"
+    },
+    "use_market_value": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_snapshot_greeks_first_order",
+  "description": "        - Retrieve a real-time last greeks calculation for all option contracts that lie on a provided expiration.\n- You might need to change the default expiration date to a different date if it is past the current date. Some quotes are omitted in the example to reduce the space of the sample output.\n- Make `expiration` * if you want to get the snapshot for every expiration chain for the underlying.\n> This endpoint will return no data if the market was closed for the day. Theta Data resets the snapshot cache at midnight ET every night.\n\n            Returns first order greeks for an option contract\n\n            Returns first order greeks for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "stock_price": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "min_time": {
+     "type": "string"
+    },
+    "use_market_value": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_snapshot_greeks_second_order",
+  "description": "        - Retrieve a real-time last second order greeks calculation for all option contracts that lie on a provided expiration.\n- You might need to change the default expiration date to a different date if it is past the current date. Some quotes are omitted in the example to reduce the space of the sample output.\n- Make `expiration` * if you want to get the snapshot for every expiration chain for the underlying.\n> This endpoint will return no data if the market was closed for the day. Theta Data resets the snapshot cache at midnight ET every night.\n\n            Returns second order greeks for an option contract\n\n            Returns second order greeks for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "stock_price": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "min_time": {
+     "type": "string"
+    },
+    "use_market_value": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_snapshot_greeks_third_order",
+  "description": "        - Retrieve a real-time last third order greeks calculation for all option contracts that lie on a provided expiration.\n- You might need to change the default expiration date to a different date if it is past the current date. Some quotes are omitted in the example to reduce the space of the sample output.\n- Make `expiration` * if you want to get the snapshot for every expiration chain for the underlying.\n> This endpoint will return no data if the market was closed for the day. Theta Data resets the snapshot cache at midnight ET every night.\n\n            Returns third order greeks for an option contract\n\n            Returns third order greeks for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "stock_price": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "min_time": {
+     "type": "string"
+    },
+    "use_market_value": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_history_eod",
+  "description": "        - Since [OPRA](/Articles/Data-And-Requests/The-SIPs.html) does not provide a national EOD report for options, Theta Data generates a national EOD report at 17:15 ET each day.\n- ``created`` represents the datetime the report was generated and ``last_trade`` represents the datetime of the last trade.\n- The quote in the response represents the last NBBO reported by OPRA at the time of report generation.\n- You can read more about EOD & OHLC data [here](/Articles/Data-And-Requests/OHLC-EOD.html).\n\n            Returns EOD report for an option contract\n\n            Returns EOD report for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "start_date",
+    "end_date",
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_history_ohlc",
+  "description": "        - Aggregated OHLC bars that use [SIP rules](/Articles/Data-And-Requests/OHLC-EOD.html) for each bar.\n- Time timestamp of the bar represents the opening time of the bar. For a trade to be part of the bar:  ``bar timestamp`` <= ``trade time`` < ``bar timestamp + interval``.\n- Multi-day requests are limited to 1 month of data.\n\n            Returns OHLC for an option contract\n\n            Click to open in browser (HTML)\n\n            Returns OHLC for an option contract\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "option_history_trade",
+  "description": "        - Returns every trade reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html).\n- Trade condition mappings can be found [here](/Articles/Errors-Exchanges-Conditions/Trade-Conditions.html).\n- Extended trade conditions are not reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html) for options, so they can be ignored.\n- Multi-day requests are limited to 1 month of data, and must specify an expiration.\n\n            Returns every trade for an option contract\n\n            Returns every trade for an option contract between the specified dates (inclusive)\n\n            Returns every trade for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_history_quote",
+  "description": "        - Returns every NBBO quote reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html).\n- If the ``interval`` parameter is specified, the quote for each interval represents the last quote at the interval's timestamp.\n- Multi-day requests are limited to 1 month of data, and must specify an expiration.\n\n            Returns every quote for an option contract\n\n            Returns every quote for an option contract in the specified date range\n\n            Returns every quote for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "option_history_trade_quote",
+  "description": "        - Returns every [trade](/operations/option_history_trade.html) reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html) paired with the last NBBO quote reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html) at the time of trade.\n- A quote is matched with a trade if its timestamp ``<=`` the trade timestamp.\n- To match trades with quotes timestamps that are ``<`` the trade timestamp, specify the ``exclusive``parameter to ``true``. After thorough testing, we have determined that using ``exclusive=true`` might yield better results for various applications.\n- Multi-day requests are limited to 1 month of data, and must specify an expiration.\n\n            Returns every trade quote for an option contract\n\n            Returns every trade quote for an option contract between the specified dates (inclusive)\n\n            Returns every trade quote for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "exclusive": {
+     "type": "boolean"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_history_open_interest",
+  "description": "        - Open Interest is normally reported once per day by [OPRA](/Articles/Data-And-Requests/The-SIPs.html) at approximately 06:30 ET.\n- A new open interest message might not be sent by [OPRA](/Articles/Data-And-Requests/The-SIPs.html) if there is no open interest for the option contract.\n- The reported open interest represents the open interest at the end of the previous trading day.\n\n            Returns open interest for an option contract\n\n            Returns open interest for an option contract between the specified dates (inclusive)\n\n            Returns open interest for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_history_greeks_eod",
+  "description": "        - Returns the data for all contracts that share the same provided symbol and expiration.\n- Uses Theta Data's EOD reports that get generated at 17:15 ET each day. The closing option price and closing underlying price are used for the greeks calculation.\n- **Set `expiration` to ``*`` if you want to retrieve data for every option that shares the same ``symbol``. (note: Any ``expiration=*`` must be requested day by day)**\n\n            Returns EOD report for an option contract\n\n            Returns EOD report for all option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "underlyer_use_nbbo": {
+     "type": "boolean"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration",
+    "start_date",
+    "end_date"
+   ]
+  }
+ },
+ {
+  "name": "option_history_greeks_all",
+  "description": "        - Returns the data for all contracts that share the same provided symbol and expiration.\n- Calculated using the option and underlying midpoint price. If an interval size is specified (*highly recommended*), the option quote used in the calculation follows the same rules as the [quote](/operations/option_history_quote.html) endpoint.\n- The underlying price represents whatever the last underlying price was at the ``timestamp`` field. You can read more about how Theta Data calculates greeks [here](/Articles/Data-And-Requests/Option-Greeks.html).\n- Multi-day requests are limited to 1 month of data.\n\n            Returns all greeks for an option contract\n\n            Click to open in browser (HTML)\n\n            Returns all greeks for an option contract between the specified dates (inclusive)\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "option_history_trade_greeks_all",
+  "description": "        - Returns the data for all contracts that share the same provided symbol and expiration.\n- Calculates greeks for every trade reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html).\n- The underlying price represents whatever the last underlying price was at the ``timestamp`` field. You can read more about how Theta Data calculates greeks [here](/Articles/Data-And-Requests/Option-Greeks.html).\n- Multi-day requests are limited to 1 month of data, and must specify an expiration.\n\n            Returns all trade greeks for an option contract\n\n            Returns all trade greeks for an option contract between the specified dates (inclusive)\n\n            Returns all trade greeks for an full chain of option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_history_greeks_first_order",
+  "description": "        - Returns the data for all contracts that share the same provided symbol and expiration.\n- Calculated using the option and underlying midpoint price. If an interval size is specified (*highly recommended*), the option quote used in the calculation follows the same rules as the [quote](/operations/option_history_quote.html) endpoint.\n- The underlying price represents whatever the last underlying price was at the ``timestamp`` field. You can read more about how Theta Data calculates greeks [here](/Articles/Data-And-Requests/Option-Greeks.html).\n- Multi-day requests are limited to 1 month of data.\n\n            Returns first order greeks for an option contract\n\n            Click to open in browser (HTML)\n\n            Returns first order greeks for an option contract between the specified dates (inclusive)\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "option_history_trade_greeks_first_order",
+  "description": "        - Returns the data for all contracts that share the same provided symbol and expiration.\n- Calculates greeks for every trade reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html).\n- The underlying price represents whatever the last underlying price was at the ``timestamp`` field. You can read more about how Theta Data calculates greeks [here](/Articles/Data-And-Requests/Option-Greeks.html).\n- Multi-day requests are limited to 1 month of data, and must specify an expiration.\n\n            Returns first order trade greeks for an option contract\n\n            Returns first order trade greeks for an option contract between the specified dates (inclusive)\n\n            Returns first order trade greeks for an full chain of option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_history_greeks_second_order",
+  "description": "        - Returns the data for all contracts that share the same provided symbol and expiration.\n- Calculated using the option and underlying midpoint price. If an interval size is specified (*highly recommended*), the option quote used in the calculation follows the same rules as the [quote](/operations/option_history_quote.html) endpoint.\n- The underlying price represents whatever the last underlying price was at the ``timestamp`` field. You can read more about how Theta Data calculates greeks [here](/Articles/Data-And-Requests/Option-Greeks.html).\n- Multi-day requests are limited to 1 month of data.\n\n            Returns second order greeks for an option contract\n\n            Click to open in browser (HTML)\n\n            Returns second order greeks for an option contract between the specified dates (inclusive)\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "option_history_trade_greeks_second_order",
+  "description": "        - Returns the data for all contracts that share the same provided symbol and expiration.\n- Calculates greeks for every trade reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html).\n- The underlying price represents whatever the last underlying price was at the ``timestamp`` field. You can read more about how Theta Data calculates greeks [here](/Articles/Data-And-Requests/Option-Greeks.html).\n- Multi-day requests are limited to 1 month of data, and must specify an expiration.\n\n            Returns second order trade greeks for an option contract\n\n            Returns second order trade greeks for an option contract between the specified dates (inclusive)\n\n            Returns second order trade greeks for an full chain of option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_history_greeks_third_order",
+  "description": "        - Returns the data for all contracts that share the same provided symbol and expiration.\n- Calculated using the option and underlying midpoint price. If an interval size is specified (*highly recommended*), the option quote used in the calculation follows the same rules as the [quote](/operations/option_history_quote.html) endpoint.\n- The underlying price represents whatever the last underlying price was at the ``timestamp`` field. You can read more about how Theta Data calculates greeks [here](/Articles/Data-And-Requests/Option-Greeks.html).\n- Multi-day requests are limited to 1 month of data.\n\n            Returns third order greeks for an option contract\n\n            Click to open in browser (HTML)\n\n            Returns third order greeks for an option contract between the specified dates (inclusive)\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "option_history_trade_greeks_third_order",
+  "description": "        - Returns the data for all contracts that share the same provided symbol and expiration.\n- Calculates greeks for every trade reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html).\n- The underlying price represents whatever the last underlying price was at the ``timestamp`` field. You can read more about how Theta Data calculates greeks [here](/Articles/Data-And-Requests/Option-Greeks.html).\n- Multi-day requests are limited to 1 month of data, and must specify an expiration.\n\n            Returns third order trade greeks for an option contract\n\n            Returns third order trade greeks for an option contract between the specified dates (inclusive)\n\n            Returns third order trade greeks for an full chain of option contracts\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_history_greeks_implied_volatility",
+  "description": "        - Returns implied volatilies calculated using the national best bid, mid, and ask price of the option respectively.\n- The underlying price represents whatever the last underlying price was at the ``timestamp`` field. You can read more about how Theta Data calculates greeks [here](/Articles/Data-And-Requests/Option-Greeks.html).\n- Multi-day requests are limited to 1 month of data.\n\n            Returns 5m interval implied volatility for an option contract\n\n            Click to open in browser (HTML)\n\n            Returns 5m interval implied volatility for an option contract between the specified dates (inclusive)\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "option_history_trade_greeks_implied_volatility",
+  "description": "        - Returns implied volatilies calculated using the trade reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html).\n- The underlying price represents whatever the last underlying price was at the ``timestamp`` field. You can read more about how Theta Data calculates greeks [here](/Articles/Data-And-Requests/Option-Greeks.html).\n- Multi-day requests are limited to 1 month of data, and must specify an expiration.\n\n            Returns implied volatility for an option contract\n\n            Returns implied volatility for an option contract between the specified dates (inclusive)\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "annual_dividend": {
+     "type": "number"
+    },
+    "rate_type": {
+     "type": "string"
+    },
+    "rate_value": {
+     "type": "number"
+    },
+    "version": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_at_time_trade",
+  "description": "        - Returns the last trade reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html) at a specified millisecond of the day.\n- Trade condition mappings can be found [here](/Articles/Errors-Exchanges-Conditions/Trade-Conditions.html).\n- Extended trade conditions are not reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html) for options, so they can be ignored.\n- The ``time_of_day``parameter represents the 00:00:00.000 ET that the trade should be provided for.\n\n            Returns the last trade for an option contract\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    },
+    "time_of_day": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "symbol",
+    "start_date",
+    "end_date",
+    "time_of_day",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "option_at_time_quote",
+  "description": "        - Returns the last NBBO quote reported by [OPRA](/Articles/Data-And-Requests/The-SIPs.html) at a specified millisecond of the day.\n- The ``time_of_day``parameter represents the 00:00:00.000 ET that the quote should be provided for.\n- Using a sub-minute ``time_of_day`` (e.g. ``09:30:10.000``) will significantly slow the request and may cause it to hang, particularly when using ``expiration=*``. Use a minute-boundary time (e.g. ``09:30:00.000``) instead.\n\n            Returns the last quote for an option contract\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    },
+    "time_of_day": {
+     "type": "string"
+    },
+    "expiration": {
+     "type": "string"
+    },
+    "strike": {
+     "type": "string"
+    },
+    "right": {
+     "type": "string"
+    },
+    "max_dte": {
+     "type": "number"
+    },
+    "strike_range": {
+     "type": "number"
+    }
+   },
+   "required": [
+    "symbol",
+    "start_date",
+    "end_date",
+    "time_of_day",
+    "expiration"
+   ]
+  }
+ },
+ {
+  "name": "index_list_symbols",
+  "description": "A symbol can be defined as a unique identifier for a stock / underlying asset. Common terms also include: root, ticker, and underlying. This endpoint returns all traded symbols for options. This endpoint is updated overnight.\n\n    List all symbols for indices\n\n    Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "required": []
+  }
+ },
+ {
+  "name": "index_list_dates",
+  "description": "Lists all dates of data that are available for a index with a given request type and symbol. This endpoint is updated overnight.\n\n    List all dates for a index for a given symbol\n\n    Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "index_snapshot_ohlc",
+  "description": "        - Retrieves the real-time current day OHLC.\n- [Exchanges](/Articles/Data-And-Requests/The-SIPs.html) typically generate a price report every second for popular indices like SPX.\n\n            Returns OHLC for a given index price change\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "index_snapshot_price",
+  "description": "        - Retrieves a real-time last index price.\n- [Exchanges](/Articles/Data-And-Requests/The-SIPs.html) typically generate a price report every second for popular indices like SPX.\n\n            Returns last index price\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "index_snapshot_market_value",
+  "description": "        - Retrieves a real-time last index market value.\n- [Exchanges](/Articles/Data-And-Requests/The-SIPs.html) typically generate a price report every second for popular indices like SPX.\n\n            Returns last market value\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "min_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol"
+   ]
+  }
+ },
+ {
+  "name": "index_history_eod",
+  "description": "- Since [the indices feeds](/Articles/Data-And-Requests/The-SIPs.html) do not provide a national EOD report, Theta Data generates a national EOD report at 17:15 each day.\n\n    Returns EOD report for a given symbol between specified dates (inclusive)\n\n    Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "start_date",
+    "end_date"
+   ]
+  }
+ },
+ {
+  "name": "index_history_ohlc",
+  "description": "        - Aggregated OHLC bars that use [SIP rules](/Articles/Data-And-Requests/OHLC-EOD.html) for each bar.\n- Time timestamp of the bar represents the opening time of the bar. For a trade to be part of the bar:  ``bar timestamp`` <= ``trade time`` < ``bar timestamp + interval``.\n- [Exchanges](/Articles/Data-And-Requests/The-SIPs.html) typically generate a price report every second for popular indices like SPX.\n\n            Returns OHLC for a given symbol between specified dates (inclusive) with a one minute interval\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "start_date",
+    "end_date",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "index_history_price",
+  "description": "        - Retrieves historical indices price reports. [Exchanges](/Articles/Data-And-Requests/The-SIPs.html) typically generate a price report every second for popular indices like SPX.\n- When the ``interval`` parameter is specified, the returned data represents the price at the exact time of each timestamp. If the timestamp in the response is 10:30:00, the price field represents the price at that exact time of the day.\n- A price update from the exchange is omitted if the price remained the same from the previous update.\n- Multi-day requests are limited to 1 month of data.\n\n            Returns historical index price reports\n\n            Click to open in browser (HTML)\n\n            Returns historical index price reports\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    },
+    "symbol": {
+     "type": "string"
+    },
+    "start_time": {
+     "type": "string"
+    },
+    "end_time": {
+     "type": "string"
+    },
+    "interval": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "interval"
+   ]
+  }
+ },
+ {
+  "name": "index_at_time_price",
+  "description": "        - Retrieves historical indices price reports. [Exchanges](/Articles/Data-And-Requests/The-SIPs.html) typically generate a price report every second for popular indices like SPX.\n- The ``time_of_day`` parameter represents the 00:00:00.000 ET that the price should be provided for.\n\n            Returns specific at time historical index price reports\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    },
+    "time_of_day": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "start_date",
+    "end_date",
+    "time_of_day"
+   ]
+  }
+ },
+ {
+  "name": "calendar_open_today",
+  "description": "        - Retrieves current day equity market schedule\n- *On days when the market closes early at 1:00 PM ET; eligible options will trade until 1:15 PM.\n- **Some NYSE exchanges will continue late trading until 5:00 PM ET on early close days.\n\n            Current day equity market schedule\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "required": []
+  }
+ },
+ {
+  "name": "calendar_on_date",
+  "description": "        - Retrieves equity market schedule for a given date\n- Note: Holiday data is available 01/01/2012 through the end of the calendar year that immediately follows the current year\n- *On days when the market closes early at 1:00 PM ET; eligible options will trade until 1:15 PM.\n- **Some NYSE exchanges will continue late trading until 5:00 PM ET on early close days.\n\n            Returns equity market schedule for the requested date\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "date"
+   ]
+  }
+ },
+ {
+  "name": "calendar_year",
+  "description": "        - Retrieves equity market holidays for a given year\n- Note: Holiday data is available 01/01/2012 through the end of the calendar year that immediately follows the current year\n- *On days when the market closes early at 1:00 PM ET; eligible options will trade until 1:15 PM.\n- **Some NYSE exchanges will continue late trading until 5:00 PM ET on early close days.\n\n            Returns equity market holidays for the requested year\n\n            Click to open in browser (HTML)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "year": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "year"
+   ]
+  }
+ },
+ {
+  "name": "interest_rate_history_eod",
+  "description": "- Returns the interest rate reported. Depending on the rate, reports can occur in the morning or the afternoon.\n\n    Returns the rate for a given symbol between specified dates (inclusive)\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "symbol": {
+     "type": "string"
+    },
+    "start_date": {
+     "type": "string"
+    },
+    "end_date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "symbol",
+    "start_date",
+    "end_date"
+   ]
+  }
+ },
+ {
+  "name": "option_flat_file_trade_quote",
+  "description": "Bulk download all option trade/quote ticks for a given date as a CSV stream. Returns one row per tick, grouped by contract. Requires a Professional options subscription.\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "date"
+   ]
+  }
+ },
+ {
+  "name": "option_flat_file_eod",
+  "description": "Bulk download all option end-of-day ticks for a given date as a CSV stream. Returns one row per tick, grouped by contract. Requires a Professional options subscription.\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "date"
+   ]
+  }
+ },
+ {
+  "name": "option_flat_file_open_interest",
+  "description": "Bulk download all option open interest ticks for a given date as a CSV stream. Returns one row per tick, grouped by contract. Requires a Professional options subscription.\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "date"
+   ]
+  }
+ },
+ {
+  "name": "stock_flat_file_trade_quote",
+  "description": "Bulk download all stock trade/quote ticks for a given date as a CSV stream. Returns one row per tick, grouped by symbol. Requires a Professional stock subscription.\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "date"
+   ]
+  }
+ },
+ {
+  "name": "stock_flat_file_eod",
+  "description": "Bulk download all stock end-of-day ticks for a given date as a CSV stream. Returns one row per tick, grouped by symbol. Requires a Professional stock subscription.\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "date"
+   ]
+  }
+ },
+ {
+  "name": "index_flat_file_eod",
+  "description": "Bulk download all index end-of-day ticks for a given date as a CSV stream. Returns one row per tick, grouped by symbol. Requires a Professional indices subscription.\n",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "date": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "date"
+   ]
+  }
+ }
+]
