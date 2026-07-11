@@ -3,6 +3,7 @@ gate-free diagnostics on the real 20-ETF universe. Calls run_simple
 in-process — no CSV round-trip. Headline = recent window; also shows the
 year-by-year Sharpe decay curve (standing methodology)."""
 import os
+import pandas as pd
 import streamlit as st
 from src.engine_v2.strategy.registry import STRATEGIES, get_strategy
 from src.engine_v2.data.source import default_source, intraday_source, INTRADAY_PATH
@@ -39,6 +40,10 @@ def render():
         if not tickers:
             st.warning("Pick at least one ticker.")
             st.stop()
+        # Include the whole final day: load_bars slices df.loc[start:end], and the
+        # intraday date slider snaps to 09:30, so a bare end would keep only the
+        # opening minute of the last day. Push end to end-of-day (harmless for daily).
+        end = pd.Timestamp(end).normalize() + pd.Timedelta(hours=23, minutes=59)
         bars = src.load(tickers, start, end)
         cfg = BacktestConfig(spread_bps_per_side=spread, borrow_bps_annual=borrow)
         bench_tickers = [t for t in ("SPY", "TLT") if t in tickers_all]
