@@ -36,3 +36,81 @@ def sell_proceeds(mark, contracts, cfg) -> float:
 def buy_cost(mark, contracts, cfg) -> float:
     return (mark.ask * cfg.contract_multiplier * contracts
             + cfg.commission_per_contract * contracts)
+
+@dataclass
+class WheelResult:
+    equity: pd.Series
+    trades: list
+    final_cash: float
+    final_shares: int
+
+def run_wheel(chain: pd.DataFrame, cfg: WheelConfig) -> WheelResult:
+    dates = sorted(pd.to_datetime(chain["date"]).unique())
+    und = underlying_series(chain)
+    mult = cfg.contract_multiplier
+    cash, shares, phase, short = cfg.starting_capital, 0, "PUT", None
+    trades, equity = [], {}
+
+    for d in dates:
+        d = pd.Timestamp(d)
+        spot = float(und.get(d))
+
+        # 1) manage an existing short: take-profit, then expiry resolution
+        just_closed_tp = False
+        if short is not None:
+            c = short["contract"]; n = short["contracts"]
+            mark = option_mark(chain, d, c)
+            if (cfg.take_profit_pct is not None and mark is not None and d < c.expiry
+                    and mark.ask <= (1 - cfg.take_profit_pct) * short["credit"]):
+                cash -= buy_cost(mark, n, cfg)
+                trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
+                                    c, n, mark.ask, cash))
+                short = None
+                just_closed_tp = True
+            if short is not None and d == c.expiry:
+                if c.right == "P":
+                    if spot < c.strike:
+                        cash -= c.strike * mult * n; shares += mult * n; phase = "CALL"
+                        trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash))
+                    else:
+                        trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash))
+                else:
+                    if spot > c.strike:
+                        cash += c.strike * mult * n; shares -= mult * n; phase = "PUT"
+                        trades.append(Trade(d, "CALLED_AWAY", c, n, c.strike, cash))
+                    else:
+                        trades.append(Trade(d, "CALL_EXPIRED", c, n, 0.0, cash))
+                short = None
+
+        # 2) open a new short if flat and eligible (skip same-day re-entry right
+        # after an early take-profit close — a fresh entry should wait for the
+        # next day's chain, not reuse the row that just triggered the close)
+        if short is None and not just_closed_tp:
+            if phase == "PUT":
+                c = select_strike_by_delta(chain, d, "P", cfg.put_delta, cfg.dte_min, cfg.dte_max)
+                mark = option_mark(chain, d, c) if c is not None else None
+                if c is not None and mark is not None:
+                    n = int(cash // (c.strike * mult))
+                    if n > 0:
+                        cash += sell_proceeds(mark, n, cfg)
+                        short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
+                        trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash))
+            elif phase == "CALL" and shares >= mult:
+                c = select_strike_by_delta(chain, d, "C", cfg.call_delta, cfg.dte_min, cfg.dte_max)
+                mark = option_mark(chain, d, c) if c is not None else None
+                if c is not None and mark is not None:
+                    n = shares // mult
+                    cash += sell_proceeds(mark, n, cfg)
+                    short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
+                    trades.append(Trade(d, "SELL_CALL", c, n, mark.bid, cash))
+
+        # 3) mark equity (short MTM at mid; carry last mid across gaps)
+        liab = 0.0
+        if short is not None:
+            mk = option_mark(chain, d, short["contract"])
+            if mk is not None:
+                short["last_mid"] = mk.mid
+            liab = short["last_mid"] * mult * short["contracts"]
+        equity[d] = cash + shares * spot - liab
+
+    return WheelResult(pd.Series(equity), trades, cash, shares)
