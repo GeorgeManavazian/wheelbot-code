@@ -65,3 +65,30 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01") -> WheelReport:
         stats=wheel_stats(result.trades, cfg),
         periods_per_year=ppy,
     )
+
+def _pct(x): return "n/a" if pd.isna(x) else f"{x:+.2%}"
+def _num(x): return "n/a" if pd.isna(x) else f"{x:.2f}"
+
+def format_report(rep) -> str:
+    L = []
+    L.append("WHEEL BACKTEST REPORT")
+    L.append("=" * 40)
+    def block(title, d):
+        L.append(f"\n{title}")
+        L.append(f"  CAGR {_pct(d['cagr'])}   Sharpe {_num(d['sharpe'])}   "
+                 f"Max drawdown {_pct(d['max_drawdown'])}   Total {_pct(d['total_return'])}")
+    block("Headline (recent window)", rep.recent)
+    block("Full history", rep.metrics)
+    block("Benchmark — SPY buy-hold", rep.benchmark)
+    L.append("\nYear-by-year (return / Sharpe)")
+    for y in rep.yearly_return.index:
+        L.append(f"  {y}: {_pct(rep.yearly_return[y])}  /  Sharpe {_num(rep.yearly_sharpe.get(y, float('nan')))}")
+    s = rep.stats
+    L.append("\nWheel stats")
+    L.append(f"  puts sold {s['n_puts_sold']}  calls sold {s['n_calls_sold']}  "
+             f"assignments {s['n_assignments']} (rate {s['assignment_rate']:.0%})  "
+             f"called away {s['n_called_away']}  take-profits {s['n_take_profits']}")
+    L.append(f"  premium collected {s['premium_collected']:.0f}  "
+             f"paid to close {s['premium_paid_to_close']:.0f}  "
+             f"commission {s['commission_paid']:.0f}  net {s['net_premium']:.0f}")
+    return "\n".join(L)
