@@ -36,3 +36,7 @@ def test_wheel_report_metrics_finite_and_benchmarked():
     assert set(rep.benchmark) >= {"cagr", "sharpe", "max_drawdown"}
     assert 2024 in rep.yearly_return.index
     assert rep.periods_per_year == pytest.approx(252, abs=8)   # daily wheel equity
+    # recent_start (2021) predates the fixture's 2024 span, so it clamps to the
+    # fixture start and recent == full history — the collapse flag must say so.
+    assert set(rep.benchmark_recent.keys()) == set(rep.benchmark.keys())
+    assert rep.recent_is_full is True

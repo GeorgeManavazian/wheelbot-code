@@ -14,8 +14,10 @@ class WheelReport:
     yearly_return: pd.Series
     yearly_sharpe: pd.Series
     benchmark: dict
+    benchmark_recent: dict
     stats: dict
     periods_per_year: float
+    recent_is_full: bool = False
 
 def spy_buy_hold(chain, starting_capital) -> pd.Series:
     und = underlying_series(chain)
@@ -56,12 +58,17 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01") -> WheelReport:
     rs = max(pd.Timestamp(recent_start), eq.index.min())
     eq_recent = eq[eq.index >= rs]
     bh = spy_buy_hold(chain, cfg.starting_capital).reindex(eq.index).ffill()
+    recent_is_full = rs <= eq.index.min()
+    bh_recent = bh[bh.index >= rs]
+    benchmark_recent = _perf(bh_recent, ppy) if len(bh_recent) > 1 else _perf(bh, ppy)
     return WheelReport(
         metrics=_perf(eq, ppy),
         recent=_perf(eq_recent, ppy) if len(eq_recent) > 1 else _perf(eq, ppy),
         yearly_return=m.yearly_returns(eq),
         yearly_sharpe=m.yearly_sharpe(eq.pct_change().fillna(0.0), ppy),
         benchmark=_perf(bh, ppy),
+        benchmark_recent=benchmark_recent,
+        recent_is_full=recent_is_full,
         stats=wheel_stats(result.trades, cfg),
         periods_per_year=ppy,
     )
@@ -78,6 +85,9 @@ def format_report(rep) -> str:
         L.append(f"  CAGR {_pct(d['cagr'])}   Sharpe {_num(d['sharpe'])}   "
                  f"Max drawdown {_pct(d['max_drawdown'])}   Total {_pct(d['total_return'])}")
     block("Headline (recent window)", rep.recent)
+    block("  vs SPY buy-hold (recent window)", rep.benchmark_recent)
+    if rep.recent_is_full:
+        L.append("  (recent window = full history — span too short to separate)")
     block("Full history", rep.metrics)
     block("Benchmark — SPY buy-hold", rep.benchmark)
     L.append("\nYear-by-year (return / Sharpe)")

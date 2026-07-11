@@ -41,7 +41,7 @@ def render():
         b.metric("Sharpe", f"{r['sharpe']:.2f}")
         c.metric("Max drawdown", f"{r['max_drawdown']:.2%}")
         st.caption(f"Full history: CAGR {rep.metrics['cagr']:.2%} · Sharpe {rep.metrics['sharpe']:.2f}"
-                   f"  ·  SPY buy-hold CAGR {rep.benchmark['cagr']:.2%}")
+                   f"  ·  SPY (recent) CAGR {rep.benchmark_recent['cagr']:.2%}")
 
         curve = res.equity.rename("wheel").to_frame()
         curve["spy_buy_hold"] = spy_buy_hold(ch, cfg.starting_capital).reindex(res.equity.index).ffill()
