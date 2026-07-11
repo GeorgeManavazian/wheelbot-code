@@ -15,3 +15,8 @@ def test_wheel_runs_on_real_cycle():
     assert any(t.action == "SELL_PUT" for t in res.trades)
     # equity starts near capital (first bar carries only a small short liability)
     assert abs(res.equity.iloc[0] - 100_000) < 5_000
+    # golden: pinned to the committed fixture so a logic-changing refactor breaks it
+    assert len(res.trades) == 12
+    assert [t.action for t in res.trades] == ["SELL_PUT", "CLOSE_PUT"] * 6
+    assert res.final_cash == pytest.approx(102_426.40, abs=0.01)
+    assert res.final_shares == 0
