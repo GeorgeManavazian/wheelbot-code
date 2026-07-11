@@ -45,7 +45,7 @@ class WheelResult:
     final_shares: int
     residual_settled: bool = False
 
-def run_wheel(chain: pd.DataFrame, cfg: WheelConfig) -> WheelResult:
+def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResult:
     dates = sorted(pd.to_datetime(chain["date"]).unique())
     und = underlying_series(chain)
     mult = cfg.contract_multiplier
@@ -61,13 +61,26 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig) -> WheelResult:
         if short is not None:
             c = short["contract"]; n = short["contracts"]
             mark = option_mark(chain, d, c)
-            if (cfg.take_profit_pct is not None and mark is not None and d < c.expiry
-                    and mark.ask <= (1 - cfg.take_profit_pct) * short["credit"]):
-                cash -= buy_cost(mark, n, cfg)
-                trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                    c, n, mark.ask, cash))
-                short = None
-                closed_today = c
+            tp_fired = False
+            if cfg.take_profit_pct is not None and d < c.expiry:
+                thresh = (1 - cfg.take_profit_pct) * short["credit"]
+                key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
+                if intraday is not None and key in intraday:
+                    bars = intraday[key]
+                    day = bars[bars["timestamp"].dt.normalize() == d].sort_values("timestamp")
+                    for _, bar in day.iterrows():
+                        if bar["close"] <= thresh:
+                            cash -= bar["close"] * mult * n + cfg.commission_per_contract * n
+                            trades.append(Trade(bar["timestamp"],
+                                "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
+                                c, n, float(bar["close"]), cash))
+                            short = None; closed_today = c; tp_fired = True
+                            break
+                if not tp_fired and short is not None and mark is not None and mark.ask <= thresh:
+                    cash -= buy_cost(mark, n, cfg)
+                    trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
+                                        c, n, mark.ask, cash))
+                    short = None; closed_today = c
             if short is not None and d == c.expiry:
                 if c.right == "P":
                     if spot < c.strike:
