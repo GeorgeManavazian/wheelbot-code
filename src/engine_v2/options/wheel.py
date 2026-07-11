@@ -43,6 +43,7 @@ class WheelResult:
     trades: list
     final_cash: float
     final_shares: int
+    residual_settled: bool = False
 
 def run_wheel(chain: pd.DataFrame, cfg: WheelConfig) -> WheelResult:
     dates = sorted(pd.to_datetime(chain["date"]).unique())
@@ -113,4 +114,11 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig) -> WheelResult:
             liab = short["last_mid"] * mult * short["contracts"]
         equity[d] = cash + shares * spot - liab
 
-    return WheelResult(pd.Series(equity), trades, cash, shares)
+    residual_settled = False
+    if short is not None:
+        last = pd.Timestamp(dates[-1])
+        mk = option_mark(chain, last, short["contract"])
+        mid = mk.mid if mk is not None else short["last_mid"]
+        cash -= mid * mult * short["contracts"]
+        residual_settled = True
+    return WheelResult(pd.Series(equity), trades, cash, shares, residual_settled)

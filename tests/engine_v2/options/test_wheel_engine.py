@@ -72,8 +72,8 @@ def test_take_profit_same_day_reentry_into_different_strike():
     assert acts == ["SELL_PUT","CLOSE_PUT","SELL_PUT"]      # re-entered same day
     reentry = [t for t in res.trades if t.action == "SELL_PUT"][1]
     assert reentry.contract.strike == 475.0                 # different strike, not 470
-    # 50000 +200 (sell 470) -90 (close 470) +150 (sell 475) = 50260
-    assert res.final_cash == pytest.approx(50_000 + 200 - 90 + 150)
+    # 50000 +200 (sell 470) -90 (close 470) +150 (sell 475) -155 (settle 475 @mid 1.55) = 50105
+    assert res.final_cash == pytest.approx(50_000 + 200 - 90 + 150 - 155)
 
 def test_sizing_multiple_contracts_and_commission():
     # cash 50000, strike 470 -> floor(50000/47000)=1 contract; bump cash to size up
