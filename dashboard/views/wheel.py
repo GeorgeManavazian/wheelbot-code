@@ -28,12 +28,20 @@ def render():
     tp = c3.selectbox("Take-profit", ["50%", "25%", "75%", "Hold to expiry"], key="w_tp")
     tp_map = {"50%": 0.50, "25%": 0.25, "75%": 0.75, "Hold to expiry": None}
     capital = c3.number_input("Capital", 10_000, 1_000_000, 100_000, 10_000, key="w_cap")
+    intraday_on = st.checkbox("Intraday take-profit (hourly)", key="intraday_tp")
+    INTRA = "fixtures/spy_wheel_intraday_sample.parquet"
 
     if st.button("Run", key="run_wheel", type="primary"):
         cfg = WheelConfig(starting_capital=float(capital), put_delta=put_delta,
                           call_delta=call_delta, dte_min=int(dte_min), dte_max=int(dte_max),
                           take_profit_pct=tp_map[tp])
-        res = run_wheel(ch, cfg)
+        if intraday_on and os.path.exists(INTRA):
+            from src.engine_v2.options.intraday import run_wheel_intraday
+            res = run_wheel_intraday(ch, cfg, pd.read_parquet(INTRA))
+        else:
+            res = run_wheel(ch, cfg)
+            if intraday_on:
+                st.info("No intraday sample for this dataset — ran EOD.")
         rep = wheel_report(res, ch, cfg)
         r = rep.recent
         a, b, c = st.columns(3)
