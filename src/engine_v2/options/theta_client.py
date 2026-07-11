@@ -2,11 +2,13 @@
 See docs/thetadata-v3-access.md. Isolated from the equity engine and the gate."""
 from __future__ import annotations
 import io
-import urllib.parse, urllib.request
+import urllib.error, urllib.parse, urllib.request
 import pandas as pd
 
 class ThetaError(RuntimeError):
-    pass
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 def _iso(d) -> str:
     return pd.Timestamp(d).strftime("%Y-%m-%d")
@@ -22,12 +24,19 @@ class ThetaClient:
     def get_csv(self, path: str, **params) -> pd.DataFrame:
         qs = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
         url = f"{self.base_url}{path}" + (f"?{qs}" if qs else "")
-        with self._open(url) as r:
-            code = getattr(r, "status", None) or r.getcode()
-            body = r.read().decode("utf-8", "replace")
+        try:
+            with self._open(url) as r:
+                code = getattr(r, "status", None) or r.getcode()
+                body = r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            # urllib raises on 4xx/5xx before we can inspect; ThetaData uses custom
+            # codes (e.g. 472 = no data for the request). Surface as a typed error.
+            body = e.read().decode("utf-8", "replace") if hasattr(e, "read") else ""
+            first = body.splitlines()[0] if body else ""
+            raise ThetaError(f"HTTP {e.code} for {path}: {first}", code=e.code) from None
         if code != 200:
             first = body.splitlines()[0] if body else ""
-            raise ThetaError(f"HTTP {code} for {path}: {first}")
+            raise ThetaError(f"HTTP {code} for {path}: {first}", code=code)
         return pd.read_csv(io.StringIO(body))
 
     def is_up(self) -> bool:

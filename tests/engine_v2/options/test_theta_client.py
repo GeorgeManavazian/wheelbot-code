@@ -1,3 +1,5 @@
+import urllib.error
+import io
 import pandas as pd
 import pytest
 from src.engine_v2.options.theta_client import ThetaClient, ThetaError
@@ -21,6 +23,18 @@ def test_get_csv_raises_on_error(monkeypatch):
     monkeypatch.setattr(c, "_open", lambda url: _Resp(404, "Not Found\n..."))
     with pytest.raises(ThetaError):
         c.get_csv("/v3/x")
+
+def test_get_csv_maps_httperror_to_thetaerror(monkeypatch):
+    # urllib raises HTTPError on 4xx/5xx before we can inspect the response;
+    # ThetaData uses custom codes like 472 (no data). Must surface as ThetaError
+    # carrying .code so the puller can skip a single no-data expiration.
+    def _raise(url):
+        raise urllib.error.HTTPError(url, 472, "No data", {}, io.BytesIO(b"no data\n"))
+    c = ThetaClient()
+    monkeypatch.setattr(c, "_open", _raise)
+    with pytest.raises(ThetaError) as ei:
+        c.get_csv("/v3/x")
+    assert ei.value.code == 472
 
 def test_list_expirations_parses(monkeypatch):
     c = ThetaClient()
