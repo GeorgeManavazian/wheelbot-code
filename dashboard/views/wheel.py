@@ -43,13 +43,14 @@ def render():
             if intraday_on:
                 st.info("No intraday sample for this dataset — ran EOD.")
         rep = wheel_report(res, ch, cfg)
-        r = rep.recent
+        pnl = res.equity.iloc[-1] - cfg.starting_capital
         a, b, c = st.columns(3)
-        a.metric("CAGR (recent)", f"{r['cagr']:.2%}")
-        b.metric("Sharpe", f"{r['sharpe']:.2f}")
-        c.metric("Max drawdown", f"{r['max_drawdown']:.2%}")
-        st.caption(f"Full history: CAGR {rep.metrics['cagr']:.2%} · Sharpe {rep.metrics['sharpe']:.2f}"
-                   f"  ·  SPY (recent) CAGR {rep.benchmark_recent['cagr']:.2%}")
+        a.metric("P&L", f"${pnl:,.0f}", f"{rep.metrics['total_return']:+.2%}")
+        b.metric("Sharpe", f"{rep.metrics['sharpe']:.2f}")
+        c.metric("Max drawdown", f"{rep.metrics['max_drawdown']:.2%}")
+        st.caption(f"vs SPY buy-hold: {rep.benchmark['total_return']:+.2%}"
+                   f"  ·  over {len(res.equity)} trading days"
+                   f"  ·  Sharpe {rep.metrics['sharpe']:.2f}")
 
         curve = res.equity.rename("wheel").to_frame()
         curve["spy_buy_hold"] = spy_buy_hold(ch, cfg.starting_capital).reindex(res.equity.index).ffill()
