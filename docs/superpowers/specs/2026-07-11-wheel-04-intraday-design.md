@@ -9,8 +9,8 @@
 
 - **A** — intraday affects **take-profit only**. Everything else (strike selection at EOD, assignment, expiry) is unchanged.
 - **B** — **two-pass**: (1) EOD wheel → which contracts are held on which days; (2) pull intraday quotes for only those contracts; (3) re-run with intraday-TP resolution.
-- **C** — resolution configurable, **default hourly** (`interval_ms=3_600_000`); 5-min / 1-min available.
-- **D** — TP fills at the **crossing bar's ask** (cross the spread), consistent with the EOD engine.
+- **C** — **hourly** (`interval="1h"`). Verified live: intervals are STRING codes; `1h`/`5m`/`tick` are valid, numeric-ms are not. Configurable to `5m`.
+- **D — data reality (verified live):** single-strike QUOTE returns nothing on STANDARD, but **whole-chain `option/history/ohlc` with `strike_range` at `1h` returns real hourly bars** (OHLC trade prices + volume + vwap, NO bid/ask). So intraday = **trade OHLC, not quotes**. TP therefore fires at the first bar whose **close** ≤ threshold and **fills at that close** (trade price). This differs from the EOD engine's bid/ask cross — documented simplification (intraday quotes aren't available at this tier/endpoint). Pull the whole chain band per expiration (like the EOD puller) and extract the held strike.
 
 ## Why / the gap
 
@@ -18,15 +18,16 @@ At EOD the engine checks TP once (that day's ask). A short can decay to the 50% 
 
 ## The three pieces
 
-### 1. Intraday option puller (`scripts`/`options`)
-`pull_option_intraday(client, contract, start, end, interval_ms=3_600_000) -> pd.DataFrame`
-- Hits `/v3/option/history/quote?symbol=<root>&expiration=<ISO>&strike=<strike×1000>&right=<P|C>&start_date&end_date&interval=<ms>` (single contract). **Strike is encoded ×1000** (ThetaData 1/10-cent units) — verify at build time against a known contract.
-- Returns a tidy frame indexed by tz-naive ET `timestamp`, columns `bid, ask, mid` (RTH). Skips no-data (472) like the EOD puller.
+### 1. Intraday option puller (`options`)
+`pull_option_intraday(client, symbol, expiration, start, end, interval="1h", strike_range=10) -> pd.DataFrame`
+- Hits `/v3/option/history/ohlc?symbol=<root>&expiration=<ISO>&start_date&end_date&interval=1h&strike_range=<n>` (whole chain band — single-strike returns 472 on STANDARD). Response cols: `symbol,expiration,strike,right,timestamp,open,high,low,close,volume,count,vwap`.
+- Returns a tidy frame: `timestamp` (tz-naive ET), `expiry`, `strike`, `right` ("P"/"C"), `close` (+ open/high/low/volume). Skips no-data (472). Multi-day requests are limited to ~1 month per the endpoint docs → the puller chunks windows > ~25 days.
+- `intraday_marks(df) -> dict[(expiry, strike, right) -> DataFrame(timestamp, close)]` — index the tidy frame by contract for the engine.
 - A `held_contracts(result) -> list[(Contract, first_date, last_date)]` helper walks a `WheelResult` trade log: each short position spans from its SELL_* date to its CLOSE_*/ASSIGNED/EXPIRED date. These are the (contract, window) pairs to pull intraday.
 
 ### 2. Intraday-TP resolution in `run_wheel`
-- `run_wheel(chain, cfg, intraday=None)` gains an optional `intraday: dict[Contract, pd.DataFrame]` (contract → its intraday bid/ask frame). Backward-compatible: `intraday=None` → today's exact EOD behavior.
-- In the daily loop, when a short is held on date `d` and `intraday` has that contract: scan that day's bars in time order; the **first** bar with `ask <= (1 - tp) * credit` fires TP — buy-to-close at that bar's ask + commission, recorded as a `Trade` stamped with the bar's timestamp. If no intraday bar crosses that day, fall through to the existing EOD check (so a same-day EOD cross still fires). If the contract isn't in `intraday`, pure EOD (unchanged).
+- `run_wheel(chain, cfg, intraday=None)` gains an optional `intraday: dict[(expiry, strike, right) -> DataFrame(timestamp, close)]`. Backward-compatible: `intraday=None` → today's exact EOD behavior.
+- In the daily loop, when a short is held on date `d` and `intraday` has that contract's key: scan that day's bars (timestamp.date == d) in time order; the **first** bar with `close <= (1 - tp) * credit` fires TP — buy-to-close at that bar's close + commission, recorded as a `Trade` stamped with the bar's timestamp. If no intraday bar crosses that day, fall through to the existing EOD check (so a same-day EOD cross still fires). If the contract isn't in `intraday`, pure EOD (unchanged).
 - Expiry/assignment logic is untouched (still EOD/expiry). Same-day re-entry (policy B) still applies after an intraday TP close.
 
 ### 3. Two-pass orchestration
