@@ -3,7 +3,7 @@ wheel_report, built to the 2026-07-12 wheel engine API contract."""
 import os
 import pandas as pd
 import streamlit as st
-from dashboard import charts, labels
+from dashboard import charts, labels, theme
 from src.engine_v2.options.data import available_tickers, chain_path, intraday_path
 from src.engine_v2.options.select import derived_band
 from src.engine_v2.options.wheel import WheelConfig, run_wheel
@@ -195,4 +195,50 @@ def render():
             display[col] = display[col].map(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
         display["pct_of_credit"] = display["pct_of_credit"].map(
             lambda x: f"{x:+.1%}" if pd.notna(x) else "")
-        st.dataframe(labels.humanize(display), use_container_width=True)
+        st.dataframe(_style_blotter(labels.humanize(display), blotter),
+                     use_container_width=True)
+
+
+def _hex_tint(hex_color: str, alpha: float) -> str:
+    """Faint rgba background from a theme hex constant."""
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _style_blotter(display: pd.DataFrame, raw: pd.DataFrame):
+    """Row tint by outcome (lost money > assigned > kept premium), P&L text
+    coloured by sign. Tints derive from the raw frame — the display copy has
+    already been formatted to strings."""
+    lose = _hex_tint(theme.NEGATIVE, 0.10)
+    warn = _hex_tint(theme.WARNING, 0.10)
+    keep = _hex_tint(theme.POSITIVE, 0.06)
+    tints = []
+    for _, r in raw.iterrows():
+        pnl = r["realized_pnl"]
+        if pd.notna(pnl) and pnl < 0:
+            tints.append(f"background-color: {lose}")
+        elif r["outcome"] == "Assigned":
+            tints.append(f"background-color: {warn}")
+        elif pd.notna(pnl):
+            tints.append(f"background-color: {keep}")
+        else:
+            tints.append("")
+
+    def _rows(col):
+        return tints
+
+    def _pnl_colour(col):
+        out = []
+        for pnl in raw["realized_pnl"]:
+            if pd.isna(pnl):
+                out.append("")
+            else:
+                colour = theme.POSITIVE if pnl >= 0 else theme.NEGATIVE
+                out.append(f"color: {colour}; font-weight: 600")
+        return out
+
+    styled = display.style.apply(_rows, axis=0)
+    pnl_col = labels.label("realized_pnl")
+    if pnl_col in display.columns:
+        styled = styled.apply(_pnl_colour, axis=0, subset=[pnl_col])
+    return styled
