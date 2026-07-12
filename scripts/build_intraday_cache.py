@@ -1,6 +1,6 @@
 """Build a clean intraday cache from local Databento 1-minute parquets.
 
-Source files live OUTSIDE the repo (default ~/Documents/Trading data) and are
+Source files live OUTSIDE the repo (default ~/Documents/Trading/data) and are
 never committed. This writes a gitignored full cache plus a small committed
 fixture for tests. Run: python scripts/build_intraday_cache.py
 """
@@ -42,7 +42,7 @@ def build(source_dir: str, include_extended: bool = False) -> pd.DataFrame:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source-dir", default="~/Documents/Trading data")
+    ap.add_argument("--source-dir", default="~/Documents/Trading/data")
     ap.add_argument("--include-extended", action="store_true")
     args = ap.parse_args()
 
