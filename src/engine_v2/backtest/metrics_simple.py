@@ -80,3 +80,23 @@ def regime_breakdown(returns: pd.Series, bars: pd.DataFrame,
                          "sharpe": sharpe(grp, periods_per_year),
                          "mean_ret": float(grp.mean()), "bars": int(len(grp))})
     return pd.DataFrame(rows)
+
+def monthly_returns(equity: pd.Series) -> pd.DataFrame:
+    """Month-by-month fractional returns as a year x month grid (columns 1..12).
+
+    The first month's return is measured off the opening equity, so a backtest
+    that starts mid-month still reports that month. NaN where no data.
+    """
+    if equity.empty:
+        return pd.DataFrame()
+    month_end = equity.resample("ME").last()
+    prev = month_end.shift(1)
+    prev.iloc[0] = equity.iloc[0]  # first month: measure off opening equity
+    rets = month_end / prev - 1.0
+    grid = pd.DataFrame({
+        "year": rets.index.year,
+        "month": rets.index.month,
+        "ret": rets.to_numpy(),
+    })
+    out = grid.pivot(index="year", columns="month", values="ret")
+    return out.reindex(columns=range(1, 13))

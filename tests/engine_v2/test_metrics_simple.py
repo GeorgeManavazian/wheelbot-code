@@ -51,3 +51,28 @@ def test_buy_hold_matches_hand_calc():
 def test_sharpe_too_short_is_nan():
     assert np.isnan(m.sharpe(pd.Series([], dtype=float), 252))
     assert np.isnan(m.sharpe(pd.Series([0.01]), 252))
+
+def test_monthly_returns_shape_and_values():
+    # 100 -> 110 in Jan, 110 -> 99 in Feb
+    idx = pd.to_datetime(["2024-01-15", "2024-01-31", "2024-02-15", "2024-02-29"])
+    eq = pd.Series([100.0, 110.0, 105.0, 99.0], index=idx)
+    out = m.monthly_returns(eq)
+    assert list(out.columns) == list(range(1, 13))
+    assert out.index.tolist() == [2024]
+    # Jan is the first month: return measured off the opening equity (100 -> 110)
+    assert out.loc[2024, 1] == pytest.approx(0.10)
+    # Feb: 110 -> 99
+    assert out.loc[2024, 2] == pytest.approx(-0.10)
+    assert np.isnan(out.loc[2024, 5])  # no data in May
+
+def test_monthly_returns_spans_years():
+    idx = pd.date_range("2023-11-01", "2024-02-29", freq="D")
+    eq = pd.Series(np.linspace(100.0, 120.0, len(idx)), index=idx)
+    out = m.monthly_returns(eq)
+    assert out.index.tolist() == [2023, 2024]
+    assert not np.isnan(out.loc[2023, 12])
+    assert np.isnan(out.loc[2023, 1])
+
+def test_monthly_returns_empty_series_returns_empty_frame():
+    out = m.monthly_returns(pd.Series(dtype=float))
+    assert out.empty
