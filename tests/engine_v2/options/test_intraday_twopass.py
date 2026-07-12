@@ -14,13 +14,15 @@ def test_two_pass_intraday_changes_tp():
     ]
     ch = _chain(rows)
     intraday_df = pd.DataFrame({
-        "timestamp": pd.to_datetime(["2024-01-03 11:30"]),
-        "expiry": pd.to_datetime(["2024-01-19"]), "strike":[470.0], "right":["P"],
-        "close":[0.90], "high":[1.0], "low":[0.85], "volume":[10]})
+        "timestamp": pd.to_datetime(["2024-01-03 11:30","2024-01-03 12:30"]),
+        "expiry": pd.to_datetime(["2024-01-19","2024-01-19"]),
+        "strike":[470.0, 470.0], "right":["P","P"],
+        "close":[0.90, 1.10], "high":[1.0, 1.2], "low":[0.85, 1.05], "volume":[10, 10]})
     cfg = WheelConfig(starting_capital=50_000.0, put_delta=0.30, target_dte=17,
                       take_profit_pct=0.50, commission_per_contract=0.0)
     eod = run_wheel(ch, cfg)
     intr = run_wheel_intraday(ch, cfg, intraday_df)
-    # EOD never TP's here (ask 1.80 > 1.00); intraday does, at 0.90
+    # EOD never TP's here (ask 1.80 > 1.00); intraday does: the 11:30 bar crosses
+    # (0.90 <= 1.00) and fills at the NEXT bar's close (12:30 @ 1.10)
     assert "CLOSE_PUT" not in [t.action for t in eod.trades]
     assert "CLOSE_PUT" in [t.action for t in intr.trades]

@@ -80,13 +80,18 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                 key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
                 if intraday is not None and key in intraday:
                     bars = intraday[key]
-                    day = bars[bars["timestamp"].dt.normalize() == d].sort_values("timestamp")
-                    for _, bar in day.iterrows():
-                        if bar["close"] <= thresh:
-                            cash -= bar["close"] * mult * n + cfg.commission_per_contract * n
-                            trades.append(Trade(bar["timestamp"],
+                    day = (bars[bars["timestamp"].dt.normalize() == d]
+                           .sort_values("timestamp").reset_index(drop=True))
+                    # decide on bar i, fill at bar i+1's close (no same-bar fills).
+                    # A cross on the day's LAST bar has no next bar -> no intraday
+                    # fill; the EOD ask check below decides instead.
+                    for i in range(len(day) - 1):
+                        if day.iloc[i]["close"] <= thresh:
+                            fill = day.iloc[i + 1]
+                            cash -= fill["close"] * mult * n + cfg.commission_per_contract * n
+                            trades.append(Trade(fill["timestamp"],
                                 "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                c, n, float(bar["close"]), cash))
+                                c, n, float(fill["close"]), cash))
                             short = None; closed_today = c; tp_fired = True
                             break
                 if not tp_fired and short is not None and mark is not None and mark.ask <= thresh:
