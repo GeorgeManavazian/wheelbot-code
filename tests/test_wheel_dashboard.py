@@ -27,3 +27,11 @@ def test_wheel_page_has_intraday_toggle():
     at.switch_page("views/wheel.py").run(timeout=60)
     assert not at.exception
     assert any(cb.key == "intraday_tp" for cb in at.checkbox)
+
+
+def test_wheel_page_has_date_inputs():
+    at = AppTest.from_file("dashboard/app.py").run(timeout=60)
+    at.switch_page("views/wheel.py").run(timeout=60)
+    assert not at.exception
+    assert any(di.key == "wheel_start" for di in at.date_input)
+    assert any(di.key == "wheel_end" for di in at.date_input)
