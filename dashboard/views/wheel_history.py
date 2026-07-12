@@ -4,7 +4,7 @@ import streamlit as st
 from dashboard.wheel_history import load_runs, clear_runs
 
 _CFG_KEYS = ["put_delta", "call_delta", "dte_min", "dte_max", "take_profit",
-             "capital", "data_source"]
+             "capital", "data_source", "start", "end"]
 
 
 def render():

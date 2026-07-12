@@ -33,6 +33,10 @@ def render():
             st.session_state["w_tp"] = _load["take_profit"]
         if "capital" in _load:
             st.session_state["w_cap"] = int(_load["capital"])
+        if _load.get("start"):
+            st.session_state["wheel_start"] = pd.Timestamp(_load["start"]).date()
+        if _load.get("end"):
+            st.session_state["wheel_end"] = pd.Timestamp(_load["end"]).date()
 
     src_name = st.selectbox("Data", list(sources), key="wheel_data")
     path = sources[src_name]

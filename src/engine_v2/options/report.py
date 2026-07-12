@@ -141,6 +141,17 @@ def position_log(result, cfg) -> pd.DataFrame:
                     pct_of_credit=float("nan"), days_held=(t.date - adate).days))
                 assign = None
             open_opt = None
+    if open_opt is not None:
+        oc, n = open_opt.contract, open_opt.contracts
+        credit = open_opt.price_per_contract * mult * n - comm * n
+        prior = sum(r["realized_pnl"] for r in rows if pd.notna(r["realized_pnl"]))
+        realized = (result.final_cash - cfg.starting_capital) - prior
+        rows.append(dict(opened=open_opt.date, closed=pd.NaT,
+            instrument=_RIGHT_WORD[oc.right], strike=oc.strike, expiry=oc.expiry, qty=n,
+            credit=credit, outcome="Settled at mark", cost_to_close=credit - realized,
+            realized_pnl=realized, pct_of_credit=(realized / credit if credit else 0.0),
+            days_held=float("nan")))
+        open_opt = None
     if assign is not None and getattr(result, "final_shares", 0) > 0:
         astrike, aqty, adate = assign
         rows.append(dict(opened=adate, closed=pd.NaT, instrument="SHARES",

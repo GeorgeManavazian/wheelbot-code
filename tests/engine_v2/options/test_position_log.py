@@ -34,3 +34,17 @@ def test_blotter_reconciles_to_total():
     res = run_wheel(ch, cfg); df = position_log(res, cfg)
     total = res.final_cash - cfg.starting_capital
     assert df["realized_pnl"].sum() == pytest.approx(total, abs=0.01)
+
+def test_blotter_reconciles_on_truncated_window():
+    FIX = "fixtures/spy_wheel_cycle.parquet"
+    if not os.path.exists(FIX):
+        pytest.skip("fixture missing")
+    ch = pd.read_parquet(FIX)
+    # truncate so the run ends with a short still open (residual-settled)
+    cut = sorted(ch["date"].unique())[20]
+    ch2 = ch[ch["date"] <= cut]
+    cfg = WheelConfig(dte_min=20, dte_max=45)
+    res = run_wheel(ch2, cfg)
+    df = position_log(res, cfg)
+    total = res.final_cash - cfg.starting_capital
+    assert df["realized_pnl"].dropna().sum() == pytest.approx(total, abs=0.01)
