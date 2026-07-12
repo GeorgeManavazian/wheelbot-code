@@ -76,3 +76,18 @@ def test_monthly_returns_spans_years():
 def test_monthly_returns_empty_series_returns_empty_frame():
     out = m.monthly_returns(pd.Series(dtype=float))
     assert out.empty
+
+def test_monthly_returns_month_after_gap_is_not_nan():
+    # Jan and Feb have data, March has NO data at all, April has data.
+    # The gap month (March) must be NaN, but April -- which HAS real data --
+    # must report a correct return measured off the last month that had data
+    # (Feb), not off the NaN gap month.
+    idx = pd.to_datetime([
+        "2024-01-15", "2024-01-31",
+        "2024-02-15", "2024-02-29",
+        "2024-04-15", "2024-04-30",
+    ])
+    eq = pd.Series([100.0, 110.0, 115.0, 120.0, 130.0, 140.0], index=idx)
+    out = m.monthly_returns(eq)
+    assert np.isnan(out.loc[2024, 3])  # gap month itself: no data -> NaN
+    assert out.loc[2024, 4] == pytest.approx(0.16667, rel=1e-4)  # 140/120 - 1

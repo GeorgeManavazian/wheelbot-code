@@ -86,11 +86,19 @@ def monthly_returns(equity: pd.Series) -> pd.DataFrame:
 
     The first month's return is measured off the opening equity, so a backtest
     that starts mid-month still reports that month. NaN where no data.
+
+    `equity` is assumed to be chronologically sorted: the first-month return
+    is measured positionally off `equity.iloc[0]`, so an unsorted input would
+    yield a wrong first-month return.
     """
     if equity.empty:
         return pd.DataFrame()
     month_end = equity.resample("ME").last()
-    prev = month_end.shift(1)
+    # A calendar month with zero observations resamples to NaN. Compute prev
+    # from the last non-NaN month-end so a gap doesn't poison the return of
+    # the month that follows it -- the gap month itself is still NaN because
+    # its own month_end is NaN, but a real month after the gap must not be.
+    prev = month_end.ffill().shift(1)
     prev.iloc[0] = equity.iloc[0]  # first month: measure off opening equity
     rets = month_end / prev - 1.0
     grid = pd.DataFrame({
