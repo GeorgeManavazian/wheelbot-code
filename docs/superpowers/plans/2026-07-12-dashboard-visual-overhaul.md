@@ -693,6 +693,19 @@ def test_cost_sweep_is_behind_a_button_and_does_not_run_automatically():
     at.button(key="run_backtest").click().run(timeout=120)
     assert not at.exception
     assert any(b.key == "cost_sweep" for b in at.button)
+
+def test_results_survive_pressing_the_cost_sweep_button():
+    # Buttons don't nest in Streamlit: clicking cost_sweep reruns with
+    # run_backtest False. The Result must persist in session_state, or the
+    # whole page blanks and leaves a lone sweep table.
+    at = AppTest.from_file("dashboard/app.py").run(timeout=60)
+    at.multiselect(key="tickers").set_value(["SPY", "TLT"]).run(timeout=60)
+    at.button(key="run_backtest").click().run(timeout=120)
+    at.button(key="cost_sweep").click().run(timeout=300)
+    assert not at.exception
+    assert len(at.metric) >= 4                      # hero tiles still there
+    assert len(at.get("plotly_chart")) >= 5         # charts still there
+    assert len(at.dataframe) >= 2                   # regime table + sweep table
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -702,10 +715,37 @@ Expected: the four new tests FAIL (only 3 metrics today; zero plotly charts; no 
 
 - [ ] **Step 3: Rewrite the results block**
 
-Replace `dashboard/views/run.py` lines 53-72 (everything from `st.subheader(f"Headline …")` to the
-end of the function) with:
+**Streamlit structure — do not skip this.** Buttons do not nest. A `st.button("Run cost sweep")`
+nested inside `if st.button("Run"):` can never fire, because clicking it triggers a rerun in which
+`Run` is `False`. So the run must **stash its Result in `st.session_state`**, and the results
+block must render from session state, not from inside the button branch. Otherwise pressing the
+sweep button wipes the whole page and leaves a lone table.
+
+Replace `dashboard/views/run.py` lines 39-72 (from `if st.button("Run", …):` to the end of the
+function) with the following. Note the run branch now only *computes and stashes*; everything
+below it *renders*.
 
 ```python
+    if st.button("Run", key="run_backtest", type="primary"):
+        if not tickers:
+            st.warning("Pick at least one ticker.")
+            st.stop()
+        # Include the whole final day: load_bars slices df.loc[start:end], and the
+        # intraday date slider snaps to 09:30, so a bare end would keep only the
+        # opening minute of the last day. Push end to end-of-day (harmless for daily).
+        end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(hours=23, minutes=59)
+        bars = src.load(tickers, start, end_ts)
+        cfg = BacktestConfig(spread_bps_per_side=spread, borrow_bps_annual=borrow)
+        bench_tickers = [t for t in ("SPY", "TLT") if t in tickers_all]
+        bench_bars = src.load(bench_tickers, start, end_ts) if bench_tickers else None
+        st.session_state["_result"] = run_simple(
+            get_strategy(name), bars, config=cfg, benchmark_bars=bench_bars)
+        # Kept so the cost sweep can re-run the same backtest across spread levels.
+        st.session_state["_sweep"] = dict(
+            name=name, bars=bars, bench_bars=bench_bars, borrow=borrow)
+
+    res = st.session_state.get("_result")
+    if res is not None:
         st.subheader(f"Headline — recent since {res.recent['start']}")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("CAGR", f"{res.recent['cagr']:.2%}")
@@ -750,27 +790,25 @@ end of the function) with:
         st.dataframe(labels.humanize(res.regime), use_container_width=True)
         st.caption(f"bars/yr ≈ {res.periods_per_year:.0f}")
 
-        st.session_state["_sweep_args"] = (name, tickers, start, end, spread, borrow)
-
-    # Cost sensitivity: re-runs the backtest once per spread level, so it sits
-    # behind its own button and never fires on a normal run.
-    if st.session_state.get("_sweep_args"):
+        # Cost sensitivity: one backtest per spread level, so it sits behind its own
+        # button and never fires on a normal run. Reuses the bars the run already
+        # loaded — no second data load.
         st.subheader("Cost sensitivity")
         st.caption(f"Re-runs at spreads {list(sensitivity.SPREAD_LEVELS)} bps/side "
                    "to find where the edge dies. Slow — one backtest per level.")
         if st.button("Run cost sweep", key="cost_sweep"):
-            s_name, s_tickers, s_start, s_end, _s_spread, s_borrow = \
-                st.session_state["_sweep_args"]
-            s_end = pd.Timestamp(s_end).normalize() + pd.Timedelta(hours=23, minutes=59)
-            s_bars = src.load(s_tickers, s_start, s_end)
-            s_bench_t = [t for t in ("SPY", "TLT") if t in tickers_all]
-            s_bench = src.load(s_bench_t, s_start, s_end) if s_bench_t else None
-            sweep = sensitivity.cost_sweep(
-                get_strategy(s_name), s_bars,
-                BacktestConfig(borrow_bps_annual=s_borrow),
-                benchmark_bars=s_bench)
-            st.dataframe(labels.humanize(sweep), use_container_width=True)
+            s = st.session_state["_sweep"]
+            with st.spinner(f"Running {len(sensitivity.SPREAD_LEVELS)} backtests…"):
+                sweep = sensitivity.cost_sweep(
+                    get_strategy(s["name"]), s["bars"],
+                    BacktestConfig(borrow_bps_annual=s["borrow"]),
+                    benchmark_bars=s["bench_bars"])
+            st.dataframe(labels.humanize(sweep), use_container_width=True,
+                         hide_index=True)
 ```
+
+Indentation note: the whole results block sits one level in (inside `if res is not None:`), not
+inside the `Run` button branch.
 
 Update the imports at the top of `dashboard/views/run.py` to:
 
