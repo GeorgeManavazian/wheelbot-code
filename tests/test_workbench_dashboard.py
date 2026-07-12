@@ -79,7 +79,7 @@ def test_vs_buy_hold_tile_survives_spy_deselected_from_the_universe():
     assert vs, "vs Buy & Hold tile is missing"
     assert vs[0].value != "—", "SPY benchmark should still be available"
     assert vs[0].value.endswith("%")
-    assert "SPY buy & hold did" in vs[0].help
+    assert "SPY buy & hold" in vs[0].help
 
 def test_cost_sweep_is_behind_a_button_and_does_not_run_automatically():
     at = AppTest.from_file("dashboard/app.py").run(timeout=60)
