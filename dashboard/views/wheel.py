@@ -193,10 +193,12 @@ def render():
             display[col] = pd.to_datetime(display[col]).dt.strftime("%Y-%m-%d").replace("NaT", "")
         for col in ("credit", "cost_to_close", "realized_pnl"):
             display[col] = display[col].map(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
+        display["strike"] = display["strike"].map(
+            lambda x: f"${x:,.0f}" if pd.notna(x) else "")
         display["pct_of_credit"] = display["pct_of_credit"].map(
             lambda x: f"{x:+.1%}" if pd.notna(x) else "")
         st.dataframe(_style_blotter(labels.humanize(display), blotter),
-                     use_container_width=True)
+                     use_container_width=True, hide_index=True)
 
 
 def _hex_tint(hex_color: str, alpha: float) -> str:
@@ -209,9 +211,11 @@ def _style_blotter(display: pd.DataFrame, raw: pd.DataFrame):
     """Row tint by outcome (lost money > assigned > kept premium), P&L text
     coloured by sign. Tints derive from the raw frame — the display copy has
     already been formatted to strings."""
-    lose = _hex_tint(theme.NEGATIVE, 0.10)
-    warn = _hex_tint(theme.WARNING, 0.10)
-    keep = _hex_tint(theme.POSITIVE, 0.06)
+    # Opacities tuned for the dark theme: fainter than this and the tint is
+    # imperceptible against #0e1117 (first attempt used 0.06 — invisible).
+    lose = _hex_tint(theme.NEGATIVE, 0.22)
+    warn = _hex_tint(theme.WARNING, 0.20)
+    keep = _hex_tint(theme.POSITIVE, 0.14)
     tints = []
     for _, r in raw.iterrows():
         pnl = r["realized_pnl"]
