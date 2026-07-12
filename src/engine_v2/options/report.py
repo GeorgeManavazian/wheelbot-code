@@ -1,7 +1,9 @@
 """Reporting for the wheel backtest: headline + recent + year-by-year metrics,
-a buy-hold SPY benchmark, and trade-log stats. Reuses the frequency-aware
-metrics_simple. No verdict/gate — diagnostics only."""
+buy-hold benchmarks (the chain's own underlying, plus real SPY when its data is
+on disk), and trade-log stats. Reuses the frequency-aware metrics_simple.
+No verdict/gate — diagnostics only."""
 from __future__ import annotations
+import os
 from dataclasses import dataclass
 import pandas as pd
 from .wheel import underlying_series
@@ -13,14 +15,29 @@ class WheelReport:
     recent: dict
     yearly_return: pd.Series
     yearly_sharpe: pd.Series
-    benchmark: dict
-    benchmark_recent: dict
+    benchmark_underlying: dict
+    benchmark_underlying_recent: dict
+    benchmark_spy: dict | None
     stats: dict
     periods_per_year: float
+    ticker: str = "SPY"
     recent_is_full: bool = False
 
-def spy_buy_hold(chain, starting_capital) -> pd.Series:
+def buy_hold_curve(chain, starting_capital) -> pd.Series:
+    """Buy-hold the chain's OWN underlying (was spy_buy_hold, which silently
+    benchmarked GDX against GDX on non-SPY chains)."""
     und = underlying_series(chain)
+    return (starting_capital * und / und.iloc[0]).rename("buy_hold")
+
+def spy_curve(starting_capital, index, path="data/options/spy_greeks_eod_all.parquet"):
+    """Buy-hold real SPY, reindex-ffilled to `index` — the honest cross-ticker
+    benchmark. None if the SPY file is missing or the dates don't overlap."""
+    if not os.path.exists(path):
+        return None
+    und = pd.read_parquet(path, columns=["date", "underlying"]).groupby("date")["underlying"].first()
+    und = und.reindex(index).ffill().dropna()
+    if und.empty:
+        return None
     return (starting_capital * und / und.iloc[0]).rename("spy_buy_hold")
 
 def _perf(equity, ppy) -> dict:
@@ -32,7 +49,8 @@ def _perf(equity, ppy) -> dict:
         "max_drawdown": m.max_drawdown(equity),
     }
 
-def wheel_stats(trades, cfg) -> dict:
+def wheel_stats(result, cfg) -> dict:
+    trades = result.trades
     mult = cfg.contract_multiplier
     def of(a): return [t for t in trades if t.action == a]
     sells = of("SELL_PUT") + of("SELL_CALL")
@@ -50,14 +68,21 @@ def wheel_stats(trades, cfg) -> dict:
         "commission_paid": commission,
         "net_premium": prem_in - prem_out - commission,
         "assignment_rate": (len(of("ASSIGNED")) / n_puts) if n_puts else 0.0,
+        "realized_dte": pd.Series(
+            [(pd.Timestamp(t.contract.expiry) - pd.Timestamp(t.date)).days for t in sells],
+            dtype=int).value_counts().sort_index(),
+        "n_days_flat": result.days_flat,
+        "pct_days_flat": (result.days_flat / len(result.equity)) if len(result.equity) else 0.0,
     }
 
-def wheel_report(result, chain, cfg, recent_start="2021-07-01") -> WheelReport:
+def wheel_report(result, chain, cfg, recent_start="2021-07-01",
+                 spy_path="data/options/spy_greeks_eod_all.parquet") -> WheelReport:
     eq = result.equity
     ppy = m.infer_periods_per_year(eq.index)
     rs = max(pd.Timestamp(recent_start), eq.index.min())
     eq_recent = eq[eq.index >= rs]
-    bh = spy_buy_hold(chain, cfg.starting_capital).reindex(eq.index).ffill()
+    bh = buy_hold_curve(chain, cfg.starting_capital).reindex(eq.index).ffill()
+    spy = spy_curve(cfg.starting_capital, eq.index, path=spy_path)
     recent_is_full = rs <= eq.index.min()
     bh_recent = bh[bh.index >= rs]
     benchmark_recent = _perf(bh_recent, ppy) if len(bh_recent) > 1 else _perf(bh, ppy)
@@ -66,11 +91,13 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01") -> WheelReport:
         recent=_perf(eq_recent, ppy) if len(eq_recent) > 1 else _perf(eq, ppy),
         yearly_return=m.yearly_returns(eq),
         yearly_sharpe=m.yearly_sharpe(eq.pct_change().fillna(0.0), ppy),
-        benchmark=_perf(bh, ppy),
-        benchmark_recent=benchmark_recent,
+        benchmark_underlying=_perf(bh, ppy),
+        benchmark_underlying_recent=benchmark_recent,
+        benchmark_spy=_perf(spy, ppy) if spy is not None else None,
         recent_is_full=recent_is_full,
-        stats=wheel_stats(result.trades, cfg),
+        stats=wheel_stats(result, cfg),
         periods_per_year=ppy,
+        ticker=cfg.ticker,
     )
 
 def _pct(x): return "n/a" if pd.isna(x) else f"{x:+.2%}"
@@ -85,11 +112,13 @@ def format_report(rep) -> str:
         L.append(f"  CAGR {_pct(d['cagr'])}   Sharpe {_num(d['sharpe'])}   "
                  f"Max drawdown {_pct(d['max_drawdown'])}   Total {_pct(d['total_return'])}")
     block("Headline (recent window)", rep.recent)
-    block("  vs SPY buy-hold (recent window)", rep.benchmark_recent)
+    block(f"  vs buy-hold {rep.ticker} (recent window)", rep.benchmark_underlying_recent)
     if rep.recent_is_full:
         L.append("  (recent window = full history — span too short to separate)")
     block("Full history", rep.metrics)
-    block("Benchmark — SPY buy-hold", rep.benchmark)
+    block(f"Benchmark — buy-hold {rep.ticker}", rep.benchmark_underlying)
+    if rep.benchmark_spy is not None:
+        block("Benchmark — buy-hold SPY", rep.benchmark_spy)
     L.append("\nYear-by-year (return / Sharpe)")
     for y in rep.yearly_return.index:
         L.append(f"  {y}: {_pct(rep.yearly_return[y])}  /  Sharpe {_num(rep.yearly_sharpe.get(y, float('nan')))}")
@@ -97,10 +126,16 @@ def format_report(rep) -> str:
     L.append("\nWheel stats")
     L.append(f"  puts sold {s['n_puts_sold']}  calls sold {s['n_calls_sold']}  "
              f"assignments {s['n_assignments']} (rate {s['assignment_rate']:.0%})  "
-             f"called away {s['n_called_away']}  take-profits {s['n_take_profits']}")
+             f"called away {s['n_called_away']}  take-profits {s['n_take_profits']}  "
+             f"flat {s['pct_days_flat']:.0%} of days")
     L.append(f"  premium collected {s['premium_collected']:.0f}  "
              f"paid to close {s['premium_paid_to_close']:.0f}  "
              f"commission {s['commission_paid']:.0f}  net {s['net_premium']:.0f}")
+    dtes = s["realized_dte"]
+    if len(dtes):
+        exp = dtes.index.repeat(dtes.values).to_series()
+        L.append(f"  realized DTE: {dtes.index.min()}..{dtes.index.max()}  "
+                 f"(median {exp.median():.0f})")
     return "\n".join(L)
 
 _RIGHT_WORD = {"P": "PUT", "C": "CALL"}
