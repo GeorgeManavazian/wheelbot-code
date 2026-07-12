@@ -1,6 +1,7 @@
 import os
 import pytest
 from streamlit.testing.v1 import AppTest
+from streamlit.util import calc_md5
 
 FIX = "fixtures/spy_wheel_cycle.parquet"
 
@@ -27,3 +28,29 @@ def test_wheel_page_has_intraday_toggle():
     at.switch_page("views/wheel.py").run(timeout=60)
     assert not at.exception
     assert any(cb.key == "intraday_tp" for cb in at.checkbox)
+
+
+def test_wheel_page_has_date_inputs():
+    at = AppTest.from_file("dashboard/app.py").run(timeout=60)
+    at.switch_page("views/wheel.py").run(timeout=60)
+    assert not at.exception
+    assert any(di.key == "wheel_start" for di in at.date_input)
+    assert any(di.key == "wheel_end" for di in at.date_input)
+
+
+def test_history_page_renders():
+    # NOTE: AppTest.switch_page() derives its target page hash from the
+    # *filename* of the given path (page_icon_and_name), then matches it
+    # against each StreamlitPage's hash of calc_md5(url_path). That only
+    # lines up by coincidence for run.py/wheel.py (filename == url_path).
+    # dashboard/app.py deliberately sets url_path="history" for the History
+    # page (readable URL) while the view file is wheel_history.py (paired
+    # with dashboard/wheel_history.py), so filename-based switch_page can't
+    # find it. Set the internal page hash directly to the one st.navigation
+    # actually computes (calc_md5(url_path)) so this drives the real,
+    # wired-up multipage app rather than reimplementing it.
+    at = AppTest.from_file("dashboard/app.py").run(timeout=60)
+    at._page_hash = calc_md5("history")
+    at.run(timeout=60)
+    assert not at.exception
+    assert any(b.key == "clear_history" for b in at.button)

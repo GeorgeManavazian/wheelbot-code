@@ -102,3 +102,62 @@ def format_report(rep) -> str:
              f"paid to close {s['premium_paid_to_close']:.0f}  "
              f"commission {s['commission_paid']:.0f}  net {s['net_premium']:.0f}")
     return "\n".join(L)
+
+_RIGHT_WORD = {"P": "PUT", "C": "CALL"}
+_TERM = {"CLOSE_PUT", "CLOSE_CALL", "PUT_EXPIRED", "CALL_EXPIRED", "ASSIGNED", "CALLED_AWAY"}
+
+def position_log(result, cfg) -> pd.DataFrame:
+    mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
+    rows, open_opt, assign = [], None, None
+    for t in result.trades:
+        if t.action in ("SELL_PUT", "SELL_CALL"):
+            open_opt = t
+        elif t.action in _TERM and open_opt is not None:
+            oc, n = open_opt.contract, open_opt.contracts
+            credit = open_opt.price_per_contract * mult * n - comm * n
+            if t.action in ("CLOSE_PUT", "CLOSE_CALL"):
+                cost, outcome = t.price_per_contract * mult * n + comm * n, "Took profit"
+            elif t.action in ("PUT_EXPIRED", "CALL_EXPIRED"):
+                cost, outcome = 0.0, "Expired worthless"
+            elif t.action == "ASSIGNED":
+                cost, outcome = 0.0, "Assigned"
+                assign = (oc.strike, n, t.date)
+            else:  # CALLED_AWAY
+                cost, outcome = 0.0, "Called away"
+            realized = credit - cost
+            rows.append(dict(opened=open_opt.date, closed=t.date,
+                instrument=_RIGHT_WORD[oc.right], strike=oc.strike, expiry=oc.expiry,
+                qty=n, credit=credit, outcome=outcome, cost_to_close=cost,
+                realized_pnl=realized,
+                pct_of_credit=(realized / credit if credit else 0.0),
+                days_held=(t.date - open_opt.date).days))
+            if t.action == "CALLED_AWAY" and assign is not None:
+                astrike, aqty, adate = assign
+                rows.append(dict(opened=adate, closed=t.date, instrument="SHARES",
+                    strike=astrike, expiry=pd.NaT, qty=aqty,
+                    credit=-astrike * mult * aqty, outcome="Called away",
+                    cost_to_close=oc.strike * mult * aqty,
+                    realized_pnl=(oc.strike - astrike) * mult * aqty,
+                    pct_of_credit=float("nan"), days_held=(t.date - adate).days))
+                assign = None
+            open_opt = None
+    if open_opt is not None:
+        oc, n = open_opt.contract, open_opt.contracts
+        credit = open_opt.price_per_contract * mult * n - comm * n
+        prior = sum(r["realized_pnl"] for r in rows if pd.notna(r["realized_pnl"]))
+        realized = (result.final_cash - cfg.starting_capital) - prior
+        rows.append(dict(opened=open_opt.date, closed=pd.NaT,
+            instrument=_RIGHT_WORD[oc.right], strike=oc.strike, expiry=oc.expiry, qty=n,
+            credit=credit, outcome="Settled at mark", cost_to_close=credit - realized,
+            realized_pnl=realized, pct_of_credit=(realized / credit if credit else 0.0),
+            days_held=float("nan")))
+        open_opt = None
+    if assign is not None and getattr(result, "final_shares", 0) > 0:
+        astrike, aqty, adate = assign
+        rows.append(dict(opened=adate, closed=pd.NaT, instrument="SHARES",
+            strike=astrike, expiry=pd.NaT, qty=aqty, credit=-astrike * mult * aqty,
+            outcome="Open", cost_to_close=float("nan"), realized_pnl=float("nan"),
+            pct_of_credit=float("nan"), days_held=float("nan")))
+    cols = ["opened","closed","instrument","strike","expiry","qty","credit","outcome",
+            "cost_to_close","realized_pnl","pct_of_credit","days_held"]
+    return pd.DataFrame(rows, columns=cols)

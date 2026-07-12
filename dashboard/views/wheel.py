@@ -4,7 +4,7 @@ import os
 import pandas as pd
 import streamlit as st
 from src.engine_v2.options.wheel import WheelConfig, run_wheel
-from src.engine_v2.options.report import wheel_report, spy_buy_hold
+from src.engine_v2.options.report import wheel_report, spy_buy_hold, position_log
 
 FIXTURE = "fixtures/spy_wheel_cycle.parquet"
 FULL = "data/options/spy_greeks_eod_all.parquet"
@@ -14,11 +14,40 @@ def render():
     sources = {"Sample cycle (2024 fixture)": FIXTURE}
     if os.path.exists(FULL):
         sources["Full SPY history"] = FULL
+
+    # Load-config-back from the History tab: stage widget defaults once, then
+    # pop so the staged values don't stick past this run.
+    _load = st.session_state.pop("_load_cfg", None)
+    if _load:
+        if _load.get("data_source") in sources:
+            st.session_state["wheel_data"] = _load["data_source"]
+        if "put_delta" in _load:
+            st.session_state["w_pd"] = float(_load["put_delta"])
+        if "call_delta" in _load:
+            st.session_state["w_cd"] = float(_load["call_delta"])
+        if "dte_min" in _load:
+            st.session_state["w_dmin"] = int(_load["dte_min"])
+        if "dte_max" in _load:
+            st.session_state["w_dmax"] = int(_load["dte_max"])
+        if "take_profit" in _load:
+            st.session_state["w_tp"] = _load["take_profit"]
+        if "capital" in _load:
+            st.session_state["w_cap"] = int(_load["capital"])
+        if _load.get("start"):
+            st.session_state["wheel_start"] = pd.Timestamp(_load["start"]).date()
+        if _load.get("end"):
+            st.session_state["wheel_end"] = pd.Timestamp(_load["end"]).date()
+
     src_name = st.selectbox("Data", list(sources), key="wheel_data")
     path = sources[src_name]
     if not os.path.exists(path):
         st.warning(f"Data not found: {path}. Build it first."); st.stop()
     ch = pd.read_parquet(path)
+
+    min_d, max_d = ch["date"].min().date(), ch["date"].max().date()
+    dc1, dc2 = st.columns(2)
+    start = dc1.date_input("Start", value=min_d, min_value=min_d, max_value=max_d, key="wheel_start")
+    end = dc2.date_input("End", value=max_d, min_value=min_d, max_value=max_d, key="wheel_end")
 
     c1, c2, c3 = st.columns(3)
     put_delta = c1.number_input("Put delta", 0.05, 0.50, 0.30, 0.05, key="w_pd")
@@ -32,6 +61,9 @@ def render():
     INTRA = "fixtures/spy_wheel_intraday_sample.parquet"
 
     if st.button("Run", key="run_wheel", type="primary"):
+        ch = ch[(ch["date"] >= pd.Timestamp(start)) & (ch["date"] <= pd.Timestamp(end))]
+        if ch["date"].nunique() < 5:
+            st.warning("Window too short."); st.stop()
         cfg = WheelConfig(starting_capital=float(capital), put_delta=put_delta,
                           call_delta=call_delta, dte_min=int(dte_min), dte_max=int(dte_max),
                           take_profit_pct=tp_map[tp])
@@ -63,9 +95,34 @@ def render():
                  f"assignments **{s['n_assignments']}** (rate {s['assignment_rate']:.0%}) · "
                  f"take-profits **{s['n_take_profits']}** · net premium **{s['net_premium']:.0f}** · "
                  f"commission {s['commission_paid']:.0f}")
-        st.subheader("Trade log")
-        st.dataframe(pd.DataFrame([{
-            "date": t.date.date(), "action": t.action, "strike": t.contract.strike,
-            "right": t.contract.right, "n": t.contracts,
-            "price": t.price_per_contract, "cash_after": round(t.cash_after, 2)}
-            for t in res.trades]), use_container_width=True)
+        st.subheader("Trade blotter")
+        blotter = position_log(res, cfg)
+        display = blotter.copy()
+        for col in ("opened", "closed", "expiry"):
+            display[col] = pd.to_datetime(display[col]).dt.strftime("%Y-%m-%d").replace("NaT", "")
+        for col in ("credit", "cost_to_close", "realized_pnl"):
+            display[col] = display[col].map(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
+        display["pct_of_credit"] = display["pct_of_credit"].map(
+            lambda x: f"{x:+.1%}" if pd.notna(x) else "")
+        st.dataframe(display, use_container_width=True)
+
+        from dashboard.wheel_history import log_run
+        log_run({
+            "ts": pd.Timestamp.now().isoformat(timespec="seconds"),
+            "data_source": src_name,
+            "start": pd.Timestamp(start).date().isoformat(),
+            "end": pd.Timestamp(end).date().isoformat(),
+            "put_delta": put_delta,
+            "call_delta": call_delta,
+            "dte_min": int(dte_min),
+            "dte_max": int(dte_max),
+            "take_profit": tp,
+            "capital": capital,
+            "intraday": bool(intraday_on),
+            "total_return": rep.metrics["total_return"],
+            "max_drawdown": rep.metrics["max_drawdown"],
+            "sharpe": rep.metrics["sharpe"],
+            "pnl": float(pnl),
+            "n_trades": len(res.trades),
+            "n_assignments": rep.stats["n_assignments"],
+        })
