@@ -9,7 +9,7 @@ pytestmark = pytest.mark.skipif(not os.path.exists(FIX), reason="wheel cycle fix
 
 def _run():
     ch = pd.read_parquet(FIX)
-    cfg = WheelConfig(dte_min=20, dte_max=45)
+    cfg = WheelConfig(target_dte=40, put_delta=0.30, call_delta=0.30)
     return run_wheel(ch, cfg), ch, cfg
 
 def test_spy_buy_hold_shape():
@@ -21,10 +21,10 @@ def test_spy_buy_hold_shape():
 def test_wheel_stats_on_real_fixture():
     res, _, cfg = _run()
     s = wheel_stats(res.trades, cfg)
-    assert s["n_puts_sold"] == 6 and s["n_take_profits"] == 6
+    assert s["n_puts_sold"] == 2 and s["n_take_profits"] == 2
     assert s["n_assignments"] == 0 and s["n_called_away"] == 0
-    # 12 option legs x 2 contracts x $0.65
-    assert s["commission_paid"] == pytest.approx(12 * 2 * 0.65)
+    # 4 option legs x 2 contracts x $0.65
+    assert s["commission_paid"] == pytest.approx(4 * 2 * 0.65)
     assert s["premium_collected"] > s["premium_paid_to_close"] > 0
     assert s["assignment_rate"] == 0.0
 

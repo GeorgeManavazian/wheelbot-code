@@ -6,7 +6,7 @@ def _chain(rows):
     ch = pd.DataFrame(rows, columns=COLS)
     ch["date"]=pd.to_datetime(ch["date"]); ch["expiry"]=pd.to_datetime(ch["expiry"]); return ch
 
-CFG = dict(starting_capital=50_000.0, dte_min=1, dte_max=60, take_profit_pct=0.50, commission_per_contract=0.0)
+CFG = dict(starting_capital=50_000.0, put_delta=0.30, target_dte=17, take_profit_pct=0.50, commission_per_contract=0.0)
 
 def test_intraday_tp_fires_before_eod():
     # sell 470 put @2.00 credit on d0; on d1 EOD ask is 1.80 (NO EOD TP: >1.00), but

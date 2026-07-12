@@ -4,16 +4,17 @@ engine and the gate."""
 from __future__ import annotations
 from dataclasses import dataclass
 import pandas as pd
-from .select import select_strike_by_delta, option_mark
+from .select import select_contract, option_mark
 
 @dataclass
 class WheelConfig:
     starting_capital: float = 100_000.0
-    put_delta: float = 0.30
-    call_delta: float = 0.30
-    dte_min: int = 25
-    dte_max: int = 45
+    put_delta: float = 0.20
+    call_delta: float = 0.20
+    target_dte: int = 7
     take_profit_pct: float | None = 0.50
+    cash_yield: float = 0.0
+    ticker: str = "SPY"
     contract_multiplier: int = 100
     commission_per_contract: float = 0.65
 
@@ -44,6 +45,7 @@ class WheelResult:
     final_cash: float
     final_shares: int
     residual_settled: bool = False
+    days_flat: int = 0
 
 def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResult:
     dates = sorted(pd.to_datetime(chain["date"]).unique())
@@ -54,11 +56,17 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
     mult = cfg.contract_multiplier
     cash, shares, phase, short = cfg.starting_capital, 0, "PUT", None
     trades, equity = [], {}
+    prev_d, days_flat = None, 0
 
     for d in dates:
         d = pd.Timestamp(d)
         spot = float(und.get(d))
         day_chain = by_date.get(d)
+
+        # 0) accrue yield on idle cash (cash only — shares/liability are not collateral)
+        if prev_d is not None and cfg.cash_yield > 0:
+            cash *= (1 + cfg.cash_yield / 365) ** (d - prev_d).days
+        prev_d = d
 
         # 1) manage an existing short: take-profit, then expiry resolution
         closed_today = None  # contract closed via TP this day (block same-day churn into it)
@@ -66,7 +74,8 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
             c = short["contract"]; n = short["contracts"]
             mark = option_mark(day_chain, d, c)
             tp_fired = False
-            if cfg.take_profit_pct is not None and d < c.expiry:
+            # >= 1.0 means hold to expiry (never take profit)
+            if cfg.take_profit_pct is not None and cfg.take_profit_pct < 1.0 and d < c.expiry:
                 thresh = (1 - cfg.take_profit_pct) * short["credit"]
                 key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
                 if intraday is not None and key in intraday:
@@ -105,7 +114,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
         # into the identical contract just closed — that would be pure spread churn.
         if short is None:
             if phase == "PUT":
-                c = select_strike_by_delta(day_chain, d, "P", cfg.put_delta, cfg.dte_min, cfg.dte_max)
+                c = select_contract(day_chain, d, "P", cfg.put_delta, cfg.target_dte, cfg.ticker)
                 mark = option_mark(day_chain, d, c) if c is not None else None
                 if c is not None and c != closed_today and mark is not None:
                     n = int(cash // (c.strike * mult))
@@ -114,13 +123,18 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                         short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
                         trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash))
             elif phase == "CALL" and shares >= mult:
-                c = select_strike_by_delta(day_chain, d, "C", cfg.call_delta, cfg.dte_min, cfg.dte_max)
+                c = select_contract(day_chain, d, "C", cfg.call_delta, cfg.target_dte, cfg.ticker)
                 mark = option_mark(day_chain, d, c) if c is not None else None
                 if c is not None and c != closed_today and mark is not None:
                     n = shares // mult
                     cash += sell_proceeds(mark, n, cfg)
                     short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
                     trades.append(Trade(d, "SELL_CALL", c, n, mark.bid, cash))
+
+        # flat = in cash with nothing writable. Holding shares with no writable
+        # call is NOT flat — it is exposed.
+        if short is None and not (phase == "CALL" and shares >= mult):
+            days_flat += 1
 
         # 3) mark equity (short MTM at mid; carry last mid across gaps)
         liab = 0.0
@@ -138,4 +152,5 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
         mid = mk.mid if mk is not None else short["last_mid"]
         cash -= mid * mult * short["contracts"]
         residual_settled = True
-    return WheelResult(pd.Series(equity), trades, cash, shares, residual_settled)
+    return WheelResult(pd.Series(equity), trades, cash, shares, residual_settled,
+                       days_flat=days_flat)

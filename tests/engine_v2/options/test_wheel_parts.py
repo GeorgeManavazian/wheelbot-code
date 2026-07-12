@@ -7,6 +7,8 @@ def test_config_defaults():
     c = WheelConfig()
     assert c.starting_capital == 100_000.0 and c.commission_per_contract == 0.65
     assert c.contract_multiplier == 100 and c.take_profit_pct == 0.50
+    assert c.put_delta == 0.20 and c.call_delta == 0.20
+    assert c.target_dte == 7 and c.cash_yield == 0.0 and c.ticker == "SPY"
 
 def test_underlying_series_one_per_date():
     cols = ["date","expiry","dte","strike","right","bid","ask","mid","close","delta","iv","underlying"]

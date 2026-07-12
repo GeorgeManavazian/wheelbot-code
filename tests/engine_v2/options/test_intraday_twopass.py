@@ -17,7 +17,7 @@ def test_two_pass_intraday_changes_tp():
         "timestamp": pd.to_datetime(["2024-01-03 11:30"]),
         "expiry": pd.to_datetime(["2024-01-19"]), "strike":[470.0], "right":["P"],
         "close":[0.90], "high":[1.0], "low":[0.85], "volume":[10]})
-    cfg = WheelConfig(starting_capital=50_000.0, dte_min=1, dte_max=60,
+    cfg = WheelConfig(starting_capital=50_000.0, put_delta=0.30, target_dte=17,
                       take_profit_pct=0.50, commission_per_contract=0.0)
     eod = run_wheel(ch, cfg)
     intr = run_wheel_intraday(ch, cfg, intraday_df)

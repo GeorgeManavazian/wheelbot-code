@@ -16,7 +16,7 @@ def test_residual_short_settled_at_window_end():
         ["2024-01-02","2024-02-16",45,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
         ["2024-01-03","2024-02-16",44,470,"P",1.50,1.60,1.55,1.55,-0.25,0.1,473.0],
     ]
-    cfg = WheelConfig(starting_capital=50_000.0, dte_min=1, dte_max=60,
+    cfg = WheelConfig(starting_capital=50_000.0, put_delta=0.30, target_dte=45,
                       take_profit_pct=None, commission_per_contract=0.0)
     res = run_wheel(_chain(rows), cfg)
     assert res.residual_settled is True
@@ -27,10 +27,10 @@ def test_residual_short_settled_at_window_end():
 
 def test_no_residual_when_flat_at_end():
     rows = [
-        ["2024-01-02","2024-01-05",3,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
-        ["2024-01-05","2024-01-05",0,470,"P",0.00,0.05,0.02,0.02,-0.01,0.1,475.0],
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",0.00,0.05,0.02,0.02,-0.01,0.1,475.0],
     ]
-    cfg = WheelConfig(starting_capital=50_000.0, dte_min=1, dte_max=60,
+    cfg = WheelConfig(starting_capital=50_000.0, put_delta=0.30, target_dte=7,
                       take_profit_pct=None, commission_per_contract=0.0)
     res = run_wheel(_chain(rows), cfg)
     assert res.residual_settled is False

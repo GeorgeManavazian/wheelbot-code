@@ -9,7 +9,7 @@ FIX = "fixtures/spy_wheel_cycle.parquet"
 @pytest.mark.skipif(not os.path.exists(FIX), reason="wheel cycle fixture not built")
 def test_format_report_has_sections():
     ch = pd.read_parquet(FIX)
-    cfg = WheelConfig(dte_min=20, dte_max=45)
+    cfg = WheelConfig(target_dte=40, put_delta=0.30, call_delta=0.30)
     rep = wheel_report(run_wheel(ch, cfg), ch, cfg)
     txt = format_report(rep)
     assert isinstance(txt, str)
