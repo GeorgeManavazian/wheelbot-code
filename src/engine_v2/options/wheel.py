@@ -48,6 +48,9 @@ class WheelResult:
 def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResult:
     dates = sorted(pd.to_datetime(chain["date"]).unique())
     und = underlying_series(chain)
+    # index the chain by date ONCE so per-day strike lookups touch ~one day's rows
+    # instead of scanning the whole (multi-million-row) frame every iteration.
+    by_date = {pd.Timestamp(k): g for k, g in chain.groupby("date")}
     mult = cfg.contract_multiplier
     cash, shares, phase, short = cfg.starting_capital, 0, "PUT", None
     trades, equity = [], {}
@@ -55,12 +58,13 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
     for d in dates:
         d = pd.Timestamp(d)
         spot = float(und.get(d))
+        day_chain = by_date.get(d)
 
         # 1) manage an existing short: take-profit, then expiry resolution
         closed_today = None  # contract closed via TP this day (block same-day churn into it)
         if short is not None:
             c = short["contract"]; n = short["contracts"]
-            mark = option_mark(chain, d, c)
+            mark = option_mark(day_chain, d, c)
             tp_fired = False
             if cfg.take_profit_pct is not None and d < c.expiry:
                 thresh = (1 - cfg.take_profit_pct) * short["credit"]
@@ -101,8 +105,8 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
         # into the identical contract just closed — that would be pure spread churn.
         if short is None:
             if phase == "PUT":
-                c = select_strike_by_delta(chain, d, "P", cfg.put_delta, cfg.dte_min, cfg.dte_max)
-                mark = option_mark(chain, d, c) if c is not None else None
+                c = select_strike_by_delta(day_chain, d, "P", cfg.put_delta, cfg.dte_min, cfg.dte_max)
+                mark = option_mark(day_chain, d, c) if c is not None else None
                 if c is not None and c != closed_today and mark is not None:
                     n = int(cash // (c.strike * mult))
                     if n > 0:
@@ -110,8 +114,8 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                         short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
                         trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash))
             elif phase == "CALL" and shares >= mult:
-                c = select_strike_by_delta(chain, d, "C", cfg.call_delta, cfg.dte_min, cfg.dte_max)
-                mark = option_mark(chain, d, c) if c is not None else None
+                c = select_strike_by_delta(day_chain, d, "C", cfg.call_delta, cfg.dte_min, cfg.dte_max)
+                mark = option_mark(day_chain, d, c) if c is not None else None
                 if c is not None and c != closed_today and mark is not None:
                     n = shares // mult
                     cash += sell_proceeds(mark, n, cfg)
@@ -121,7 +125,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
         # 3) mark equity (short MTM at mid; carry last mid across gaps)
         liab = 0.0
         if short is not None:
-            mk = option_mark(chain, d, short["contract"])
+            mk = option_mark(day_chain, d, short["contract"])
             if mk is not None:
                 short["last_mid"] = mk.mid
             liab = short["last_mid"] * mult * short["contracts"]
@@ -130,7 +134,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
     residual_settled = False
     if short is not None:
         last = pd.Timestamp(dates[-1])
-        mk = option_mark(chain, last, short["contract"])
+        mk = option_mark(by_date.get(last), last, short["contract"])
         mid = mk.mid if mk is not None else short["last_mid"]
         cash -= mid * mult * short["contracts"]
         residual_settled = True
