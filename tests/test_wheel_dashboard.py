@@ -12,15 +12,36 @@ FIX = "fixtures/spy_wheel_cycle.parquet"
 # from_function fails with NameError before it ever reaches app logic. Adapted
 # per the brief's fallback: drive the real multipage app via from_file() +
 # switch_page(), which exercises the actual wired-up dashboard/app.py.
+FIXTURE_TICKER = "SPY (2024 sample fixture)"
+
+
 @pytest.mark.skipif(not os.path.exists(FIX), reason="wheel fixture not built")
 def test_wheel_page_runs_and_renders_metrics():
     at = AppTest.from_file("dashboard/app.py").run(timeout=60)
     assert not at.exception
     at.switch_page("views/wheel.py").run(timeout=60)
     assert not at.exception
+    # Pin to the committed fixture: real per-ticker chains (GDX, SPY, ...) now
+    # populate the dropdown and sort first, and a full-history run is too slow
+    # for a smoke test.
+    at.selectbox(key="wheel_data").set_value(FIXTURE_TICKER).run(timeout=60)
     at.button(key="run_wheel").click().run(timeout=90)
     assert not at.exception
-    assert len(at.metric) >= 1        # recent-headline tiles rendered
+    assert len(at.metric) >= 4        # P&L / Sharpe / maxDD / vs SPY tiles
+
+
+def test_wheel_page_matches_engine_api_contract():
+    # 2026-07-12 contract: target_dte is the only DTE input (dte_min/dte_max
+    # are gone), take-profit is a 1-100 slider, the DTE band is a read-only
+    # caption derived from the target — never a widget.
+    at = AppTest.from_file("dashboard/app.py").run(timeout=60)
+    at.switch_page("views/wheel.py").run(timeout=60)
+    assert not at.exception
+    number_keys = {n.key for n in at.number_input}
+    assert "w_tdte" in number_keys
+    assert "w_dmin" not in number_keys and "w_dmax" not in number_keys
+    assert any(s.key == "w_tp" for s in at.slider)
+    assert any("trades expiries" in c.value for c in at.caption)
 
 
 def test_wheel_page_has_intraday_toggle():

@@ -1,9 +1,12 @@
 """History tab: past wheel backtest runs, clear history, load a run's config
 back into the Wheel form."""
 import streamlit as st
+from dashboard import labels
 from dashboard.wheel_history import load_runs, clear_runs
 
-_CFG_KEYS = ["put_delta", "call_delta", "dte_min", "dte_max", "take_profit",
+# target_dte replaced dte_min/dte_max (2026-07-12 API contract). Old history
+# rows lack it; the Wheel page's load path tolerates missing keys.
+_CFG_KEYS = ["put_delta", "call_delta", "target_dte", "take_profit",
              "capital", "data_source", "start", "end"]
 
 
@@ -14,7 +17,7 @@ def render():
         st.info("No runs yet. Run a wheel backtest and it'll show up here.")
         return
 
-    st.dataframe(runs, use_container_width=True)
+    st.dataframe(labels.humanize(runs), use_container_width=True)
 
     c1, c2 = st.columns(2)
     if c1.button("Clear history", key="clear_history"):
