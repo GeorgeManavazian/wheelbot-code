@@ -88,10 +88,17 @@ The bug. Replace delta-ranked-over-a-window with a two-stage, deterministic rule
 1. Of the expiries **visible on that date**, take the one nearest `target_dte`.
 2. Within that expiry, take the strike whose |delta| is nearest `target_delta`.
 
-Guards (fixed constants, **identical for every ticker, never tuned**):
-- **Floor: 5 DTE.** Refuse expiry stubs (a risk preference, not a calendar fact).
-- **Ceiling: 2 × target_dte.** If the nearest expiry is beyond this, the weekly
-  does not exist that day → **sit in cash** rather than silently trade a monthly.
+Guards (derived from `target_dte` by one fixed rule, **identical for every ticker,
+never tuned**):
+
+```
+floor   = max(5, target_dte - 2)     # refuse expiry stubs (a risk preference)
+ceiling = target_dte + 3             # refuse a monthly when the weekly is absent
+```
+
+Target 7 → **5-10**: exactly the weekday spread a Friday-only calendar can produce
+(Fri 7, Thu 8, Wed 9, Tue 10), and nothing shorter. Target 30 → 28-33.
+If the nearest visible expiry falls outside the band, **sit in cash.**
 
 The band is **derived per-day from that day's chain only** — never from the full
 expiration history. Deriving it from all history would use 2026 knowledge to make
@@ -200,11 +207,15 @@ Per ticker, all nine, no cherry-picking:
 ## Order of work
 
 1. Engine fixes 1–6 (+ tests).
-2. **Re-baseline SPY** at 20-delta / target-30-DTE with the fixed selector. Does
-   "the wheel loses to buy-hold" survive a bot that actually has rules? One
-   comparison, not a sweep.
-3. Basket run at the frozen weekly config, once the pulls land.
-4. Report. Raw numbers first.
+2. **Audit run — SPY @ 30-delta / target 30 DTE** with the fixed selector. This is
+   the config the published run *believed* it was testing, and it is the only run
+   that answers "was +58.3% an artifact of the random-expiry bug, or was the
+   conclusion real?" One comparison, not a sweep.
+3. **SPY @ the frozen basket config (20-delta / target 7)** — SPY as a tenth basket
+   member, so the weekly strategy on SPY sits alongside the other nine names.
+   Distinct from step 2; do not conflate the two numbers.
+4. Basket run at the frozen weekly config, once the pulls land.
+5. Report. Raw numbers first.
 
 ## Open questions
 
