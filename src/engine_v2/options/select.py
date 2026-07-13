@@ -11,9 +11,9 @@ def derived_band(target_dte: int) -> tuple[int, int]:
 def select_contract(chain, date, right, target_delta, target_dte, root, min_strike=None):
     """Expiry FIRST (nearest target_dte within derived_band, from expiries visible
     on `date` only), THEN strike (nearest |delta| within that one expiry).
-    `min_strike` filters strikes WITHIN the chosen expiry (the expiry choice never
-    changes); no strike >= min_strike there -> None. Deterministic; returns
-    None -> sit in cash."""
+    With `min_strike`, expiries are tried in nearest-DTE order (tie -> longer-
+    dated) and the first one containing a strike >= min_strike is used; only
+    when no in-band expiry qualifies -> None. Deterministic; None -> sit in cash."""
     lo, hi = derived_band(target_dte)
     cand = chain[(chain["date"] == date) & (chain["right"] == right)]
     if cand.empty:
@@ -23,14 +23,15 @@ def select_contract(chain, date, right, target_delta, target_dte, root, min_stri
     if dtes.empty:
         return None
     err = (dtes - target_dte).abs()
-    best_exp = dtes[err == err.min()].index.max()   # tie -> longer-dated
-    e = cand[cand["expiry"] == best_exp]
-    if min_strike is not None:
-        e = e[e["strike"] >= min_strike]
-        if e.empty:
-            return None
-    row = e.loc[(e["delta"].abs() - abs(target_delta)).abs().idxmin()]
-    return Contract(root, row["expiry"], float(row["strike"]), right)
+    for exp in sorted(dtes.index, key=lambda e: (err[e], -dtes[e])):
+        e = cand[cand["expiry"] == exp]
+        if min_strike is not None:
+            e = e[e["strike"] >= min_strike]
+            if e.empty:
+                continue
+        row = e.loc[(e["delta"].abs() - abs(target_delta)).abs().idxmin()]
+        return Contract(root, row["expiry"], float(row["strike"]), right)
+    return None
 
 def option_mark(chain, date, contract):
     m = ((chain["date"] == date) & (chain["expiry"] == contract.expiry)

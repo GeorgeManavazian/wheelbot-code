@@ -298,3 +298,31 @@ def test_roll_missing_current_mark_logs_warning():
         ["2024-01-04","2024-01-11",7,455,"P",3.20,3.30,3.25,3.25,-0.30,0.1,468.0]]
     res = run_wheel(_chain(rows), _cfg(roll_tested_puts=True))
     assert any(w[1] == "roll_check_no_mark" for w in res.warnings)
+
+# ---- repair pass: net basis ----
+
+def test_floor_is_net_basis_not_raw_strike():
+    # assigned at 470 with 2.00 credit collected (no commission) -> net basis
+    # 468. A 468 call must be eligible; under the old raw-strike floor it wasn't.
+    rows = _ASSIGN + [
+        ["2024-01-09","2024-01-16",7,468,"C",1.00,1.10,1.05,1.05,0.30,0.1,465.0],
+        ["2024-01-09","2024-01-16",7,465,"C",3.00,3.10,3.05,3.05,0.60,0.1,465.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(call_min_strike="basis"))
+    calls = [t for t in res.trades if t.action == "SELL_CALL"]
+    assert calls and calls[0].contract.strike == 468.0
+
+def test_floor_ratchets_down_as_call_premium_accrues():
+    # saga: assigned at 470 (put credit 2.00 -> floor 468); first call at 468
+    # expires worthless adding 1.00 credit -> floor 467; a 467 call becomes
+    # eligible next cycle.
+    rows = _ASSIGN + [
+        ["2024-01-09","2024-01-16",7,468,"C",1.00,1.10,1.05,1.05,0.30,0.1,465.0],
+        ["2024-01-16","2024-01-16",0,468,"C",0.05,0.10,0.075,0.075,0.01,0.1,464.0],
+        ["2024-01-16","2024-01-23",7,467,"C",1.00,1.10,1.05,1.05,0.30,0.1,464.0],
+        ["2024-01-16","2024-01-23",7,468,"C",0.40,0.50,0.45,0.45,0.10,0.1,464.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(call_min_strike="basis"))
+    calls = [t for t in res.trades if t.action == "SELL_CALL"]
+    assert len(calls) == 2
+    assert calls[1].contract.strike == 467.0   # 0.30 delta beats 0.10 once eligible

@@ -199,7 +199,11 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                         short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
                         trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
             elif phase == "CALL" and shares >= mult:
-                floor = basis if (cfg.call_min_strike == "basis" and basis is not None) else None
+                floor = None
+                if cfg.call_min_strike == "basis" and basis is not None:
+                    # net basis: assignment strike minus premium already banked
+                    # this campaign — the anchor ratchets DOWN as rent comes in.
+                    floor = basis - campaign_premium / shares
                 c = select_contract(day_chain, d, "C", cfg.call_delta, cfg.target_dte,
                                     cfg.ticker, min_strike=floor)
                 mark = option_mark(day_chain, d, c) if c is not None else None
