@@ -22,6 +22,7 @@ class WheelConfig:
     call_min_strike: str | None = None   # "basis": covered calls only at strike >= assignment strike
     roll_puts: bool = False              # ITM put at expiry: buy back at ask, never assign; re-enter same day
     liquidate_assignment: bool = False   # take assignment, dump all shares at that day's spot, back to puts
+    put_stop_mult: float | None = None   # buy the put back when EOD ask >= mult x credit received (puts only)
 
 @dataclass
 class Trade:
@@ -105,6 +106,14 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                     trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
                                         c, n, mark.ask, cash))
                     short = None; closed_today = c
+            # put-stop (after the TP check; puts only — the shares anatomy showed
+            # calls are not the losing leg). EOD marks only; no intraday stop.
+            if (short is not None and cfg.put_stop_mult is not None and c.right == "P"
+                    and mark is not None
+                    and mark.ask >= cfg.put_stop_mult * short["credit"]):
+                cash -= buy_cost(mark, n, cfg)
+                trades.append(Trade(d, "STOP_CLOSE", c, n, mark.ask, cash))
+                short = None; closed_today = c
             if short is not None and d == c.expiry:
                 if c.right == "P":
                     if spot < c.strike and cfg.roll_puts:

@@ -164,3 +164,47 @@ def test_liquidate_assignment_off_keeps_shares():
     res = run_wheel(_chain(rows), _cfg())
     assert [t.action for t in res.trades] == ["SELL_PUT","ASSIGNED"]
     assert res.final_shares == 100
+
+# ---- variant: put-stop (put_stop_mult) ----
+
+# put sold for 2.00 credit; next day its ask has tripled (6.30 >= 3 x 2.00).
+_STOP = [
+    ["2024-01-02","2024-01-19",17,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+    ["2024-01-03","2024-01-19",16,470,"P",6.20,6.30,6.25,6.25,-0.60,0.1,460.0],
+]
+
+def test_put_stop_fires_at_ask_when_mark_triples():
+    # TP is on (threshold 1.00, not hit) — the stop runs AFTER the TP check.
+    res = run_wheel(_chain(_STOP), _cfg(take_profit_pct=0.50, target_dte=17,
+                                        put_stop_mult=3.0))
+    acts = [t.action for t in res.trades]
+    assert acts == ["SELL_PUT","STOP_CLOSE"]
+    stop = [t for t in res.trades if t.action == "STOP_CLOSE"][0]
+    assert stop.price_per_contract == pytest.approx(6.30)   # that day's ask
+    assert res.final_cash == pytest.approx(50_000 + 200 - 630)
+
+def test_put_stop_none_changes_nothing():
+    res = run_wheel(_chain(_STOP), _cfg(take_profit_pct=0.50, target_dte=17))
+    acts = [t.action for t in res.trades]
+    assert acts == ["SELL_PUT"]                # held; settled at mark at the end
+    assert res.final_cash == pytest.approx(50_000 + 200 - 625)   # mid 6.25
+
+def test_put_stop_does_not_fire_below_threshold():
+    rows = [
+        ["2024-01-02","2024-01-19",17,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-03","2024-01-19",16,470,"P",5.80,5.90,5.85,5.85,-0.55,0.1,461.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(take_profit_pct=0.50, target_dte=17,
+                                       put_stop_mult=3.0))
+    assert [t.action for t in res.trades] == ["SELL_PUT"]   # 5.90 < 6.00
+
+def test_put_stop_applies_to_puts_only():
+    # short CALL's ask triples -> no stop (spec: calls are not the losing leg)
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
+        ["2024-01-09","2024-01-16",7,465,"C",3.00,3.10,3.05,3.05, 0.30,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,465,"C",14.90,15.10,15.00,15.00,0.99,0.1,480.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(put_stop_mult=3.0))
+    assert "STOP_CLOSE" not in [t.action for t in res.trades]

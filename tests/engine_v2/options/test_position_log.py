@@ -55,6 +55,18 @@ def test_blotter_liquidated_outcome():
     assert sh.realized_pnl == pytest.approx((452.0 - 460) * 100 * 1)
     assert sh.closed == pd.Timestamp("2024-02-16")
 
+def test_blotter_stopped_outcome():
+    from src.engine_v2.options.wheel import WheelResult
+    trades = [
+        _t("2024-01-02","SELL_PUT",470,"P",1,2.00),    # credit 200
+        _t("2024-01-10","STOP_CLOSE",470,"P",1,6.30),  # cost 630 -> pnl -430, Stopped
+    ]
+    res = WheelResult(pd.Series(dtype=float), trades, 0.0, 0)
+    df = position_log(res, WheelConfig(commission_per_contract=0.0))
+    row = df.iloc[0]
+    assert row.outcome == "Stopped"
+    assert row.realized_pnl == pytest.approx(200 - 630)
+
 def test_blotter_reconciles_to_total():
     FIX = "fixtures/spy_wheel_cycle.parquet"
     if not os.path.exists(FIX): pytest.skip("fixture missing")
