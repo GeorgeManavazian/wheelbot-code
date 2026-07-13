@@ -17,7 +17,7 @@ BASE = dict(put_delta=0.20, call_delta=0.20, target_dte=7,
 VARIANTS = {
     "plain":       {},
     "call>=basis": {"call_min_strike": "basis"},
-    "roll-puts":   {"roll_puts": True},
+    "roll-tested": {"roll_tested_puts": True},
     "liquidate":   {"liquidate_assignment": True},
     "put-stop-3x": {"put_stop_mult": 3.0},
 }

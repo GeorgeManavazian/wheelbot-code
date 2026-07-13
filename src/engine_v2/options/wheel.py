@@ -17,10 +17,10 @@ class WheelConfig:
     ticker: str = "SPY"
     contract_multiplier: int = 100
     commission_per_contract: float = 0.65
-    # defense variants (amendment 2026-07-12b) — all default-off so plain
-    # behavior is byte-identical.
-    call_min_strike: str | None = None   # "basis": covered calls only at strike >= assignment strike
-    roll_puts: bool = False              # ITM put at expiry: buy back at ask, never assign; re-enter same day
+    # defense variants (amendment 2026-07-12b, repaired 2026-07-13) — all
+    # default-off so plain behavior is byte-identical.
+    call_min_strike: str | None = None   # "basis": covered calls only at strike >= net basis
+    roll_tested_puts: bool = False       # mid-life roll of tested puts (credit-only, capped)
     liquidate_assignment: bool = False   # take assignment, dump all shares at that day's spot, back to puts
     put_stop_mult: float | None = None   # buy the put back when EOD ask >= mult x credit received (puts only)
 
@@ -54,6 +54,9 @@ class WheelResult:
     days_flat: int = 0
 
 def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResult:
+    if cfg.liquidate_assignment and cfg.call_min_strike is not None:
+        raise ValueError("liquidate_assignment never holds shares; call_min_strike "
+                         "governs held shares — enable one, not both")
     dates = sorted(pd.to_datetime(chain["date"]).unique())
     und = underlying_series(chain)
     # index the chain by date ONCE so per-day strike lookups touch ~one day's rows
@@ -116,16 +119,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                 short = None; closed_today = c
             if short is not None and d == c.expiry:
                 if c.right == "P":
-                    if spot < c.strike and cfg.roll_puts:
-                        # never take assignment: buy back at the ask (intrinsic
-                        # when the mark is missing); normal entry logic below
-                        # re-enters the SAME day (closed_today blocks only the
-                        # identical contract).
-                        px = mark.ask if mark is not None else c.strike - spot
-                        cash -= px * mult * n + cfg.commission_per_contract * n
-                        trades.append(Trade(d, "ROLL_CLOSE", c, n, px, cash))
-                        closed_today = c
-                    elif spot < c.strike:
+                    if spot < c.strike:
                         cash -= c.strike * mult * n; shares += mult * n; phase = "CALL"
                         basis = c.strike
                         trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash))

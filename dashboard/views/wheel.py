@@ -83,7 +83,7 @@ def render():
     DEFENSES = {
         "None (plain wheel)": {},
         "No calls below basis": {"call_min_strike": "basis"},
-        "Roll puts (never assign)": {"roll_puts": True},
+        "Roll tested puts (mid-life)": {"roll_tested_puts": True},
         "Liquidate at assignment": {"liquidate_assignment": True},
         "Put stop at 3× credit": {"put_stop_mult": 3.0},
     }
