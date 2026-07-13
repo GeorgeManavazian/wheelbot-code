@@ -17,7 +17,7 @@ def render():
         st.info("No runs yet. Run a wheel backtest and it'll show up here.")
         return
 
-    st.dataframe(labels.humanize(runs), use_container_width=True)
+    st.dataframe(labels.humanize(runs), width="stretch")
 
     c1, c2 = st.columns(2)
     if c1.button("Clear history", key="clear_history"):

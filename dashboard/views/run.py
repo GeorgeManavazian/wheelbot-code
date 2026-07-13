@@ -90,26 +90,26 @@ def render():
 
         st.subheader("Equity curve")
         st.plotly_chart(charts.equity_curve(res.equity, res.benchmarks),
-                        use_container_width=True)
+                        width="stretch")
         st.subheader("Underwater — how deep, and how long")
-        st.plotly_chart(charts.underwater(res.equity), use_container_width=True)
+        st.plotly_chart(charts.underwater(res.equity), width="stretch")
 
         left, right = st.columns(2)
         with left:
             st.subheader("Year-by-year Sharpe")
             st.caption("The decay curve. Never headline one blended number.")
             st.plotly_chart(charts.yearly_bars(res.yearly_sharpe, percent=False),
-                            use_container_width=True)
+                            width="stretch")
         with right:
             st.subheader("Year-by-year return")
             st.plotly_chart(charts.yearly_bars(res.yearly, percent=True),
-                            use_container_width=True)
+                            width="stretch")
 
         st.subheader("Monthly returns")
-        st.plotly_chart(charts.monthly_heatmap(res.equity), use_container_width=True)
+        st.plotly_chart(charts.monthly_heatmap(res.equity), width="stretch")
 
         st.subheader("By regime")
-        st.dataframe(labels.humanize(res.regime), use_container_width=True)
+        st.dataframe(labels.humanize(res.regime), width="stretch")
         st.caption(f"bars/yr ≈ {res.periods_per_year:.0f}")
 
         # Cost sensitivity: one backtest per spread level, so it sits behind its own
@@ -125,5 +125,5 @@ def render():
                     get_strategy(s["name"]), s["bars"],
                     BacktestConfig(borrow_bps_annual=s["borrow"]),
                     benchmark_bars=s["bench_bars"])
-            st.dataframe(labels.humanize(sweep), use_container_width=True,
+            st.dataframe(labels.humanize(sweep), width="stretch",
                          hide_index=True)

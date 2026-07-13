@@ -48,6 +48,8 @@ def render():
                 pass  # pre-contract rows stored "50%" strings; skip them
         if "capital" in _load:
             st.session_state["w_cap"] = int(_load["capital"])
+        if isinstance(_load.get("defense"), str):
+            st.session_state["w_defense"] = _load["defense"]
         if _load.get("start"):
             st.session_state["wheel_start"] = pd.Timestamp(_load["start"]).date()
         if _load.get("end"):
@@ -76,6 +78,22 @@ def render():
         c3.caption("100% = hold to expiry")
     capital = c3.number_input("Capital", 10_000, 1_000_000, 100_000, 10_000, key="w_cap")
 
+    # Pre-registered defense arms (spec amendment 2026-07-12b) — a fixed set,
+    # deliberately not tunable knobs.
+    DEFENSES = {
+        "None (plain wheel)": {},
+        "No calls below basis": {"call_min_strike": "basis"},
+        "Roll puts (never assign)": {"roll_puts": True},
+        "Liquidate at assignment": {"liquidate_assignment": True},
+        "Put stop at 3× credit": {"put_stop_mult": 3.0},
+    }
+    defense_name = st.selectbox(
+        "Defense", list(DEFENSES), key="w_defense",
+        help="Post-assignment / exit mechanics. Fixed pre-registered set — see "
+             "spec amendment 2026-07-12b. 'No calls below basis' was the only "
+             "one that helped on the 4-ticker matrix; the others are kept for "
+             "honest comparison.")
+
     # Per-ticker hourly OHLC; the pull is still in flight for some tickers.
     intra = None if ticker_name == FIXTURE_TICKER else intraday_path(ticker)
     if ticker_name == FIXTURE_TICKER:
@@ -92,7 +110,8 @@ def render():
             st.warning("Window too short."); st.stop()
         cfg = WheelConfig(starting_capital=float(capital), put_delta=put_delta,
                           call_delta=call_delta, target_dte=int(target_dte),
-                          take_profit_pct=tp_slider / 100.0, ticker=ticker)
+                          take_profit_pct=tp_slider / 100.0, ticker=ticker,
+                          **DEFENSES[defense_name])
         if intraday_on and intra:
             from src.engine_v2.options.intraday import run_wheel_intraday
             res = run_wheel_intraday(ch, cfg, pd.read_parquet(intra))
@@ -114,6 +133,7 @@ def render():
             "take_profit": tp_slider,
             "capital": capital,
             "intraday": bool(intraday_on),
+            "defense": defense_name,
             "total_return": rep.metrics["total_return"],
             "max_drawdown": rep.metrics["max_drawdown"],
             "sharpe": rep.metrics["sharpe"],
@@ -158,11 +178,11 @@ def render():
         spy_b = spy_curve(cfg.starting_capital, res.equity.index)
         if spy_b is not None and rep.ticker != "SPY":
             bench["SPY"] = spy_b
-        st.plotly_chart(charts.equity_curve(res.equity, bench), use_container_width=True)
+        st.plotly_chart(charts.equity_curve(res.equity, bench), width="stretch")
 
         st.subheader("Year-by-year return")
         st.plotly_chart(charts.yearly_bars(rep.yearly_return, percent=True),
-                        use_container_width=True)
+                        width="stretch")
 
         st.subheader("Wheel stats")
         t1, t2, t3, t4 = st.columns(4)
@@ -183,7 +203,7 @@ def render():
             st.caption("Selection is deterministic now — this should cluster at the target.")
             st.plotly_chart(charts.yearly_bars(s["realized_dte"].sort_index(),
                                                percent=False),
-                            use_container_width=True)
+                            width="stretch")
 
         st.subheader("Trade blotter")
         from src.engine_v2.options.report import position_log
@@ -198,7 +218,7 @@ def render():
         display["pct_of_credit"] = display["pct_of_credit"].map(
             lambda x: f"{x:+.1%}" if pd.notna(x) else "")
         st.dataframe(_style_blotter(labels.humanize(display), blotter),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
 
 
 def _hex_tint(hex_color: str, alpha: float) -> str:
