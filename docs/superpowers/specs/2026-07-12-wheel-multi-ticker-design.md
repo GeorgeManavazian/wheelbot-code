@@ -264,3 +264,31 @@ the frozen basket run executes **two arms per ticker**:
 
 Every row reported. No third arm, no tuning, no post-hoc additions. Both arms
 re-run with intraday TP when hourly data lands.
+
+## Amendment 2026-07-13d — arm 2 runs the repaired net-basis floor; engine repair pass; contamination acknowledged
+
+Owner decision 2026-07-13, made BEFORE any basket run and before
+XBI/EEM/EWZ/TLT/ARKK/QQQ data was seen.
+
+1. **Arm 2 floor = net basis.** The 2026-07-13 audit found `call_min_strike:
+   "basis"` anchors on the raw assignment strike, ignoring premium already
+   collected — a defect, not a design choice. Arm 2 executes with the repaired
+   floor (assignment strike − campaign premium/share, cross-expiry fallback).
+   Spec: `2026-07-13-wheel-defense-repair-design.md`.
+2. **Both arms run on the repaired engine** (post repair-pass merge). The plain
+   arm is protected by the plain-path invariance regression (byte-identical
+   with all defense flags off).
+3. **Contamination statement (binding on interpretation):** amendment 2026-07-12c
+   was committed 36 minutes AFTER the defense-matrix results existed
+   (`defense_matrix.txt` written 22:13, amendment committed 22:49) showing
+   call>=basis winning on GDX/SLV/XOP/SPY. Those four tickers are therefore
+   IN-SAMPLE for arm 2 — confirmatory only, never citable as validation. The
+   out-of-sample test for arm 2 is exclusively XBI/EEM/EWZ/TLT/ARKK/QQQ. The
+   basket report must separate the two groups explicitly. Additionally, the
+   matrix numbers were produced by the pre-repair engine (known-defective
+   mechanics) and are provenance-only, never comparable to post-repair runs.
+4. Owner's stated rationale for amending rather than running the pinned rule:
+   every pre-repair result is compromised anyway (buggy mechanics, incomplete
+   hourly data) — there is no clean baseline to preserve by refusing the fix.
+
+Decision record: vault `03 Decisions/2026-07-13 — Basket arm 2 amended to repaired floor (option B).md`.
