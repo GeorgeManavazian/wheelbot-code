@@ -328,3 +328,30 @@ def test_floor_ratchets_down_as_call_premium_accrues():
     calls = [t for t in res.trades if t.action == "SELL_CALL"]
     assert len(calls) == 2
     assert calls[1].contract.strike == 467.0   # 0.30 delta beats 0.10 once eligible
+
+# ---- repair pass: audit-loop fixes (zombie expiry, warning dedupe) ----
+
+def test_expiry_missing_from_chain_resolves_on_next_trading_day():
+    # the 470P expires Jan-09 but the chain has NO Jan-09 rows (data gap).
+    # Old engine: position becomes an unmanageable zombie forever. Fixed:
+    # resolves on Jan-10 (first day >= expiry), logs expiry_resolved_late.
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-10","2024-01-17",7,465,"P",2.00,2.10,2.05,2.05,-0.30,0.1,464.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg())
+    acts = [t.action for t in res.trades]
+    assert "ASSIGNED" in acts                       # 464 < 470 on resolution day
+    assert any(w[1] == "expiry_resolved_late" for w in res.warnings)
+
+def test_missing_mark_with_roll_and_stop_logs_one_warning():
+    # held contract has no mark row on a tested day; BOTH roll and stop enabled
+    # -> exactly one warning, not two.
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-04","2024-01-11",7,455,"P",3.20,3.30,3.25,3.25,-0.30,0.1,468.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(roll_tested_puts=True, put_stop_mult=3.0))
+    mark_warns = [w for w in res.warnings if w[1] in ("roll_check_no_mark",
+                                                      "stop_check_no_mark")]
+    assert len(mark_warns) == 1

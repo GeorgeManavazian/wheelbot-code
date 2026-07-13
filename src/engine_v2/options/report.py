@@ -65,7 +65,7 @@ def wheel_stats(result, cfg) -> dict:
     return {
         "n_puts_sold": n_puts, "n_calls_sold": len(of("SELL_CALL")),
         "n_assignments": len(of("ASSIGNED")), "n_called_away": len(of("CALLED_AWAY")),
-        "n_take_profits": len(closes),
+        "n_take_profits": len(of("CLOSE_PUT")) + len(of("CLOSE_CALL")),  # TP only, not rolls/stops
         "n_expired": len(of("PUT_EXPIRED")) + len(of("CALL_EXPIRED")),
         "premium_collected": prem_in, "premium_paid_to_close": prem_out,
         "commission_paid": commission,
@@ -83,31 +83,44 @@ def wheel_stats(result, cfg) -> dict:
         "days_shares_uncovered": getattr(result, "days_shares_uncovered", 0),
     }
 
+def _trade_cash_flow(t, cfg) -> float:
+    """Cash flow of one trade from its own economics — NOT cash_after deltas,
+    which would fold cash-yield interest (earned on the whole balance, campaign
+    or not) into per-campaign P&L."""
+    mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
+    px, n = t.price_per_contract, t.contracts
+    if t.action in ("SELL_PUT", "SELL_CALL", "ROLL_OPEN"):
+        return px * mult * n - comm * n
+    if t.action in ("CLOSE_PUT", "CLOSE_CALL", "ROLL_CLOSE", "STOP_CLOSE"):
+        return -(px * mult * n + comm * n)
+    if t.action == "ASSIGNED":
+        return -t.contract.strike * mult * n
+    if t.action == "CALLED_AWAY":
+        return t.contract.strike * mult * n
+    if t.action == "LIQUIDATE":
+        return px * mult * n
+    return 0.0   # PUT_EXPIRED / CALL_EXPIRED
+
 def campaign_table(result, cfg) -> pd.DataFrame:
-    """One row per campaign: cash-flow P&L (exact for campaigns that ended flat;
-    the final campaign may still be open -> flagged, P&L is cash-only)."""
+    """One row per campaign: P&L summed from each trade's own cash flow (exact
+    for campaigns that ended flat; the final campaign may still be open ->
+    flagged, unrealized excluded)."""
     rows, cur = [], None
-    prev_cash = cfg.starting_capital
     for t in result.trades:
         if cur is None or t.campaign_id != cur["campaign_id"]:
             if cur is not None:
                 rows.append(cur)
-                prev_cash = cur["_last_cash"]
             cur = dict(campaign_id=t.campaign_id, opened=t.date, closed=t.date,
-                       n_trades=0, n_rolls=0, pnl=0.0, open_at_end=False,
-                       _first_cash=prev_cash, _last_cash=t.cash_after)
+                       n_trades=0, n_rolls=0, pnl=0.0, open_at_end=False)
         cur["n_trades"] += 1
         cur["closed"] = t.date
-        cur["_last_cash"] = t.cash_after
+        cur["pnl"] += _trade_cash_flow(t, cfg)
         if t.action == "ROLL_CLOSE":
             cur["n_rolls"] += 1
     if cur is not None:
         # the last campaign is open iff something is still on the book
         cur["open_at_end"] = (result.final_shares > 0) or result.residual_settled
         rows.append(cur)
-    for r in rows:
-        r["pnl"] = r["_last_cash"] - r["_first_cash"]
-        del r["_first_cash"], r["_last_cash"]
     return pd.DataFrame(rows, columns=["campaign_id","opened","closed","n_trades",
                                        "n_rolls","pnl","open_at_end"])
 
@@ -119,13 +132,21 @@ def roll_counterfactuals(result, chain, cfg) -> pd.DataFrame:
     mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
     und = underlying_series(chain)
     opens, rows = {}, []
+    skipped = 0
     for t in result.trades:
         if t.action in ("SELL_PUT", "SELL_CALL", "ROLL_OPEN"):
             opens[(t.contract, t.campaign_id)] = t
         elif t.action == "ROLL_CLOSE":
             o = opens.get((t.contract, t.campaign_id))
             exp = pd.Timestamp(t.contract.expiry)
-            if o is None or exp not in und.index:
+            if exp not in und.index:
+                # expiry day absent from the chain (data gap) — settle the
+                # counterfactual on the first trading day at/after expiry,
+                # matching the engine's own late-resolution rule.
+                later = und.index[und.index >= exp]
+                exp = later[0] if len(later) else None
+            if o is None or exp is None:
+                skipped += 1
                 continue
             n = t.contracts
             intrinsic = max(t.contract.strike - float(und[exp]), 0.0)
@@ -135,9 +156,11 @@ def roll_counterfactuals(result, chain, cfg) -> pd.DataFrame:
                              strike=float(t.contract.strike),
                              actual_close_pnl=actual, held_to_expiry_pnl=held,
                              roll_advantage=actual - held))
-    return pd.DataFrame(rows, columns=["campaign_id","closed","strike",
-                                       "actual_close_pnl","held_to_expiry_pnl",
-                                       "roll_advantage"])
+    df = pd.DataFrame(rows, columns=["campaign_id","closed","strike",
+                                     "actual_close_pnl","held_to_expiry_pnl",
+                                     "roll_advantage"])
+    df.attrs["n_skipped"] = skipped   # legs dropped (expiry beyond data window)
+    return df
 
 def wheel_report(result, chain, cfg, recent_start="2021-07-01",
                  spy_path="data/options/spy_greeks_eod_all.parquet") -> WheelReport:
@@ -152,7 +175,11 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01",
     benchmark_recent = _perf(bh_recent, ppy) if len(bh_recent) > 1 else _perf(bh, ppy)
     stats = wheel_stats(result, cfg)
     defense = None
-    if stats["n_rolls"] or stats["n_stops"] or cfg.liquidate_assignment or cfg.call_min_strike:
+    # gate on the ENABLED flags, not on fired-event counts: a defense that ran
+    # but never triggered (or was data-blocked) must still show its block —
+    # that absence-of-fire is itself the finding.
+    if (cfg.roll_tested_puts or cfg.put_stop_mult is not None
+            or cfg.liquidate_assignment or cfg.call_min_strike):
         ct = campaign_table(result, cfg)
         cf = roll_counterfactuals(result, chain, cfg)
         closed = ct[~ct["open_at_end"]]
@@ -164,6 +191,7 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01",
             "roll_advantage_total": float(cf["roll_advantage"].sum()) if len(cf) else 0.0,
             "roll_advantage_positive": int((cf["roll_advantage"] > 0).sum()) if len(cf) else 0,
             "roll_advantage_negative": int((cf["roll_advantage"] < 0).sum()) if len(cf) else 0,
+            "roll_counterfactual_skipped": int(cf.attrs.get("n_skipped", 0)),
             "days_shares_uncovered": stats["days_shares_uncovered"],
             "n_warnings": stats["n_warnings"],
             "liquidate_fill_note": bool(cfg.liquidate_assignment),
@@ -222,11 +250,16 @@ def format_report(rep) -> str:
     if rep.defense:
         dd = rep.defense
         L.append("\nDefense stats (campaign-level)")
-        L.append(f"  campaigns {dd['n_campaigns']}  win rate {dd['campaign_win_rate']:.0%}  "
+        wr = dd['campaign_win_rate']
+        wr_s = "n/a" if pd.isna(wr) else f"{wr:.0%}"
+        L.append(f"  campaigns {dd['n_campaigns']}  win rate {wr_s}  "
                  f"stops {dd['n_stops']}  rolls/campaign {dd['rolls_per_campaign']}")
+        skip_s = (f"  [{dd['roll_counterfactual_skipped']} leg(s) beyond data window]"
+                  if dd.get('roll_counterfactual_skipped') else "")
         L.append(f"  roll counterfactual (short-leg approx): total advantage "
                  f"{dd['roll_advantage_total']:+.0f}  "
-                 f"(helped {dd['roll_advantage_positive']}, hurt {dd['roll_advantage_negative']})")
+                 f"(helped {dd['roll_advantage_positive']}, hurt {dd['roll_advantage_negative']})"
+                 + skip_s)
         L.append(f"  days shares uncovered {dd['days_shares_uncovered']}  "
                  f"skipped checks {dd['n_warnings']}")
         if dd["liquidate_fill_note"]:

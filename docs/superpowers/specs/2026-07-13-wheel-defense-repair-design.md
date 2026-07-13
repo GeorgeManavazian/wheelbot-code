@@ -108,6 +108,22 @@ For a held short, in order: **TP check** (intraday then EOD, unchanged) → **ro
 
 The basket spec (2026-07-12, two pre-registered arms) is binding and untouched. Arm 1 (plain) is protected by the plain-path invariance test. Arm 2 (call>=basis) predates this repair: it must run on the engine commit its spec pinned, or — if the owner prefers the repaired floor — that is an **owner decision to amend the pre-registration before any basket data is seen**, recorded in the vault. This spec takes no position; it only flags the fork.
 
+## Amendment 2026-07-13c — audit-loop fixes (post-implementation review + stress)
+
+The owner-mandated audit/stress loop (multi-agent code review of the branch diff + real-data invariant stress on the four in-sample tickers) surfaced and fixed:
+
+1. **Zombie-expiry engine bug (severe, pre-existing).** Expiry resolution used `d == c.expiry`; when the expiry date itself is absent from the chain (real data gaps exist — SPY: 2018-12-05, 2025-01-09), the position never resolved and the engine silently froze for the rest of the backtest (observed: a short call stuck open 2018→2026). Fixed: resolution fires on the first trading day `>= expiry`, logging `expiry_resolved_late`. Plain-path SPY output verified byte-identical pre/post fix (no plain leg ever hit a gap).
+2. Roll and stop both logging one missing mark → single warning per day.
+3. `held_contracts` (intraday two-pass) taught the `ROLL_OPEN`/`ROLL_CLOSE`/`STOP_CLOSE` actions.
+4. `n_take_profits` counted rolls/stops as TPs → now CLOSE_PUT/CLOSE_CALL only.
+5. Defense report block gated on **enabled flags**, not fired counts — a defense that never fired still reports (the absence is the finding).
+6. Campaign P&L computed from each trade's own economics, not `cash_after` deltas — cash-yield interest no longer contaminates campaign win rates.
+7. Roll counterfactuals settle on the first trading day at/after a gap expiry (matching the engine) and expose `n_skipped` for legs beyond the data window; report and dashboard show it.
+8. Dashboard renders the defense block (campaigns, win rate, rolls, stops, counterfactual, uncovered days, warnings).
+9. `campaign_win_rate` formats as `n/a` instead of `nan%` when no campaign closed.
+
+Declined (style-only, churn > value, noted for honesty): extracting a helper for the repeated `cost = …; cash -= cost; campaign_premium -= cost` triple; `WheelResult.warnings: list = None` default.
+
 ## Error handling
 
 | Situation | Behavior |

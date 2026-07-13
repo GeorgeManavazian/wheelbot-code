@@ -53,8 +53,9 @@ def intraday_marks(df: pd.DataFrame) -> dict:
 
 def held_contracts(result) -> list:
     """Each short position -> (expiry, strike, right, open_date, close_date)."""
-    OPEN = {"SELL_PUT", "SELL_CALL"}
-    CLOSE = {"CLOSE_PUT", "CLOSE_CALL", "ASSIGNED", "PUT_EXPIRED", "CALLED_AWAY", "CALL_EXPIRED"}
+    OPEN = {"SELL_PUT", "SELL_CALL", "ROLL_OPEN"}
+    CLOSE = {"CLOSE_PUT", "CLOSE_CALL", "ASSIGNED", "PUT_EXPIRED", "CALLED_AWAY",
+             "CALL_EXPIRED", "ROLL_CLOSE", "STOP_CLOSE"}
     held, cur = [], None
     for t in result.trades:
         c = t.contract

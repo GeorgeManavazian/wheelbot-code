@@ -144,3 +144,55 @@ def test_plain_run_has_no_defense_block():
     assert rep.defense is None
     from src.engine_v2.options.report import format_report
     assert "Defense stats" not in format_report(rep)
+
+# ---- audit-loop fixes: TP count, defense gate, interest-free campaign pnl ----
+
+def test_n_take_profits_excludes_rolls_and_stops():
+    res, ch, cfg = _roll_result()
+    s = wheel_stats(res, cfg)
+    assert s["n_take_profits"] == 0        # only a roll happened, no TP
+    assert s["n_rolls"] == 1
+
+def test_defense_block_present_when_enabled_but_never_fired():
+    from src.engine_v2.options.report import wheel_report, format_report
+    ch = _rows_chain([
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",0.02,0.05,0.035,0.035,-0.01,0.1,475.0],
+    ])
+    cfg = _rows_cfg(put_stop_mult=3.0)
+    res = run_wheel(ch, cfg)
+    rep = wheel_report(res, ch, cfg)
+    assert rep.defense is not None and rep.defense["n_stops"] == 0
+    assert "Defense stats" in format_report(rep)
+
+def test_campaign_pnl_excludes_cash_yield_interest():
+    from src.engine_v2.options.report import campaign_table
+    # 5% cash yield, one week position: interest accrues on ~50k but campaign
+    # pnl must reflect only the option economics (+2.00 credit kept = +200).
+    ch = _rows_chain([
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",0.02,0.05,0.035,0.035,-0.01,0.1,475.0],
+    ])
+    cfg = _rows_cfg(cash_yield=0.05)
+    res = run_wheel(ch, cfg)
+    ct = campaign_table(res, cfg)
+    assert ct.iloc[0]["pnl"] == pytest.approx(200.0)
+
+def test_counterfactual_settles_on_next_day_when_expiry_missing():
+    from src.engine_v2.options.report import roll_counterfactuals
+    # original leg expiry Jan-09 has no chain rows; underlying on Jan-10 (466)
+    # is used instead -> intrinsic 4.00 -> held pnl -200. Nothing skipped.
+    saga = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-04","2024-01-09",5,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,468.0],
+        ["2024-01-04","2024-01-11",7,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,468.0],
+        ["2024-01-10","2024-01-11",1,470,"P",3.90,4.10,4.00,4.00,-0.80,0.1,466.0],
+        ["2024-01-11","2024-01-11",0,470,"P",0.05,0.10,0.075,0.075,-0.01,0.1,471.0],
+    ]
+    ch = _rows_chain(saga)
+    cfg = _rows_cfg(roll_tested_puts=True)
+    res = run_wheel(ch, cfg)
+    cf = roll_counterfactuals(res, ch, cfg)
+    assert len(cf) == 1
+    assert cf.iloc[0]["held_to_expiry_pnl"] == pytest.approx(-200.0)
+    assert cf.attrs["n_skipped"] == 0

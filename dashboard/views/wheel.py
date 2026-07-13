@@ -171,6 +171,29 @@ def render():
                        f"window) — no expiry inside the {band_lo}–{band_hi} DTE band. "
                        f"The benchmark held {rep.ticker} on those days; the bot held cash.")
 
+        # Defense diagnostics — the campaign-level answer to "did the defense
+        # help", visible wherever the defense is chosen.
+        if rep.defense:
+            dd = rep.defense
+            st.subheader("Defense stats (campaign-level)")
+            wr = dd["campaign_win_rate"]
+            e1, e2, e3, e4 = st.columns(4)
+            e1.metric("Campaigns", dd["n_campaigns"])
+            e2.metric("Campaign win rate", "n/a" if pd.isna(wr) else f"{wr:.0%}")
+            e3.metric("Rolls", sum(k * v for k, v in dd["rolls_per_campaign"].items()))
+            e4.metric("Stops", dd["n_stops"])
+            adv = dd["roll_advantage_total"]
+            skip = dd.get("roll_counterfactual_skipped", 0)
+            st.caption(
+                f"Roll counterfactual (short-leg approx): total advantage {adv:+,.0f} "
+                f"(helped {dd['roll_advantage_positive']}, hurt {dd['roll_advantage_negative']})"
+                + (f" · {skip} leg(s) beyond data window" if skip else "")
+                + f" · shares uncovered {dd['days_shares_uncovered']} days"
+                + f" · skipped checks {dd['n_warnings']}")
+            if dd["liquidate_fill_note"]:
+                st.caption("Liquidation fills at EOD spot — no stock spread/slippage "
+                           "modeled (options pay full spread).")
+
         st.subheader("Equity vs buy & hold")
         bench = {}
         from src.engine_v2.options.report import buy_hold_curve, spy_curve

@@ -26,3 +26,26 @@ def test_intraday_marks_keys():
     m = intraday_marks(df)
     k = (pd.Timestamp("2024-01-19"), 470.0, "P")
     assert k in m and list(m[k]["close"]) == [2.0, 1.5]
+
+def test_held_contracts_understands_rolls_and_stops():
+    import pandas as pd
+    from src.engine_v2.options.wheel import WheelConfig, WheelResult, Trade
+    from src.engine_v2.options.chain import Contract
+    from src.engine_v2.options.intraday import held_contracts
+    def t(date, action, strike, expiry):
+        return Trade(pd.Timestamp(date), action,
+                     Contract("SPY", pd.Timestamp(expiry), strike, "P"), 1, 1.0, 0.0)
+    trades = [
+        t("2024-01-02","SELL_PUT",470,"2024-01-09"),
+        t("2024-01-04","ROLL_CLOSE",470,"2024-01-09"),
+        t("2024-01-04","ROLL_OPEN",470,"2024-01-11"),
+        t("2024-01-05","STOP_CLOSE",470,"2024-01-11"),
+        t("2024-01-08","SELL_PUT",460,"2024-01-16"),
+        t("2024-01-16","PUT_EXPIRED",460,"2024-01-16"),
+    ]
+    held = held_contracts(WheelResult(pd.Series(dtype=float), trades, 0.0, 0))
+    assert len(held) == 3
+    # rolled-away leg closes on the roll date, not later
+    assert held[0][4] == pd.Timestamp("2024-01-04")
+    # rolled-in leg exists and closes at the stop
+    assert held[1][0] == pd.Timestamp("2024-01-11") and held[1][4] == pd.Timestamp("2024-01-05")

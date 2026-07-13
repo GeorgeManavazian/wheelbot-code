@@ -89,6 +89,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
         closed_today = None  # contract closed via TP this day (block same-day churn into it)
         no_entry_today = False  # set by STOP_CLOSE: stop means flat until tomorrow
         rolled_today = False    # a roll consumes the day's stop check (new leg re-evaluates tomorrow)
+        mark_warned_today = False  # one missing-mark warning per day, not one per check
         if short is not None:
             c = short["contract"]; n = short["contracts"]
             mark = option_mark(day_chain, d, c)
@@ -129,6 +130,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                     and rolls_this_campaign < MAX_ROLLS_PER_CAMPAIGN):
                 if mark is None:
                     warnings.append((d, "roll_check_no_mark", c))
+                    mark_warned_today = True
                 else:
                     # destination: SAME strike, out in time — expiry strictly
                     # beyond the held leg, nearest to held_expiry + target_dte
@@ -159,13 +161,21 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
             if (short is not None and cfg.put_stop_mult is not None and c.right == "P"
                     and d < c.expiry and not rolled_today):
                 if mark is None:
-                    warnings.append((d, "stop_check_no_mark", c))
+                    if not mark_warned_today:   # roll check may already have logged it
+                        warnings.append((d, "stop_check_no_mark", c))
                 elif mark.ask >= cfg.put_stop_mult * short["credit"]:
                     cost = buy_cost(mark, n, cfg)
                     cash -= cost; campaign_premium -= cost
                     trades.append(Trade(d, "STOP_CLOSE", c, n, mark.ask, cash, campaign))
                     short = None; closed_today = c; no_entry_today = True
-            if short is not None and d == c.expiry:
+            # >= not ==: if the expiry date itself is absent from the chain
+            # (data gap — SPY has two such days), the position must still
+            # resolve on the first trading day at/after expiry, else it becomes
+            # an unmanageable zombie that freezes the engine for the rest of
+            # the backtest. Late resolution is logged.
+            if short is not None and d >= c.expiry:
+                if d > c.expiry:
+                    warnings.append((d, "expiry_resolved_late", c))
                 if c.right == "P":
                     if spot < c.strike:
                         cash -= c.strike * mult * n; shares += mult * n; phase = "CALL"
