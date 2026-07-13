@@ -139,7 +139,8 @@ def format_report(rep) -> str:
     return "\n".join(L)
 
 _RIGHT_WORD = {"P": "PUT", "C": "CALL"}
-_TERM = {"CLOSE_PUT", "CLOSE_CALL", "PUT_EXPIRED", "CALL_EXPIRED", "ASSIGNED", "CALLED_AWAY"}
+_TERM = {"CLOSE_PUT", "CLOSE_CALL", "PUT_EXPIRED", "CALL_EXPIRED", "ASSIGNED",
+         "CALLED_AWAY", "ROLL_CLOSE"}
 
 def position_log(result, cfg) -> pd.DataFrame:
     mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
@@ -152,6 +153,8 @@ def position_log(result, cfg) -> pd.DataFrame:
             credit = open_opt.price_per_contract * mult * n - comm * n
             if t.action in ("CLOSE_PUT", "CLOSE_CALL"):
                 cost, outcome = t.price_per_contract * mult * n + comm * n, "Took profit"
+            elif t.action == "ROLL_CLOSE":
+                cost, outcome = t.price_per_contract * mult * n + comm * n, "Rolled"
             elif t.action in ("PUT_EXPIRED", "CALL_EXPIRED"):
                 cost, outcome = 0.0, "Expired worthless"
             elif t.action == "ASSIGNED":

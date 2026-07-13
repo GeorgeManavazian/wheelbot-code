@@ -75,3 +75,58 @@ def test_basis_clears_after_called_away():
     res = run_wheel(_chain(rows), _cfg(call_min_strike="basis"))
     calls = [t for t in res.trades if t.action == "SELL_CALL"]
     assert [c.contract.strike for c in calls] == [475.0, 455.0]
+
+# ---- variant: roll-puts (roll_puts=True) ----
+
+def test_roll_puts_buys_back_at_ask_and_sells_fresh_put_same_day():
+    # put 470 ITM at expiry (spot 465): buy back at the ask, never assign,
+    # then normal entry logic sells the fresh 460 put the SAME day.
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
+        ["2024-01-09","2024-01-16",7,460,"P",2.00,2.10,2.05,2.05,-0.30,0.1,465.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(roll_puts=True))
+    acts = [t.action for t in res.trades]
+    assert "ASSIGNED" not in acts
+    assert acts == ["SELL_PUT","ROLL_CLOSE","SELL_PUT"]
+    roll = [t for t in res.trades if t.action == "ROLL_CLOSE"][0]
+    assert roll.price_per_contract == pytest.approx(5.10)     # that day's ask
+    fresh = [t for t in res.trades if t.action == "SELL_PUT"][1]
+    assert fresh.contract.strike == 460.0 and fresh.date == pd.Timestamp("2024-01-09")
+    # +200 credit -510 buyback +200 credit -205 settle fresh put at mid
+    assert res.final_cash == pytest.approx(50_000 + 200 - 510 + 200 - 205)
+    assert res.final_shares == 0
+
+def test_roll_puts_missing_mark_falls_back_to_intrinsic():
+    # no row for the expiring 470 put on expiry day -> close at intrinsic 470-465=5.
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-16",7,460,"P",2.00,2.10,2.05,2.05,-0.30,0.1,465.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(roll_puts=True))
+    acts = [t.action for t in res.trades]
+    assert "ASSIGNED" not in acts
+    roll = [t for t in res.trades if t.action == "ROLL_CLOSE"][0]
+    assert roll.price_per_contract == pytest.approx(5.00)     # intrinsic fallback
+
+def test_roll_puts_skips_entry_when_only_identical_contract_available():
+    # nothing sellable after the buyback except the contract just closed ->
+    # no re-entry (and dte-0 is outside the band anyway); day ends flat.
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(roll_puts=True))
+    acts = [t.action for t in res.trades]
+    assert acts == ["SELL_PUT","ROLL_CLOSE"]
+    assert res.final_cash == pytest.approx(50_000 + 200 - 510)
+
+def test_roll_puts_otm_expiry_unchanged():
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",0.00,0.05,0.02,0.02,-0.01,0.1,475.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(roll_puts=True))
+    acts = [t.action for t in res.trades]
+    assert acts == ["SELL_PUT","PUT_EXPIRED"]

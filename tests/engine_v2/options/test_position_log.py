@@ -27,6 +27,18 @@ def test_blotter_outcomes_and_pnl():
     sh = df[df.instrument=="SHARES"].iloc[0]
     assert sh.realized_pnl == pytest.approx(1000) and sh.outcome == "Called away"
 
+def test_blotter_rolled_outcome():
+    from src.engine_v2.options.wheel import WheelResult
+    trades = [
+        _t("2024-01-02","SELL_PUT",470,"P",1,2.00),    # credit 200
+        _t("2024-02-16","ROLL_CLOSE",470,"P",1,5.10),  # cost 510 -> pnl -310, Rolled
+    ]
+    res = WheelResult(pd.Series(dtype=float), trades, 0.0, 0)
+    df = position_log(res, WheelConfig(commission_per_contract=0.0))
+    row = df.iloc[0]
+    assert row.outcome == "Rolled"
+    assert row.realized_pnl == pytest.approx(200 - 510)
+
 def test_blotter_reconciles_to_total():
     FIX = "fixtures/spy_wheel_cycle.parquet"
     if not os.path.exists(FIX): pytest.skip("fixture missing")

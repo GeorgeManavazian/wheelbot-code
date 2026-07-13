@@ -20,6 +20,7 @@ class WheelConfig:
     # defense variants (amendment 2026-07-12b) — all default-off so plain
     # behavior is byte-identical.
     call_min_strike: str | None = None   # "basis": covered calls only at strike >= assignment strike
+    roll_puts: bool = False              # ITM put at expiry: buy back at ask, never assign; re-enter same day
 
 @dataclass
 class Trade:
@@ -105,7 +106,16 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                     short = None; closed_today = c
             if short is not None and d == c.expiry:
                 if c.right == "P":
-                    if spot < c.strike:
+                    if spot < c.strike and cfg.roll_puts:
+                        # never take assignment: buy back at the ask (intrinsic
+                        # when the mark is missing); normal entry logic below
+                        # re-enters the SAME day (closed_today blocks only the
+                        # identical contract).
+                        px = mark.ask if mark is not None else c.strike - spot
+                        cash -= px * mult * n + cfg.commission_per_contract * n
+                        trades.append(Trade(d, "ROLL_CLOSE", c, n, px, cash))
+                        closed_today = c
+                    elif spot < c.strike:
                         cash -= c.strike * mult * n; shares += mult * n; phase = "CALL"
                         basis = c.strike
                         trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash))
