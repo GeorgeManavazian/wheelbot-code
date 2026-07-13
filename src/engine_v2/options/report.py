@@ -22,6 +22,7 @@ class WheelReport:
     periods_per_year: float
     ticker: str = "SPY"
     recent_is_full: bool = False
+    defense: dict | None = None   # campaign-level defense stats; None on plain runs
 
 def buy_hold_curve(chain, starting_capital) -> pd.Series:
     """Buy-hold the chain's OWN underlying (was spy_buy_hold, which silently
@@ -53,8 +54,10 @@ def wheel_stats(result, cfg) -> dict:
     trades = result.trades
     mult = cfg.contract_multiplier
     def of(a): return [t for t in trades if t.action == a]
-    sells = of("SELL_PUT") + of("SELL_CALL")
-    closes = of("CLOSE_PUT") + of("CLOSE_CALL")
+    # rolled legs are real entries/exits; stops are real exits. Plain runs never
+    # produce these actions, so plain net_premium is unchanged.
+    sells = of("SELL_PUT") + of("SELL_CALL") + of("ROLL_OPEN")
+    closes = of("CLOSE_PUT") + of("CLOSE_CALL") + of("ROLL_CLOSE") + of("STOP_CLOSE")
     prem_in = sum(t.price_per_contract * mult * t.contracts for t in sells)
     prem_out = sum(t.price_per_contract * mult * t.contracts for t in closes)
     commission = cfg.commission_per_contract * sum(t.contracts for t in sells + closes)
@@ -73,7 +76,68 @@ def wheel_stats(result, cfg) -> dict:
             dtype=int).value_counts().sort_index(),
         "n_days_flat": result.days_flat,
         "pct_days_flat": (result.days_flat / len(result.equity)) if len(result.equity) else 0.0,
+        "n_rolls": len(of("ROLL_CLOSE")),
+        "n_stops": len(of("STOP_CLOSE")),
+        "n_campaigns": len({t.campaign_id for t in trades if t.campaign_id}),
+        "n_warnings": len(getattr(result, "warnings", []) or []),
+        "days_shares_uncovered": getattr(result, "days_shares_uncovered", 0),
     }
+
+def campaign_table(result, cfg) -> pd.DataFrame:
+    """One row per campaign: cash-flow P&L (exact for campaigns that ended flat;
+    the final campaign may still be open -> flagged, P&L is cash-only)."""
+    rows, cur = [], None
+    prev_cash = cfg.starting_capital
+    for t in result.trades:
+        if cur is None or t.campaign_id != cur["campaign_id"]:
+            if cur is not None:
+                rows.append(cur)
+                prev_cash = cur["_last_cash"]
+            cur = dict(campaign_id=t.campaign_id, opened=t.date, closed=t.date,
+                       n_trades=0, n_rolls=0, pnl=0.0, open_at_end=False,
+                       _first_cash=prev_cash, _last_cash=t.cash_after)
+        cur["n_trades"] += 1
+        cur["closed"] = t.date
+        cur["_last_cash"] = t.cash_after
+        if t.action == "ROLL_CLOSE":
+            cur["n_rolls"] += 1
+    if cur is not None:
+        # the last campaign is open iff something is still on the book
+        cur["open_at_end"] = (result.final_shares > 0) or result.residual_settled
+        rows.append(cur)
+    for r in rows:
+        r["pnl"] = r["_last_cash"] - r["_first_cash"]
+        del r["_first_cash"], r["_last_cash"]
+    return pd.DataFrame(rows, columns=["campaign_id","opened","closed","n_trades",
+                                       "n_rolls","pnl","open_at_end"])
+
+def roll_counterfactuals(result, chain, cfg) -> pd.DataFrame:
+    """Short-leg-only counterfactual for every leg closed by a roll: what the
+    close actually realized vs what holding THAT leg to its own expiry would
+    have settled at (credit - intrinsic). Does NOT model the post-assignment
+    path — labeled approximation, per the repair spec."""
+    mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
+    und = underlying_series(chain)
+    opens, rows = {}, []
+    for t in result.trades:
+        if t.action in ("SELL_PUT", "SELL_CALL", "ROLL_OPEN"):
+            opens[(t.contract, t.campaign_id)] = t
+        elif t.action == "ROLL_CLOSE":
+            o = opens.get((t.contract, t.campaign_id))
+            exp = pd.Timestamp(t.contract.expiry)
+            if o is None or exp not in und.index:
+                continue
+            n = t.contracts
+            intrinsic = max(t.contract.strike - float(und[exp]), 0.0)
+            actual = (o.price_per_contract - t.price_per_contract) * mult * n - 2 * comm * n
+            held = (o.price_per_contract - intrinsic) * mult * n - comm * n
+            rows.append(dict(campaign_id=t.campaign_id, closed=t.date,
+                             strike=float(t.contract.strike),
+                             actual_close_pnl=actual, held_to_expiry_pnl=held,
+                             roll_advantage=actual - held))
+    return pd.DataFrame(rows, columns=["campaign_id","closed","strike",
+                                       "actual_close_pnl","held_to_expiry_pnl",
+                                       "roll_advantage"])
 
 def wheel_report(result, chain, cfg, recent_start="2021-07-01",
                  spy_path="data/options/spy_greeks_eod_all.parquet") -> WheelReport:
@@ -86,6 +150,24 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01",
     recent_is_full = rs <= eq.index.min()
     bh_recent = bh[bh.index >= rs]
     benchmark_recent = _perf(bh_recent, ppy) if len(bh_recent) > 1 else _perf(bh, ppy)
+    stats = wheel_stats(result, cfg)
+    defense = None
+    if stats["n_rolls"] or stats["n_stops"] or cfg.liquidate_assignment or cfg.call_min_strike:
+        ct = campaign_table(result, cfg)
+        cf = roll_counterfactuals(result, chain, cfg)
+        closed = ct[~ct["open_at_end"]]
+        defense = {
+            "n_campaigns": stats["n_campaigns"],
+            "campaign_win_rate": float((closed["pnl"] > 0).mean()) if len(closed) else float("nan"),
+            "rolls_per_campaign": ct["n_rolls"].value_counts().sort_index().to_dict(),
+            "n_stops": stats["n_stops"],
+            "roll_advantage_total": float(cf["roll_advantage"].sum()) if len(cf) else 0.0,
+            "roll_advantage_positive": int((cf["roll_advantage"] > 0).sum()) if len(cf) else 0,
+            "roll_advantage_negative": int((cf["roll_advantage"] < 0).sum()) if len(cf) else 0,
+            "days_shares_uncovered": stats["days_shares_uncovered"],
+            "n_warnings": stats["n_warnings"],
+            "liquidate_fill_note": bool(cfg.liquidate_assignment),
+        }
     return WheelReport(
         metrics=_perf(eq, ppy),
         recent=_perf(eq_recent, ppy) if len(eq_recent) > 1 else _perf(eq, ppy),
@@ -95,9 +177,10 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01",
         benchmark_underlying_recent=benchmark_recent,
         benchmark_spy=_perf(spy, ppy) if spy is not None else None,
         recent_is_full=recent_is_full,
-        stats=wheel_stats(result, cfg),
+        stats=stats,
         periods_per_year=ppy,
         ticker=cfg.ticker,
+        defense=defense,
     )
 
 def _pct(x): return "n/a" if pd.isna(x) else f"{x:+.2%}"
@@ -136,6 +219,19 @@ def format_report(rep) -> str:
         exp = dtes.index.repeat(dtes.values).to_series()
         L.append(f"  realized DTE: {dtes.index.min()}..{dtes.index.max()}  "
                  f"(median {exp.median():.0f})")
+    if rep.defense:
+        dd = rep.defense
+        L.append("\nDefense stats (campaign-level)")
+        L.append(f"  campaigns {dd['n_campaigns']}  win rate {dd['campaign_win_rate']:.0%}  "
+                 f"stops {dd['n_stops']}  rolls/campaign {dd['rolls_per_campaign']}")
+        L.append(f"  roll counterfactual (short-leg approx): total advantage "
+                 f"{dd['roll_advantage_total']:+.0f}  "
+                 f"(helped {dd['roll_advantage_positive']}, hurt {dd['roll_advantage_negative']})")
+        L.append(f"  days shares uncovered {dd['days_shares_uncovered']}  "
+                 f"skipped checks {dd['n_warnings']}")
+        if dd["liquidate_fill_note"]:
+            L.append("  note: liquidation fills at EOD spot — no stock spread/slippage modeled "
+                     "(options pay full spread)")
     return "\n".join(L)
 
 _RIGHT_WORD = {"P": "PUT", "C": "CALL"}
@@ -146,7 +242,7 @@ def position_log(result, cfg) -> pd.DataFrame:
     mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
     rows, open_opt, assign = [], None, None
     for t in result.trades:
-        if t.action in ("SELL_PUT", "SELL_CALL"):
+        if t.action in ("SELL_PUT", "SELL_CALL", "ROLL_OPEN"):
             open_opt = t
         elif t.action in _TERM and open_opt is not None:
             oc, n = open_opt.contract, open_opt.contracts
@@ -161,7 +257,7 @@ def position_log(result, cfg) -> pd.DataFrame:
                 cost, outcome = 0.0, "Expired worthless"
             elif t.action == "ASSIGNED":
                 cost, outcome = 0.0, "Assigned"
-                assign = (oc.strike, n, t.date)
+                assign = (oc.strike, n, t.date, t.campaign_id)
             else:  # CALLED_AWAY
                 cost, outcome = 0.0, "Called away"
             realized = credit - cost
@@ -170,29 +266,32 @@ def position_log(result, cfg) -> pd.DataFrame:
                 qty=n, credit=credit, outcome=outcome, cost_to_close=cost,
                 realized_pnl=realized,
                 pct_of_credit=(realized / credit if credit else 0.0),
-                days_held=(t.date - open_opt.date).days))
+                days_held=(t.date - open_opt.date).days,
+                campaign_id=t.campaign_id))
             if t.action == "CALLED_AWAY" and assign is not None:
-                astrike, aqty, adate = assign
+                astrike, aqty, adate, _acid = assign
                 rows.append(dict(opened=adate, closed=t.date, instrument="SHARES",
                     strike=astrike, expiry=pd.NaT, qty=aqty,
                     credit=-astrike * mult * aqty, outcome="Called away",
                     cost_to_close=oc.strike * mult * aqty,
                     realized_pnl=(oc.strike - astrike) * mult * aqty,
-                    pct_of_credit=float("nan"), days_held=(t.date - adate).days))
+                    pct_of_credit=float("nan"), days_held=(t.date - adate).days,
+                    campaign_id=t.campaign_id))
                 assign = None
             open_opt = None
         elif t.action == "LIQUIDATE" and assign is not None:
             # shares dumped at spot the moment assignment fired (LIQUIDATE is a
             # shares closure, not an option terminal — the put row was already
             # written by the ASSIGNED trade).
-            astrike, aqty, adate = assign
+            astrike, aqty, adate, _acid = assign
             spot = t.price_per_contract
             rows.append(dict(opened=adate, closed=t.date, instrument="SHARES",
                 strike=astrike, expiry=pd.NaT, qty=aqty,
                 credit=-astrike * mult * aqty, outcome="Liquidated",
                 cost_to_close=spot * mult * aqty,
                 realized_pnl=(spot - astrike) * mult * aqty,
-                pct_of_credit=float("nan"), days_held=(t.date - adate).days))
+                pct_of_credit=float("nan"), days_held=(t.date - adate).days,
+                campaign_id=t.campaign_id))
             assign = None
     if open_opt is not None:
         oc, n = open_opt.contract, open_opt.contracts
@@ -203,14 +302,14 @@ def position_log(result, cfg) -> pd.DataFrame:
             instrument=_RIGHT_WORD[oc.right], strike=oc.strike, expiry=oc.expiry, qty=n,
             credit=credit, outcome="Settled at mark", cost_to_close=credit - realized,
             realized_pnl=realized, pct_of_credit=(realized / credit if credit else 0.0),
-            days_held=float("nan")))
+            days_held=float("nan"), campaign_id=open_opt.campaign_id))
         open_opt = None
     if assign is not None and getattr(result, "final_shares", 0) > 0:
-        astrike, aqty, adate = assign
+        astrike, aqty, adate, acid = assign
         rows.append(dict(opened=adate, closed=pd.NaT, instrument="SHARES",
             strike=astrike, expiry=pd.NaT, qty=aqty, credit=-astrike * mult * aqty,
             outcome="Open", cost_to_close=float("nan"), realized_pnl=float("nan"),
-            pct_of_credit=float("nan"), days_held=float("nan")))
+            pct_of_credit=float("nan"), days_held=float("nan"), campaign_id=acid))
     cols = ["opened","closed","instrument","strike","expiry","qty","credit","outcome",
-            "cost_to_close","realized_pnl","pct_of_credit","days_held"]
+            "cost_to_close","realized_pnl","pct_of_credit","days_held","campaign_id"]
     return pd.DataFrame(rows, columns=cols)
