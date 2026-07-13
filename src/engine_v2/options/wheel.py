@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import pandas as pd
 from .select import select_contract, option_mark
 
+MAX_ROLLS_PER_CAMPAIGN = 2   # then the normal expiry path (assignment) applies
+
 @dataclass
 class WheelConfig:
     starting_capital: float = 100_000.0
@@ -86,6 +88,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
         # 1) manage an existing short: take-profit, roll, stop, then expiry
         closed_today = None  # contract closed via TP this day (block same-day churn into it)
         no_entry_today = False  # set by STOP_CLOSE: stop means flat until tomorrow
+        rolled_today = False    # a roll consumes the day's stop check (new leg re-evaluates tomorrow)
         if short is not None:
             c = short["contract"]; n = short["contracts"]
             mark = option_mark(day_chain, d, c)
@@ -117,12 +120,39 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                     trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
                                         c, n, mark.ask, cash, campaign))
                     short = None; closed_today = c
-            # put-stop (after the TP check; puts only — the shares anatomy showed
-            # calls are not the losing leg). EOD marks only. Never on expiry day
-            # (assignment settles at intrinsic; buying back pays the spread on
-            # top). Firing means FLAT: no re-entry until tomorrow.
+            # mid-life roll of a tested put (repair spec 2026-07-13): fires while
+            # extrinsic is alive, only ever for a net credit, at most
+            # MAX_ROLLS_PER_CAMPAIGN times per campaign. Destination re-uses the
+            # entry config (delta, target DTE) — nothing is re-tuned.
+            if (short is not None and cfg.roll_tested_puts and c.right == "P"
+                    and d < c.expiry and spot <= c.strike
+                    and rolls_this_campaign < MAX_ROLLS_PER_CAMPAIGN):
+                if mark is None:
+                    warnings.append((d, "roll_check_no_mark", c))
+                else:
+                    new_c = select_contract(day_chain, d, "P", cfg.put_delta,
+                                            cfg.target_dte, cfg.ticker)
+                    new_mark = option_mark(day_chain, d, new_c) if new_c is not None else None
+                    if (new_c is not None and new_c != c and new_mark is not None
+                            and sell_proceeds(new_mark, n, cfg) >= buy_cost(mark, n, cfg)):
+                        cost = buy_cost(mark, n, cfg)
+                        cash -= cost; campaign_premium -= cost
+                        trades.append(Trade(d, "ROLL_CLOSE", c, n, mark.ask, cash, campaign))
+                        proceeds = sell_proceeds(new_mark, n, cfg)
+                        cash += proceeds; campaign_premium += proceeds
+                        short = {"contract": new_c, "contracts": n,
+                                 "credit": new_mark.bid, "last_mid": new_mark.mid}
+                        trades.append(Trade(d, "ROLL_OPEN", new_c, n, new_mark.bid, cash, campaign))
+                        rolls_this_campaign += 1
+                        c, mark = new_c, new_mark
+                        rolled_today = True
+            # put-stop (after the TP and roll checks; puts only — the shares
+            # anatomy showed calls are not the losing leg). EOD marks only.
+            # Never on expiry day (assignment settles at intrinsic; buying back
+            # pays the spread on top). Firing means FLAT: no re-entry until
+            # tomorrow.
             if (short is not None and cfg.put_stop_mult is not None and c.right == "P"
-                    and d < c.expiry):
+                    and d < c.expiry and not rolled_today):
                 if mark is None:
                     warnings.append((d, "stop_check_no_mark", c))
                 elif mark.ask >= cfg.put_stop_mult * short["credit"]:
