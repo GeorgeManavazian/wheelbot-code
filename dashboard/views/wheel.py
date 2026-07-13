@@ -214,7 +214,7 @@ def render():
         for col in ("credit", "cost_to_close", "realized_pnl"):
             display[col] = display[col].map(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
         display["strike"] = display["strike"].map(
-            lambda x: f"${x:,.0f}" if pd.notna(x) else "")
+            lambda x: f"${x:,.2f}" if pd.notna(x) else "")
         display["pct_of_credit"] = display["pct_of_credit"].map(
             lambda x: f"{x:+.1%}" if pd.notna(x) else "")
         st.dataframe(_style_blotter(labels.humanize(display), blotter),
