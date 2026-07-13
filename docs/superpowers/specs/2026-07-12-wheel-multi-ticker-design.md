@@ -222,3 +222,32 @@ Per ticker, all nine, no cherry-picking:
 - Schwab: can a money-market / T-bill position collateralize a cash-secured put,
   and what does swept cash actually earn? Decides whether `cash_yield` stays 0.
 - Real capital number, for the reality-check re-run of any survivor.
+
+## Amendment 2026-07-12b — defense variants (pre-registered before any run)
+
+Loss anatomy on GDX (frozen config, 678 trades) located the damage: options legs
++$255,858, post-assignment shares **−$211,100** — all 10 worst trades are
+"Called away" share positions, slow grinds not gaps. Mechanism: after assignment
+above market, a 7-DTE 20-delta call sits near the depressed price, below cost
+basis; any exit locks the loss. QQQ is dropped from the basket analysis
+(redundant with SPY-at-basket-config as trending-index control) but stays in the
+data pull, dead last.
+
+Five runs per ticker, frozen base config, no tuning knobs on the defenses:
+
+1. **plain** — the wheel as-is (control).
+2. **no-calls-below-basis** (`call_min_strike: "basis"`) — post-assignment calls
+   only at strike ≥ assignment strike; within the selected expiry, among strikes
+   ≥ basis take the one nearest target delta; none available → hold shares, no call.
+3. **roll-puts** (`roll_puts: true`) — on expiry day with spot < strike, buy the
+   put back at the ask and sell a fresh target-delta/target-DTE put same day;
+   never take assignment.
+4. **liquidate-at-assignment** (`liquidate_assignment: true`) — take assignment,
+   sell all shares at that day's close, return to puts (pure put-write).
+5. **put-stop** (`put_stop_mult: 3.0`) — close the put when its EOD ask ≥ 3× the
+   credit received. EOD marks only until the hourly re-run; gap caveat applies
+   (stops fill at the bottom — owner's own Chan note).
+
+Report all five side by side per ticker: P&L, Sharpe, maxDD, options-leg P&L vs
+shares-leg P&L, assignments, trade count. **All results reported; no best-cell
+selection.** Every run re-executed with intraday TP when hourly data lands.
