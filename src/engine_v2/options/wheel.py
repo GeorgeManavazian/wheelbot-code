@@ -32,6 +32,7 @@ class Trade:
     contracts: int
     price_per_contract: float
     cash_after: float
+    campaign_id: int = 0
 
 def underlying_series(chain: pd.DataFrame) -> pd.Series:
     return chain.groupby("date")["underlying"].first()
@@ -52,6 +53,8 @@ class WheelResult:
     final_shares: int
     residual_settled: bool = False
     days_flat: int = 0
+    warnings: list = None
+    days_shares_uncovered: int = 0
 
 def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResult:
     if cfg.liquidate_assignment and cfg.call_min_strike is not None:
@@ -65,6 +68,8 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
     mult = cfg.contract_multiplier
     cash, shares, phase, short = cfg.starting_capital, 0, "PUT", None
     basis = None  # assigned put's strike while shares are held (defense variants)
+    campaign, rolls_this_campaign, campaign_premium = 0, 0, 0.0
+    warnings, days_shares_uncovered = [], 0
     trades, equity = [], {}
     prev_d, days_flat = None, 0
 
@@ -98,45 +103,48 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                     for i in range(len(day) - 1):
                         if day.iloc[i]["close"] <= thresh:
                             fill = day.iloc[i + 1]
-                            cash -= fill["close"] * mult * n + cfg.commission_per_contract * n
+                            cost = fill["close"] * mult * n + cfg.commission_per_contract * n
+                            cash -= cost; campaign_premium -= cost
                             trades.append(Trade(fill["timestamp"],
                                 "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                c, n, float(fill["close"]), cash))
+                                c, n, float(fill["close"]), cash, campaign))
                             short = None; closed_today = c; tp_fired = True
                             break
                 if not tp_fired and short is not None and mark is not None and mark.ask <= thresh:
-                    cash -= buy_cost(mark, n, cfg)
+                    cost = buy_cost(mark, n, cfg)
+                    cash -= cost; campaign_premium -= cost
                     trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                        c, n, mark.ask, cash))
+                                        c, n, mark.ask, cash, campaign))
                     short = None; closed_today = c
             # put-stop (after the TP check; puts only — the shares anatomy showed
             # calls are not the losing leg). EOD marks only; no intraday stop.
             if (short is not None and cfg.put_stop_mult is not None and c.right == "P"
                     and mark is not None
                     and mark.ask >= cfg.put_stop_mult * short["credit"]):
-                cash -= buy_cost(mark, n, cfg)
-                trades.append(Trade(d, "STOP_CLOSE", c, n, mark.ask, cash))
+                cost = buy_cost(mark, n, cfg)
+                cash -= cost; campaign_premium -= cost
+                trades.append(Trade(d, "STOP_CLOSE", c, n, mark.ask, cash, campaign))
                 short = None; closed_today = c
             if short is not None and d == c.expiry:
                 if c.right == "P":
                     if spot < c.strike:
                         cash -= c.strike * mult * n; shares += mult * n; phase = "CALL"
                         basis = c.strike
-                        trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash))
+                        trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash, campaign))
                         if cfg.liquidate_assignment:
                             # pure put-write: dump the shares at spot same day
                             cash += shares * spot
-                            trades.append(Trade(d, "LIQUIDATE", c, n, spot, cash))
+                            trades.append(Trade(d, "LIQUIDATE", c, n, spot, cash, campaign))
                             shares = 0; phase = "PUT"; basis = None
                     else:
-                        trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash))
+                        trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash, campaign))
                 else:
                     if spot > c.strike:
                         cash += c.strike * mult * n; shares -= mult * n; phase = "PUT"
                         basis = None
-                        trades.append(Trade(d, "CALLED_AWAY", c, n, c.strike, cash))
+                        trades.append(Trade(d, "CALLED_AWAY", c, n, c.strike, cash, campaign))
                     else:
-                        trades.append(Trade(d, "CALL_EXPIRED", c, n, 0.0, cash))
+                        trades.append(Trade(d, "CALL_EXPIRED", c, n, 0.0, cash, campaign))
                 short = None
 
         # 2) open a new short if flat and eligible. Same-day re-entry after a
@@ -149,9 +157,12 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                 if c is not None and c != closed_today and mark is not None:
                     n = int(cash // (c.strike * mult))
                     if n > 0:
-                        cash += sell_proceeds(mark, n, cfg)
+                        campaign += 1
+                        rolls_this_campaign, campaign_premium = 0, 0.0
+                        proceeds = sell_proceeds(mark, n, cfg)
+                        cash += proceeds; campaign_premium += proceeds
                         short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
-                        trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash))
+                        trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
             elif phase == "CALL" and shares >= mult:
                 floor = basis if (cfg.call_min_strike == "basis" and basis is not None) else None
                 c = select_contract(day_chain, d, "C", cfg.call_delta, cfg.target_dte,
@@ -159,14 +170,17 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                 mark = option_mark(day_chain, d, c) if c is not None else None
                 if c is not None and c != closed_today and mark is not None:
                     n = shares // mult
-                    cash += sell_proceeds(mark, n, cfg)
+                    proceeds = sell_proceeds(mark, n, cfg)
+                    cash += proceeds; campaign_premium += proceeds
                     short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
-                    trades.append(Trade(d, "SELL_CALL", c, n, mark.bid, cash))
+                    trades.append(Trade(d, "SELL_CALL", c, n, mark.bid, cash, campaign))
 
         # flat = in cash with nothing writable. Holding shares with no writable
         # call is NOT flat — it is exposed.
         if short is None and not (phase == "CALL" and shares >= mult):
             days_flat += 1
+        if short is None and phase == "CALL" and shares >= mult:
+            days_shares_uncovered += 1
 
         # 3) mark equity (short MTM at mid; carry last mid across gaps)
         liab = 0.0
@@ -185,4 +199,5 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
         cash -= mid * mult * short["contracts"]
         residual_settled = True
     return WheelResult(pd.Series(equity), trades, cash, shares, residual_settled,
-                       days_flat=days_flat)
+                       days_flat=days_flat, warnings=warnings,
+                       days_shares_uncovered=days_shares_uncovered)
