@@ -83,8 +83,9 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
             cash *= (1 + cfg.cash_yield / 365) ** (d - prev_d).days
         prev_d = d
 
-        # 1) manage an existing short: take-profit, then expiry resolution
+        # 1) manage an existing short: take-profit, roll, stop, then expiry
         closed_today = None  # contract closed via TP this day (block same-day churn into it)
+        no_entry_today = False  # set by STOP_CLOSE: stop means flat until tomorrow
         if short is not None:
             c = short["contract"]; n = short["contracts"]
             mark = option_mark(day_chain, d, c)
@@ -117,14 +118,18 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                                         c, n, mark.ask, cash, campaign))
                     short = None; closed_today = c
             # put-stop (after the TP check; puts only — the shares anatomy showed
-            # calls are not the losing leg). EOD marks only; no intraday stop.
+            # calls are not the losing leg). EOD marks only. Never on expiry day
+            # (assignment settles at intrinsic; buying back pays the spread on
+            # top). Firing means FLAT: no re-entry until tomorrow.
             if (short is not None and cfg.put_stop_mult is not None and c.right == "P"
-                    and mark is not None
-                    and mark.ask >= cfg.put_stop_mult * short["credit"]):
-                cost = buy_cost(mark, n, cfg)
-                cash -= cost; campaign_premium -= cost
-                trades.append(Trade(d, "STOP_CLOSE", c, n, mark.ask, cash, campaign))
-                short = None; closed_today = c
+                    and d < c.expiry):
+                if mark is None:
+                    warnings.append((d, "stop_check_no_mark", c))
+                elif mark.ask >= cfg.put_stop_mult * short["credit"]:
+                    cost = buy_cost(mark, n, cfg)
+                    cash -= cost; campaign_premium -= cost
+                    trades.append(Trade(d, "STOP_CLOSE", c, n, mark.ask, cash, campaign))
+                    short = None; closed_today = c; no_entry_today = True
             if short is not None and d == c.expiry:
                 if c.right == "P":
                     if spot < c.strike:
@@ -150,7 +155,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
         # 2) open a new short if flat and eligible. Same-day re-entry after a
         # take-profit close IS allowed (redeploy freed capital), but never back
         # into the identical contract just closed — that would be pure spread churn.
-        if short is None:
+        if short is None and not no_entry_today:
             if phase == "PUT":
                 c = select_contract(day_chain, d, "P", cfg.put_delta, cfg.target_dte, cfg.ticker)
                 mark = option_mark(day_chain, d, c) if c is not None else None

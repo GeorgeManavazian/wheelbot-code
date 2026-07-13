@@ -172,3 +172,46 @@ def test_put_stop_applies_to_puts_only():
     ]
     res = run_wheel(_chain(rows), _cfg(put_stop_mult=3.0))
     assert "STOP_CLOSE" not in [t.action for t in res.trades]
+
+# ---- repair pass: stop fixes ----
+
+def test_put_stop_cannot_fire_on_expiry_day():
+    # expiry day, deep ITM, ask >= 3x credit: stop must NOT fire; assignment
+    # (intrinsic, no spread) resolves the day instead.
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",9.00,9.10,9.05,9.05,-0.99,0.1,461.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(put_stop_mult=3.0))
+    acts = [t.action for t in res.trades]
+    assert "STOP_CLOSE" not in acts
+    assert "ASSIGNED" in acts
+
+def test_stop_blocks_all_entries_same_day():
+    # stop fires mid-life; a fresh sellable put exists the same day at another
+    # strike -> entry must NOT happen (stop means flat), but next day it may.
+    rows = [
+        ["2024-01-02","2024-01-16",14,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-05","2024-01-16",11,470,"P",6.50,6.60,6.55,6.55,-0.70,0.1,463.0],
+        # band-eligible same-day candidate (dte 14): must NOT be sold (stop = flat)
+        ["2024-01-05","2024-01-19",14,455,"P",2.00,2.10,2.05,2.05,-0.30,0.1,463.0],
+        # band-eligible next-day candidate: normal entry resumes
+        ["2024-01-08","2024-01-22",14,455,"P",2.00,2.10,2.05,2.05,-0.30,0.1,463.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(put_stop_mult=3.0, target_dte=14))
+    stop_day = [t for t in res.trades if t.action == "STOP_CLOSE"][0].date
+    same_day_entries = [t for t in res.trades
+                        if t.action == "SELL_PUT" and t.date == stop_day]
+    assert same_day_entries == []
+    next_day_entries = [t for t in res.trades
+                        if t.action == "SELL_PUT" and t.date > stop_day]
+    assert len(next_day_entries) == 1
+
+def test_stop_check_missing_mark_logs_warning():
+    # day 2 has no row for the held contract at all -> stop check skipped + logged
+    rows = [
+        ["2024-01-02","2024-01-16",14,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-05","2024-01-16",11,455,"P",2.00,2.10,2.05,2.05,-0.30,0.1,463.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(put_stop_mult=3.0, target_dte=14))
+    assert any(w[1] == "stop_check_no_mark" for w in res.warnings)
