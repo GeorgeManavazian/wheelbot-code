@@ -8,10 +8,12 @@ def derived_band(target_dte: int) -> tuple[int, int]:
     ceiling rejects a monthly when the weekly is absent. Display-only upstream."""
     return max(5, target_dte - 2), target_dte + 3
 
-def select_contract(chain, date, right, target_delta, target_dte, root):
+def select_contract(chain, date, right, target_delta, target_dte, root, min_strike=None):
     """Expiry FIRST (nearest target_dte within derived_band, from expiries visible
     on `date` only), THEN strike (nearest |delta| within that one expiry).
-    Deterministic; returns None -> sit in cash."""
+    `min_strike` filters strikes WITHIN the chosen expiry (the expiry choice never
+    changes); no strike >= min_strike there -> None. Deterministic; returns
+    None -> sit in cash."""
     lo, hi = derived_band(target_dte)
     cand = chain[(chain["date"] == date) & (chain["right"] == right)]
     if cand.empty:
@@ -23,6 +25,10 @@ def select_contract(chain, date, right, target_delta, target_dte, root):
     err = (dtes - target_dte).abs()
     best_exp = dtes[err == err.min()].index.max()   # tie -> longer-dated
     e = cand[cand["expiry"] == best_exp]
+    if min_strike is not None:
+        e = e[e["strike"] >= min_strike]
+        if e.empty:
+            return None
     row = e.loc[(e["delta"].abs() - abs(target_delta)).abs().idxmin()]
     return Contract(root, row["expiry"], float(row["strike"]), right)
 

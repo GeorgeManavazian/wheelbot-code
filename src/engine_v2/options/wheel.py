@@ -17,6 +17,9 @@ class WheelConfig:
     ticker: str = "SPY"
     contract_multiplier: int = 100
     commission_per_contract: float = 0.65
+    # defense variants (amendment 2026-07-12b) — all default-off so plain
+    # behavior is byte-identical.
+    call_min_strike: str | None = None   # "basis": covered calls only at strike >= assignment strike
 
 @dataclass
 class Trade:
@@ -55,6 +58,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
     by_date = {pd.Timestamp(k): g for k, g in chain.groupby("date")}
     mult = cfg.contract_multiplier
     cash, shares, phase, short = cfg.starting_capital, 0, "PUT", None
+    basis = None  # assigned put's strike while shares are held (defense variants)
     trades, equity = [], {}
     prev_d, days_flat = None, 0
 
@@ -103,12 +107,14 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                 if c.right == "P":
                     if spot < c.strike:
                         cash -= c.strike * mult * n; shares += mult * n; phase = "CALL"
+                        basis = c.strike
                         trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash))
                     else:
                         trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash))
                 else:
                     if spot > c.strike:
                         cash += c.strike * mult * n; shares -= mult * n; phase = "PUT"
+                        basis = None
                         trades.append(Trade(d, "CALLED_AWAY", c, n, c.strike, cash))
                     else:
                         trades.append(Trade(d, "CALL_EXPIRED", c, n, 0.0, cash))
@@ -128,7 +134,9 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                         short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
                         trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash))
             elif phase == "CALL" and shares >= mult:
-                c = select_contract(day_chain, d, "C", cfg.call_delta, cfg.target_dte, cfg.ticker)
+                floor = basis if (cfg.call_min_strike == "basis" and basis is not None) else None
+                c = select_contract(day_chain, d, "C", cfg.call_delta, cfg.target_dte,
+                                    cfg.ticker, min_strike=floor)
                 mark = option_mark(day_chain, d, c) if c is not None else None
                 if c is not None and c != closed_today and mark is not None:
                     n = shares // mult
