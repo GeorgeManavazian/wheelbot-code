@@ -251,3 +251,16 @@ Five runs per ticker, frozen base config, no tuning knobs on the defenses:
 Report all five side by side per ticker: P&L, Sharpe, maxDD, options-leg P&L vs
 shares-leg P&L, assignments, trade count. **All results reported; no best-cell
 selection.** Every run re-executed with intraday TP when hourly data lands.
+
+## Amendment 2026-07-12c — basket run has two pre-registered arms
+
+Owner decision (before any basket ticker beyond GDX/SLV/XOP/SPY was seen):
+the frozen basket run executes **two arms per ticker**:
+
+1. **plain** — the original frozen config, unchanged.
+2. **call>=basis** — same config + `call_min_strike: "basis"`. Mechanism was
+   identified from loss anatomy and pre-registered (amendment 2026-07-12b)
+   BEFORE the defense matrix ran; XBI/EEM/EWZ/TLT/ARKK are out-of-sample for it.
+
+Every row reported. No third arm, no tuning, no post-hoc additions. Both arms
+re-run with intraday TP when hourly data lands.
