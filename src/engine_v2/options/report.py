@@ -179,6 +179,19 @@ def position_log(result, cfg) -> pd.DataFrame:
                     pct_of_credit=float("nan"), days_held=(t.date - adate).days))
                 assign = None
             open_opt = None
+        elif t.action == "LIQUIDATE" and assign is not None:
+            # shares dumped at spot the moment assignment fired (LIQUIDATE is a
+            # shares closure, not an option terminal — the put row was already
+            # written by the ASSIGNED trade).
+            astrike, aqty, adate = assign
+            spot = t.price_per_contract
+            rows.append(dict(opened=adate, closed=t.date, instrument="SHARES",
+                strike=astrike, expiry=pd.NaT, qty=aqty,
+                credit=-astrike * mult * aqty, outcome="Liquidated",
+                cost_to_close=spot * mult * aqty,
+                realized_pnl=(spot - astrike) * mult * aqty,
+                pct_of_credit=float("nan"), days_held=(t.date - adate).days))
+            assign = None
     if open_opt is not None:
         oc, n = open_opt.contract, open_opt.contracts
         credit = open_opt.price_per_contract * mult * n - comm * n

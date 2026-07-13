@@ -130,3 +130,37 @@ def test_roll_puts_otm_expiry_unchanged():
     res = run_wheel(_chain(rows), _cfg(roll_puts=True))
     acts = [t.action for t in res.trades]
     assert acts == ["SELL_PUT","PUT_EXPIRED"]
+
+# ---- variant: liquidate-at-assignment (liquidate_assignment=True) ----
+
+def test_liquidate_assignment_dumps_shares_at_spot_same_day():
+    # assignment fires, shares sold at that day's spot immediately, back to
+    # PUT phase; a writable call exists but must never be sold; next entry is
+    # the fresh put, same day.
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
+        ["2024-01-09","2024-01-16",7,465,"C",3.00,3.10,3.05,3.05, 0.30,0.1,465.0],
+        ["2024-01-09","2024-01-16",7,460,"P",2.00,2.10,2.05,2.05,-0.30,0.1,465.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg(liquidate_assignment=True))
+    acts = [t.action for t in res.trades]
+    assert "SELL_CALL" not in acts
+    assert acts == ["SELL_PUT","ASSIGNED","LIQUIDATE","SELL_PUT"]
+    liq = [t for t in res.trades if t.action == "LIQUIDATE"][0]
+    assert liq.price_per_contract == pytest.approx(465.0)   # that day's spot
+    assert liq.date == pd.Timestamp("2024-01-09")
+    fresh = [t for t in res.trades if t.action == "SELL_PUT"][1]
+    assert fresh.contract.right == "P" and fresh.date == pd.Timestamp("2024-01-09")
+    assert res.final_shares == 0
+    # +200 credit -47000 assigned +46500 liquidate +200 credit -205 settle at mid
+    assert res.final_cash == pytest.approx(50_000 + 200 - 47_000 + 46_500 + 200 - 205)
+
+def test_liquidate_assignment_off_keeps_shares():
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg())
+    assert [t.action for t in res.trades] == ["SELL_PUT","ASSIGNED"]
+    assert res.final_shares == 100

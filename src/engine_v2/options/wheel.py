@@ -21,6 +21,7 @@ class WheelConfig:
     # behavior is byte-identical.
     call_min_strike: str | None = None   # "basis": covered calls only at strike >= assignment strike
     roll_puts: bool = False              # ITM put at expiry: buy back at ask, never assign; re-enter same day
+    liquidate_assignment: bool = False   # take assignment, dump all shares at that day's spot, back to puts
 
 @dataclass
 class Trade:
@@ -119,6 +120,11 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                         cash -= c.strike * mult * n; shares += mult * n; phase = "CALL"
                         basis = c.strike
                         trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash))
+                        if cfg.liquidate_assignment:
+                            # pure put-write: dump the shares at spot same day
+                            cash += shares * spot
+                            trades.append(Trade(d, "LIQUIDATE", c, n, spot, cash))
+                            shares = 0; phase = "PUT"; basis = None
                     else:
                         trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash))
                 else:
