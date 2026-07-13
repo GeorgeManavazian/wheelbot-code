@@ -116,3 +116,42 @@ def test_min_strike_no_inband_expiry_qualifies_returns_none():
     ch = _rows_chain(rows)
     assert select_contract(ch, pd.Timestamp("2024-01-02"), "C", 0.30, 7, "SPY",
                            min_strike=470.0) is None
+
+# ---- repair pass amendment 2026-07-13b: roll destination extends time ----
+
+def test_roll_destination_same_strike_beyond_held_expiry():
+    from src.engine_v2.options.select import select_roll_contract
+    # held 460P exp Jan-09; Jan-08 is not beyond; Jan-12 and Jan-17 both carry
+    # the 460 strike; anchor Jan-09 + 7 = Jan-16 -> Jan-17 wins.
+    rows = [
+        ["2024-01-04","2024-01-08",4,460,"P",3.00,3.10,3.05,3.05,-0.30,0.1,468.0],
+        ["2024-01-04","2024-01-12",8,460,"P",3.20,3.30,3.25,3.25,-0.30,0.1,468.0],
+        ["2024-01-04","2024-01-17",13,460,"P",4.20,4.30,4.25,4.25,-0.30,0.1,468.0],
+    ]
+    ch = _rows_chain(rows)
+    c = select_roll_contract(ch, pd.Timestamp("2024-01-04"), "P", 460.0,
+                             pd.Timestamp("2024-01-09"), 7, "SPY")
+    assert c is not None and c.expiry == pd.Timestamp("2024-01-17")
+    assert c.strike == 460.0
+
+def test_roll_destination_skips_expiry_missing_the_strike():
+    from src.engine_v2.options.select import select_roll_contract
+    # nearest-to-anchor expiry (Jan-17) lacks the 460 strike -> fall to Jan-12,
+    # which carries it.
+    rows = [
+        ["2024-01-04","2024-01-12",8,460,"P",3.20,3.30,3.25,3.25,-0.30,0.1,468.0],
+        ["2024-01-04","2024-01-17",13,455,"P",4.20,4.30,4.25,4.25,-0.30,0.1,468.0],
+    ]
+    ch = _rows_chain(rows)
+    c = select_roll_contract(ch, pd.Timestamp("2024-01-04"), "P", 460.0,
+                             pd.Timestamp("2024-01-09"), 7, "SPY")
+    assert c is not None and c.expiry == pd.Timestamp("2024-01-12")
+
+def test_roll_destination_none_when_nothing_beyond():
+    from src.engine_v2.options.select import select_roll_contract
+    rows = [
+        ["2024-01-04","2024-01-08",4,460,"P",3.00,3.10,3.05,3.05,-0.30,0.1,468.0],
+    ]
+    ch = _rows_chain(rows)
+    assert select_roll_contract(ch, pd.Timestamp("2024-01-04"), "P", 460.0,
+                                pd.Timestamp("2024-01-09"), 7, "SPY") is None

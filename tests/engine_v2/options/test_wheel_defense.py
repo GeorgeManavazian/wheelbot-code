@@ -223,7 +223,8 @@ def test_stop_check_missing_mark_logs_warning():
 _ROLLABLE = [
     ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
     ["2024-01-04","2024-01-09",5,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,468.0],
-    ["2024-01-04","2024-01-11",7,460,"P",3.20,3.30,3.25,3.25,-0.30,0.1,468.0],
+    # same strike, one cycle out — the canonical credit roll destination
+    ["2024-01-04","2024-01-11",7,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,468.0],
 ]
 
 def test_tested_put_rolls_midlife_with_credit():
@@ -233,13 +234,14 @@ def test_tested_put_rolls_midlife_with_credit():
     rc = res.trades[1]; ro = res.trades[2]
     assert rc.price_per_contract == pytest.approx(3.10)   # buyback at ask
     assert ro.price_per_contract == pytest.approx(3.20)   # new leg at bid
-    assert ro.contract.strike == 460.0
+    assert ro.contract.strike == 470.0            # same strike, out in time
+    assert ro.contract.expiry == pd.Timestamp("2024-01-11")
     assert rc.campaign_id == ro.campaign_id == 1          # same saga
 
 def test_roll_requires_net_credit():
     # new leg bid (2.90) < buyback ask (3.10) -> net debit -> no roll
     rows = [_ROLLABLE[0], _ROLLABLE[1],
-        ["2024-01-04","2024-01-11",7,460,"P",2.90,3.00,2.95,2.95,-0.30,0.1,468.0]]
+        ["2024-01-04","2024-01-11",7,470,"P",2.90,3.00,2.95,2.95,-0.52,0.1,468.0]]
     res = run_wheel(_chain(rows), _cfg(roll_tested_puts=True))
     assert [t.action for t in res.trades] == ["SELL_PUT"]
 
@@ -247,7 +249,7 @@ def test_roll_not_triggered_when_not_tested():
     # spot 471 > strike 470 -> not tested -> no roll even though credit exists
     rows = [_ROLLABLE[0],
         ["2024-01-04","2024-01-09",5,470,"P",3.00,3.10,3.05,3.05,-0.45,0.1,471.0],
-        ["2024-01-04","2024-01-11",7,460,"P",3.20,3.30,3.25,3.25,-0.30,0.1,471.0]]
+        ["2024-01-04","2024-01-11",7,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,471.0]]
     res = run_wheel(_chain(rows), _cfg(roll_tested_puts=True))
     assert [t.action for t in res.trades] == ["SELL_PUT"]
 
@@ -256,17 +258,17 @@ def test_roll_cap_two_then_normal_expiry_path():
     # third leg runs to expiry and is assigned.
     rows = [
         ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
-        # day 2: tested, roll 1 -> 460P Jan-10 (dte 7, in band)
+        # day 2: tested, roll 1 -> 470P Jan-10 (same strike, out)
         ["2024-01-03","2024-01-09",6,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,468.0],
-        ["2024-01-03","2024-01-10",7,460,"P",3.20,3.30,3.25,3.25,-0.30,0.1,468.0],
-        # day 3: tested again, roll 2 -> 450P Jan-11 (dte 7, in band)
-        ["2024-01-04","2024-01-10",6,460,"P",3.00,3.10,3.05,3.05,-0.55,0.1,458.0],
-        ["2024-01-04","2024-01-11",7,450,"P",3.20,3.30,3.25,3.25,-0.30,0.1,458.0],
-        # day 4: tested a third time, in-band credit roll available - cap says NO
-        ["2024-01-05","2024-01-11",6,450,"P",3.00,3.10,3.05,3.05,-0.55,0.1,448.0],
-        ["2024-01-05","2024-01-12",7,440,"P",3.20,3.30,3.25,3.25,-0.30,0.1,448.0],
+        ["2024-01-03","2024-01-10",7,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,468.0],
+        # day 3: tested again, roll 2 -> 470P Jan-11
+        ["2024-01-04","2024-01-10",6,470,"P",3.00,3.10,3.05,3.05,-0.60,0.1,458.0],
+        ["2024-01-04","2024-01-11",7,470,"P",3.20,3.30,3.25,3.25,-0.58,0.1,458.0],
+        # day 4: tested a third time, credit roll available - cap says NO
+        ["2024-01-05","2024-01-11",6,470,"P",3.00,3.10,3.05,3.05,-0.65,0.1,448.0],
+        ["2024-01-05","2024-01-12",7,470,"P",3.20,3.30,3.25,3.25,-0.62,0.1,448.0],
         # expiry of the second rolled leg: ITM -> assigned
-        ["2024-01-11","2024-01-11",0,450,"P",5.00,5.10,5.05,5.05,-0.99,0.1,445.0],
+        ["2024-01-11","2024-01-11",0,470,"P",25.00,25.10,25.05,25.05,-0.99,0.1,445.0],
     ]
     res = run_wheel(_chain(rows), _cfg(roll_tested_puts=True, target_dte=7))
     acts = [t.action for t in res.trades]
@@ -279,7 +281,7 @@ def test_roll_beats_stop_when_both_would_fire():
     # new leg from the next day).
     rows = [_ROLLABLE[0],
         ["2024-01-04","2024-01-09",5,470,"P",6.50,6.60,6.55,6.55,-0.80,0.1,464.0],
-        ["2024-01-04","2024-01-11",7,455,"P",6.70,6.80,6.75,6.75,-0.30,0.1,464.0]]
+        ["2024-01-04","2024-01-11",7,470,"P",6.70,6.80,6.75,6.75,-0.75,0.1,464.0]]
     res = run_wheel(_chain(rows), _cfg(roll_tested_puts=True, put_stop_mult=3.0))
     acts = [t.action for t in res.trades]
     assert "ROLL_CLOSE" in acts and "STOP_CLOSE" not in acts

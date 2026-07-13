@@ -1,6 +1,7 @@
 """Pure strike-selection and marking primitives over an OptionsChain frame.
 No I/O, no engine state — consumed by the Wheel engine (sub-project 2)."""
 from __future__ import annotations
+import pandas as pd
 from .chain import Contract, Mark
 
 def derived_band(target_dte: int) -> tuple[int, int]:
@@ -32,6 +33,24 @@ def select_contract(chain, date, right, target_delta, target_dte, root, min_stri
         row = e.loc[(e["delta"].abs() - abs(target_delta)).abs().idxmin()]
         return Contract(root, row["expiry"], float(row["strike"]), right)
     return None
+
+def select_roll_contract(chain, date, right, strike, current_expiry, target_dte, root):
+    """Roll destination (repair spec amendment 2026-07-13b): the canonical
+    credit roll is SAME STRIKE, out in time. Candidates are expiries STRICTLY
+    beyond the held leg's expiry that carry the held strike, nearest to
+    (current_expiry + target_dte) — one config cycle further out; tie ->
+    longer-dated. Deterministic; None -> no roll today."""
+    cand = chain[(chain["date"] == date) & (chain["right"] == right)
+                 & (chain["strike"] == strike)]
+    if cand.empty:
+        return None
+    exps = cand.groupby("expiry")["dte"].first()
+    exps = exps[exps.index > pd.Timestamp(current_expiry)]
+    if exps.empty:
+        return None
+    anchor = pd.Timestamp(current_expiry) + pd.Timedelta(days=target_dte)
+    best = sorted(exps.index, key=lambda e: (abs((e - anchor).days), -exps[e]))[0]
+    return Contract(root, best, float(strike), right)
 
 def option_mark(chain, date, contract):
     m = ((chain["date"] == date) & (chain["expiry"] == contract.expiry)

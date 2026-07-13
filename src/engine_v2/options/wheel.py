@@ -4,7 +4,7 @@ engine and the gate."""
 from __future__ import annotations
 from dataclasses import dataclass
 import pandas as pd
-from .select import select_contract, option_mark
+from .select import select_contract, select_roll_contract, option_mark
 
 MAX_ROLLS_PER_CAMPAIGN = 2   # then the normal expiry path (assignment) applies
 
@@ -130,8 +130,13 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                 if mark is None:
                     warnings.append((d, "roll_check_no_mark", c))
                 else:
-                    new_c = select_contract(day_chain, d, "P", cfg.put_delta,
-                                            cfg.target_dte, cfg.ticker)
+                    # destination: SAME strike, out in time — expiry strictly
+                    # beyond the held leg, nearest to held_expiry + target_dte
+                    # (amendment 2026-07-13b: same-tenor and down-and-out
+                    # destinations never clear the credit-only bar on real
+                    # chains; only the same-strike out-roll can self-fund).
+                    new_c = select_roll_contract(day_chain, d, "P", c.strike,
+                                                 c.expiry, cfg.target_dte, cfg.ticker)
                     new_mark = option_mark(day_chain, d, new_c) if new_c is not None else None
                     if (new_c is not None and new_c != c and new_mark is not None
                             and sell_proceeds(new_mark, n, cfg) >= buy_cost(mark, n, cfg)):
