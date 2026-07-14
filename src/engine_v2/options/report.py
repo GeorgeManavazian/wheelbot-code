@@ -23,6 +23,7 @@ class WheelReport:
     ticker: str = "SPY"
     recent_is_full: bool = False
     defense: dict | None = None   # campaign-level defense stats; None on plain runs
+    gates: dict | None = None     # regime-gate counts; None when no gate armed
 
 def buy_hold_curve(chain, starting_capital) -> pd.Series:
     """Buy-hold the chain's OWN underlying (was spy_buy_hold, which silently
@@ -208,6 +209,18 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01",
             "n_late_expiries": stats["n_late_expiries"],
             "liquidate_fill_note": bool(cfg.liquidate_assignment),
         }
+    gates = None
+    # same visibility rule as the defense block: an ARMED gate that never fired
+    # must still show its block — the absence of fires is itself the finding.
+    if cfg.any_regime_gate:
+        ev = getattr(result, "gate_events", []) or []
+        wn = getattr(result, "warnings", []) or []
+        gates = {
+            "days_entry_gated": getattr(result, "days_entry_gated", 0),
+            "n_rolls_denied": sum(1 for e in ev if e[1] == "roll_denied_by_gate"),
+            "n_stops_suppressed": sum(1 for e in ev if e[1] == "stop_suppressed_by_gate"),
+            "n_state_unknown": sum(1 for w in wn if w[1] == "gate_state_unknown"),
+        }
     return WheelReport(
         metrics=_perf(eq, ppy),
         recent=_perf(eq_recent, ppy) if len(eq_recent) > 1 else _perf(eq, ppy),
@@ -221,6 +234,7 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01",
         periods_per_year=ppy,
         ticker=cfg.ticker,
         defense=defense,
+        gates=gates,
     )
 
 def _pct(x): return "n/a" if pd.isna(x) else f"{x:+.2%}"
@@ -278,6 +292,15 @@ def format_report(rep) -> str:
         if dd["liquidate_fill_note"]:
             L.append("  note: liquidation fills at EOD spot — no stock spread/slippage modeled "
                      "(options pay full spread)")
+    if rep.gates is not None:
+        g = rep.gates
+        L.append("\nRegime gates (ticker state, strictly-prior-day)")
+        L.append(f"  entry-gated days {g['days_entry_gated']}  "
+                 f"rolls denied {g['n_rolls_denied']}  "
+                 f"stops suppressed {g['n_stops_suppressed']}  "
+                 f"state-unknown at would-act moments {g['n_state_unknown']}")
+        L.append("  note: gated-entry counterfactual is not modeled — the paired "
+                 "A/B run is the measurement")
     return "\n".join(L)
 
 _RIGHT_WORD = {"P": "PUT", "C": "CALL"}

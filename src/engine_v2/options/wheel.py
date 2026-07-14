@@ -8,6 +8,27 @@ from .select import select_contract, select_roll_contract, option_mark
 
 MAX_ROLLS_PER_CAMPAIGN = 2   # then the normal expiry path (assignment) applies
 
+GATE_STALENESS_DAYS = 14   # mirrors regime.autopsy.MAX_STALENESS_DAYS (kept in
+                           # sync by hand: no shared module, to preserve the
+                           # options/ -> regime/ import direction)
+
+def is_unpaid_decline(trend: str, vol: str) -> bool:
+    """Falling without panic premium — the one cell the gates act on
+    (pre-registered, spec 2026-07-14). Never extended to a per-cell table."""
+    return trend == "downtrend" and vol in ("calm", "normal")
+
+def _state_before(states: pd.DataFrame, d: pd.Timestamp) -> tuple:
+    """(trend, vol) from the last state row STRICTLY before d (a decision on
+    day d cannot know day d's close — same rule as fills and autopsy tagging),
+    bounded by GATE_STALENESS_DAYS. Missing/stale -> ("unknown","unknown"):
+    gates never act on missing information."""
+    idx = states.index
+    pos = idx.searchsorted(pd.Timestamp(d)) - 1
+    if pos < 0 or (pd.Timestamp(d) - idx[pos]).days > GATE_STALENESS_DAYS:
+        return "unknown", "unknown"
+    row = states.iloc[pos]
+    return row["trend"], row["vol"]
+
 @dataclass
 class WheelConfig:
     starting_capital: float = 100_000.0
@@ -25,6 +46,15 @@ class WheelConfig:
     roll_tested_puts: bool = False       # mid-life roll of tested puts (credit-only, capped)
     liquidate_assignment: bool = False   # take assignment, dump all shares at that day's spot, back to puts
     put_stop_mult: float | None = None   # buy the put back when EOD ask >= mult x credit received (puts only)
+    # regime gates (macro phase 2, spec 2026-07-14) — all default-off so the
+    # plain path is byte-identical. Ticker state, strictly-prior-day.
+    regime_entry_gate: bool = False   # no new campaign opens in unpaid decline
+    regime_roll_gate: bool = False    # mid-life roll denied in unpaid decline
+    regime_stop_gate: bool = False    # put stop suppressed while vol == "stressed"
+
+    @property
+    def any_regime_gate(self) -> bool:
+        return self.regime_entry_gate or self.regime_roll_gate or self.regime_stop_gate
 
 @dataclass
 class Trade:
@@ -57,11 +87,21 @@ class WheelResult:
     days_flat: int = 0
     warnings: list = None
     days_shares_uncovered: int = 0
+    gate_events: list = None      # (date, kind, contract|None) — regime-gate actions
+    days_entry_gated: int = 0     # days the entry gate was the proximate blocker
 
-def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResult:
+def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
+              regime_states: pd.DataFrame | None = None) -> WheelResult:
     if cfg.liquidate_assignment and cfg.call_min_strike is not None:
         raise ValueError("liquidate_assignment never holds shares; call_min_strike "
                          "governs held shares — enable one, not both")
+    any_gate = cfg.any_regime_gate
+    if any_gate and regime_states is None:
+        raise ValueError("a regime gate is on but no regime_states was passed — "
+                         "a gate with no state is a bug, not a run")
+    if cfg.regime_stop_gate and cfg.put_stop_mult is None:
+        raise ValueError("regime_stop_gate gates the put stop; put_stop_mult is "
+                         "None so the arm would be a silent no-op — refuse it")
     dates = sorted(pd.to_datetime(chain["date"]).unique())
     und = underlying_series(chain)
     # index the chain by date ONCE so per-day strike lookups touch ~one day's rows
@@ -72,6 +112,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
     basis = None  # assigned put's strike while shares are held (defense variants)
     campaign, rolls_this_campaign, campaign_premium = 0, 0, 0.0
     warnings, days_shares_uncovered = [], 0
+    gate_events, days_entry_gated = [], 0
     trades, equity = [], {}
     prev_d, days_flat = None, 0
 
@@ -84,6 +125,12 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
         if prev_d is not None and cfg.cash_yield > 0:
             cash *= (1 + cfg.cash_yield / 365) ** (d - prev_d).days
         prev_d = d
+
+        # regime state for today's gate checks: strictly-prior-day, staleness-
+        # bounded. Computed once per day; ("unknown","unknown") never gates.
+        g_trend = g_vol = None
+        if any_gate:
+            g_trend, g_vol = _state_before(regime_states, d)
 
         # 1) manage an existing short: take-profit, roll, stop, then expiry
         closed_today = None  # contract closed via TP this day (block same-day churn into it)
@@ -145,7 +192,21 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                                 if new_mark is not None else None)
                     # credit-only: guard and fill use the SAME numbers, so a
                     # future fill-model change cannot let debit rolls through.
-                    if proceeds is not None and proceeds >= cost:
+                    # roll gate: no extension into an unpaid decline. Consulted
+                    # only at the would-execute moment — after the destination
+                    # and credit checks — so a logged denial means a roll that
+                    # WOULD have executed (same would-act rule as the stop
+                    # gate). Denial re-evaluates tomorrow and must NOT consume
+                    # the stop check (only an EXECUTED roll does). Unknown
+                    # state allows and warns.
+                    roll_gated_today = False
+                    if proceeds is not None and proceeds >= cost and cfg.regime_roll_gate:
+                        if (g_trend, g_vol) == ("unknown", "unknown"):
+                            warnings.append((d, "gate_state_unknown", "roll"))
+                        elif is_unpaid_decline(g_trend, g_vol):
+                            gate_events.append((d, "roll_denied_by_gate", c))
+                            roll_gated_today = True
+                    if proceeds is not None and proceeds >= cost and not roll_gated_today:
                         cash -= cost; campaign_premium -= cost
                         trades.append(Trade(d, "ROLL_CLOSE", c, n, mark.ask, cash, campaign))
                         cash += proceeds; campaign_premium += proceeds
@@ -166,10 +227,18 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                     if not mark_warned_today:   # roll check may already have logged it
                         warnings.append((d, "stop_check_no_mark", c))
                 elif mark.ask >= cfg.put_stop_mult * short["credit"]:
-                    cost = buy_cost(mark, n, cfg)
-                    cash -= cost; campaign_premium -= cost
-                    trades.append(Trade(d, "STOP_CLOSE", c, n, mark.ask, cash, campaign))
-                    short = None; closed_today = c; no_entry_today = True
+                    # stop gate: never dump into panic — a stop that WOULD fire
+                    # is suppressed while vol is stressed (logged, would-act
+                    # moments only) and re-arms on the first non-stressed day.
+                    if cfg.regime_stop_gate and g_vol == "stressed":
+                        gate_events.append((d, "stop_suppressed_by_gate", c))
+                    else:
+                        if cfg.regime_stop_gate and (g_trend, g_vol) == ("unknown", "unknown"):
+                            warnings.append((d, "gate_state_unknown", "stop"))
+                        cost = buy_cost(mark, n, cfg)
+                        cash -= cost; campaign_premium -= cost
+                        trades.append(Trade(d, "STOP_CLOSE", c, n, mark.ask, cash, campaign))
+                        short = None; closed_today = c; no_entry_today = True
             # >= not ==: if the expiry date itself is absent from the chain
             # (data gap — SPY has two such days), the position must still
             # resolve on the first trading day at/after expiry, else it becomes
@@ -217,12 +286,29 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                 if c is not None and c != closed_today and mark is not None:
                     n = int(cash // (c.strike * mult))
                     if n > 0:
-                        campaign += 1
-                        rolls_this_campaign, campaign_premium = 0, 0.0
-                        proceeds = sell_proceeds(mark, n, cfg)
-                        cash += proceeds; campaign_premium += proceeds
-                        short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
-                        trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
+                        # entry gate: a NEW campaign never opens into an unpaid
+                        # decline (the call phase below continues an old
+                        # campaign — not gated). Consulted only HERE, at the
+                        # would-open moment — after selection/mark/sizing — so
+                        # days_entry_gated counts exactly the days the gate was
+                        # the proximate blocker, not days the baseline could
+                        # not have entered anyway. Unknown state allows and
+                        # warns (never gate on missing information).
+                        entry_gated_today = False
+                        if cfg.regime_entry_gate:
+                            if (g_trend, g_vol) == ("unknown", "unknown"):
+                                warnings.append((d, "gate_state_unknown", "entry"))
+                            elif is_unpaid_decline(g_trend, g_vol):
+                                days_entry_gated += 1
+                                gate_events.append((d, "entry_gated", None))
+                                entry_gated_today = True
+                        if not entry_gated_today:
+                            campaign += 1
+                            rolls_this_campaign, campaign_premium = 0, 0.0
+                            proceeds = sell_proceeds(mark, n, cfg)
+                            cash += proceeds; campaign_premium += proceeds
+                            short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
+                            trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
             elif phase == "CALL" and shares >= mult:
                 floor = None
                 if cfg.call_min_strike == "basis" and basis is not None:
@@ -264,4 +350,5 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
         residual_settled = True
     return WheelResult(pd.Series(equity), trades, cash, shares, residual_settled,
                        days_flat=days_flat, warnings=warnings,
-                       days_shares_uncovered=days_shares_uncovered)
+                       days_shares_uncovered=days_shares_uncovered,
+                       gate_events=gate_events, days_entry_gated=days_entry_gated)

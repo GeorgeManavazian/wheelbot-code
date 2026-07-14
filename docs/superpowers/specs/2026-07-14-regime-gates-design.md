@@ -125,6 +125,25 @@ All at the frozen basket config (20Δ both legs, target 7 DTE, 50% TP, $100k, cr
 
 Unseen-ticker data stays unopened until step 3. If any unseen chain is inspected before step 3 for any reason, that fact must be recorded in this spec as an amendment (contamination statement discipline, per amendment 2026-07-13d).
 
+## Amendment 2026-07-14b — audit-loop fixes (post-implementation review)
+
+High-effort multi-agent review of the diff: 19 raw findings, 10 distinct, all fixed same day. Binding clarifications that came out of it:
+
+1. **Would-act logging is uniform across all three gates.** `days_entry_gated` increments only after selection/mark/sizing all pass (the gate is provably the proximate blocker); `roll_denied_by_gate` is logged only when destination + credit checks pass (the roll would have executed). Trading behavior was never wrong — only event counts; A/B P&L unchanged by the fix.
+2. **The audit re-derives gate rules locally** (own unpaid-decline predicate, own boolean-mask as-of lookup) instead of importing the engine's — plus a double-entry check that the ledger's roll denials and the audit's independently derived would-execute-but-gated days are identical sets.
+3. `run_wheel_intraday` forwards `regime_states`; subset runner runs write ticker-suffixed files so the pre-registered `regime_gates.txt` can't be clobbered; the gates report line reads "state-unknown at would-act moments"; `GATE_STALENESS_DAYS == autopsy.MAX_STALENESS_DAYS` is enforced by a test.
+
+## Amendment 2026-07-14a — contamination statement (binding disclosure)
+
+During the post-implementation stress round, `scripts/run_defense_matrix.py` was launched with no ticker arguments; its default was `available_tickers()` — every chain on disk — and the basket data pull had completed earlier the same day, so the defense matrix **executed on the unseen tickers** (XBI EEM EWZ TLT ARKK QQQ) and wrote their results to `data/options/reports/defense_matrix.txt`. Facts, exactly:
+
+- The regime-gates rules were **already frozen and committed** (b00205f) before this run — no rule was or can be influenced by it.
+- The agent's context was exposed to **one** unseen-ticker number: buy-hold XBI total (+166,874) — price appreciation only, no wheel/defense result for any unseen ticker was seen.
+- The contaminated file was **deleted unread**; no human saw any of it. It was never committed.
+- `run_defense_matrix.py` now defaults to the seen set and refuses unseen tickers without `--after-basket-run` (same guard as `run_regime_gates.py`).
+
+Owner call whether the unseen set's status is impaired; this note exists so that call is made with the facts.
+
 ## Out of scope
 
 - Assignment/liquidation policy by regime (owner-excluded 2026-07-14)

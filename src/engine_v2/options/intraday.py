@@ -69,6 +69,7 @@ def held_contracts(result) -> list:
         held.append((cur[0], cur[1], cur[2], cur[3], max(last_date, cur[3])))
     return held
 
-def run_wheel_intraday(chain, cfg, intraday_df):
+def run_wheel_intraday(chain, cfg, intraday_df, regime_states=None):
     from .wheel import run_wheel
-    return run_wheel(chain, cfg, intraday=intraday_marks(intraday_df))
+    return run_wheel(chain, cfg, intraday=intraday_marks(intraday_df),
+                     regime_states=regime_states)
