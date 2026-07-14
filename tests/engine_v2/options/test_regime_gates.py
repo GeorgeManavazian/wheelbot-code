@@ -103,3 +103,94 @@ def test_entry_gate_off_ignores_states_entirely():
     res = run_wheel(_chain(PUT_DAY), _cfg(), regime_states=st)
     assert [t for t in res.trades if t.action == "SELL_PUT"]
     assert res.days_entry_gated == 0 and res.gate_events == []
+
+# ---- roll gate ----
+# tested put mid-life (spot 468 <= 470), same-strike out-roll available for
+# credit; both potential legs settle OTM so the run ends clean.
+ROLL_ROWS = [
+    ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+    ["2024-01-03","2024-01-09",6,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,468.0],
+    ["2024-01-03","2024-01-16",13,470,"P",5.00,5.10,5.05,5.05,-0.50,0.1,468.0],
+    ["2024-01-09","2024-01-09",0,470,"P",0.05,0.10,0.07,0.07,-0.01,0.1,475.0],
+    ["2024-01-16","2024-01-16",0,470,"P",0.05,0.10,0.07,0.07,-0.01,0.1,475.0],
+]
+
+def test_roll_gate_denies_roll_in_unpaid_decline():
+    # entry gate is OFF here — only the roll is gated
+    st = _states([("2024-01-01","downtrend","normal")])
+    cfg = _cfg(roll_tested_puts=True, regime_roll_gate=True)
+    res = run_wheel(_chain(ROLL_ROWS), cfg, regime_states=st)
+    assert not [t for t in res.trades if t.action == "ROLL_CLOSE"]
+    ev = [e for e in res.gate_events if e[1] == "roll_denied_by_gate"]
+    assert ev and ev[0][0] == pd.Timestamp("2024-01-03")
+
+def test_roll_gate_allows_roll_in_panic():
+    st = _states([("2024-01-01","downtrend","stressed")])
+    cfg = _cfg(roll_tested_puts=True, regime_roll_gate=True)
+    res = run_wheel(_chain(ROLL_ROWS), cfg, regime_states=st)
+    assert [t for t in res.trades if t.action == "ROLL_CLOSE"]
+    assert not [e for e in res.gate_events if e[1] == "roll_denied_by_gate"]
+
+def test_roll_gate_unknown_state_allows_and_warns():
+    st = _states([("2023-06-01","downtrend","normal")])
+    cfg = _cfg(roll_tested_puts=True, regime_roll_gate=True)
+    res = run_wheel(_chain(ROLL_ROWS), cfg, regime_states=st)
+    assert [t for t in res.trades if t.action == "ROLL_CLOSE"]
+    assert (pd.Timestamp("2024-01-03"), "gate_state_unknown", "roll") in res.warnings
+
+def test_denied_roll_does_not_consume_stop_check():
+    # same day: roll denied by gate AND stop threshold crossed -> stop still
+    # fires (an executed roll consumes the stop; a DENIED roll must not).
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-03","2024-01-09",6,470,"P",6.90,7.00,6.95,6.95,-0.80,0.1,463.0],
+        ["2024-01-03","2024-01-16",13,470,"P",9.00,9.10,9.05,9.05,-0.75,0.1,463.0],
+        ["2024-01-09","2024-01-09",0,470,"P",0.05,0.10,0.07,0.07,-0.01,0.1,475.0],
+        ["2024-01-16","2024-01-16",0,470,"P",0.05,0.10,0.07,0.07,-0.01,0.1,475.0],
+    ]
+    st = _states([("2024-01-01","downtrend","normal")])
+    cfg = _cfg(roll_tested_puts=True, regime_roll_gate=True, put_stop_mult=3.0)
+    res = run_wheel(_chain(rows), cfg, regime_states=st)
+    assert not [t for t in res.trades if t.action == "ROLL_CLOSE"]
+    assert [t for t in res.trades if t.action == "STOP_CLOSE"]
+
+# ---- stop gate ----
+STOP_ROWS = [
+    ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+    ["2024-01-03","2024-01-09",6,470,"P",6.90,7.00,6.95,6.95,-0.80,0.1,463.0],
+    ["2024-01-09","2024-01-09",0,470,"P",0.05,0.10,0.07,0.07,-0.01,0.1,475.0],
+]
+
+def test_stop_gate_suppresses_stop_in_stressed_vol():
+    st = _states([("2024-01-01","downtrend","stressed")])
+    cfg = _cfg(put_stop_mult=3.0, regime_stop_gate=True)
+    res = run_wheel(_chain(STOP_ROWS), cfg, regime_states=st)
+    assert not [t for t in res.trades if t.action == "STOP_CLOSE"]
+    ev = [e for e in res.gate_events if e[1] == "stop_suppressed_by_gate"]
+    assert ev and ev[0][0] == pd.Timestamp("2024-01-03")
+
+def test_stop_gate_lets_stop_fire_when_not_stressed():
+    for vol in ("calm", "normal"):
+        st = _states([("2024-01-01","downtrend",vol)])
+        cfg = _cfg(put_stop_mult=3.0, regime_stop_gate=True)
+        res = run_wheel(_chain(STOP_ROWS), cfg, regime_states=st)
+        assert [t for t in res.trades if t.action == "STOP_CLOSE"], vol
+
+def test_stop_gate_unknown_state_allows_stop_and_warns():
+    st = _states([("2023-06-01","uptrend","stressed")])
+    cfg = _cfg(put_stop_mult=3.0, regime_stop_gate=True)
+    res = run_wheel(_chain(STOP_ROWS), cfg, regime_states=st)
+    assert [t for t in res.trades if t.action == "STOP_CLOSE"]
+    assert (pd.Timestamp("2024-01-03"), "gate_state_unknown", "stop") in res.warnings
+
+def test_stop_suppression_only_logged_when_stop_would_fire():
+    # stressed state but the ask never reaches 3x credit -> no suppression event
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-03","2024-01-09",6,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,468.0],
+        ["2024-01-09","2024-01-09",0,470,"P",0.05,0.10,0.07,0.07,-0.01,0.1,475.0],
+    ]
+    st = _states([("2024-01-01","downtrend","stressed")])
+    cfg = _cfg(put_stop_mult=3.0, regime_stop_gate=True)
+    res = run_wheel(_chain(rows), cfg, regime_states=st)
+    assert not [e for e in res.gate_events if e[1] == "stop_suppressed_by_gate"]

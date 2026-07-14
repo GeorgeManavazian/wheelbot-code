@@ -171,7 +171,19 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
             if (short is not None and cfg.roll_tested_puts and c.right == "P"
                     and d < c.expiry and spot <= c.strike
                     and rolls_this_campaign < MAX_ROLLS_PER_CAMPAIGN):
-                if mark is None:
+                # roll gate: no extension into an unpaid decline. Consulted only
+                # at a would-roll moment; denial re-evaluates tomorrow and must
+                # NOT consume the stop check (only an EXECUTED roll does).
+                roll_gated_today = False
+                if cfg.regime_roll_gate:
+                    if (g_trend, g_vol) == ("unknown", "unknown"):
+                        warnings.append((d, "gate_state_unknown", "roll"))
+                    elif is_unpaid_decline(g_trend, g_vol):
+                        gate_events.append((d, "roll_denied_by_gate", c))
+                        roll_gated_today = True
+                if roll_gated_today:
+                    pass
+                elif mark is None:
                     warnings.append((d, "roll_check_no_mark", c))
                     mark_warned_today = True
                 else:
@@ -209,10 +221,18 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                     if not mark_warned_today:   # roll check may already have logged it
                         warnings.append((d, "stop_check_no_mark", c))
                 elif mark.ask >= cfg.put_stop_mult * short["credit"]:
-                    cost = buy_cost(mark, n, cfg)
-                    cash -= cost; campaign_premium -= cost
-                    trades.append(Trade(d, "STOP_CLOSE", c, n, mark.ask, cash, campaign))
-                    short = None; closed_today = c; no_entry_today = True
+                    # stop gate: never dump into panic — a stop that WOULD fire
+                    # is suppressed while vol is stressed (logged, would-act
+                    # moments only) and re-arms on the first non-stressed day.
+                    if cfg.regime_stop_gate and g_vol == "stressed":
+                        gate_events.append((d, "stop_suppressed_by_gate", c))
+                    else:
+                        if cfg.regime_stop_gate and (g_trend, g_vol) == ("unknown", "unknown"):
+                            warnings.append((d, "gate_state_unknown", "stop"))
+                        cost = buy_cost(mark, n, cfg)
+                        cash -= cost; campaign_premium -= cost
+                        trades.append(Trade(d, "STOP_CLOSE", c, n, mark.ask, cash, campaign))
+                        short = None; closed_today = c; no_entry_today = True
             # >= not ==: if the expiry date itself is absent from the chain
             # (data gap — SPY has two such days), the position must still
             # resolve on the first trading day at/after expiry, else it becomes
