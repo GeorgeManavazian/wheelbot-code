@@ -10,12 +10,14 @@ def _steady_up():
     px = 100 * np.exp(np.arange(n) * 5e-4 + noise)
     return pd.Series(px, index=pd.bdate_range("2020-01-01", periods=n))
 
-def test_uptrend_cell_matches_known_growth():
+def test_uptrend_cells_match_known_growth():
     tbl = base_rate_table(_steady_up(), horizon=21)
-    row = tbl[(tbl["trend"] == "uptrend")].iloc[0]
-    assert row["win_rate"] == 1.0
-    assert abs(row["median_fwd"] - (np.exp(21 * 5e-4) - 1)) < 0.005
-    assert row["n"] > 300
+    up = tbl[tbl["trend"] == "uptrend"]
+    assert len(up) >= 1 and set(tbl["trend"]) == {"uptrend"}
+    assert (up["win_rate"] == 1.0).all()
+    expected = np.exp(21 * 5e-4) - 1
+    assert (up["median_fwd"] - expected).abs().max() < 0.005
+    assert up["n"].sum() > 300          # vol pctile splits the trend into cells
 
 def test_thin_cells_flagged():
     tbl = base_rate_table(_steady_up(), horizon=21)
