@@ -6,6 +6,7 @@ import pytest
 from src.engine_v2.options.wheel import (WheelConfig, run_wheel,
                                          is_unpaid_decline, _state_before,
                                          GATE_STALENESS_DAYS)
+from src.engine_v2.options.report import wheel_report, format_report
 
 COLS = ["date","expiry","dte","strike","right","bid","ask","mid","close","delta","iv","underlying"]
 
@@ -182,6 +183,27 @@ def test_stop_gate_unknown_state_allows_stop_and_warns():
     res = run_wheel(_chain(STOP_ROWS), cfg, regime_states=st)
     assert [t for t in res.trades if t.action == "STOP_CLOSE"]
     assert (pd.Timestamp("2024-01-03"), "gate_state_unknown", "stop") in res.warnings
+
+# ---- report ----
+
+def test_report_gates_block_present_when_flag_on_even_if_never_fired():
+    st = _states([("2024-01-01","uptrend","calm")])
+    ch = _chain(PUT_DAY); cfg = _cfg(regime_entry_gate=True)
+    rep = wheel_report(run_wheel(ch, cfg, regime_states=st), ch, cfg)
+    assert rep.gates == {"days_entry_gated": 0, "n_rolls_denied": 0,
+                         "n_stops_suppressed": 0, "n_state_unknown": 0}
+    assert "Regime gates" in format_report(rep)
+
+def test_report_gates_none_on_plain_run():
+    ch = _chain(PUT_DAY); cfg = _cfg()
+    rep = wheel_report(run_wheel(ch, cfg), ch, cfg)
+    assert rep.gates is None and "Regime gates" not in format_report(rep)
+
+def test_report_gates_counts_fired_events():
+    st = _states([("2024-01-01","downtrend","calm")])
+    ch = _chain(PUT_DAY); cfg = _cfg(regime_entry_gate=True)
+    rep = wheel_report(run_wheel(ch, cfg, regime_states=st), ch, cfg)
+    assert rep.gates["days_entry_gated"] == 1
 
 # ---- invariance + no-look-ahead ----
 
