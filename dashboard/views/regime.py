@@ -31,7 +31,10 @@ def render():
     st.title("Regime")
     st.caption("Read-only advisor: where the market is, what usually followed, "
                "and how the wheel's own campaigns fared by regime.")
-    tickers = [t for t in available_tickers() if t != "SPY"]
+    # Unseen basket tickers hidden until the basket run reports (13d discipline,
+    # same guard as the Wheel tab) — even read-only surfaces stay consistent.
+    UNSEEN = {"XBI", "EEM", "EWZ", "TLT", "ARKK", "QQQ"}
+    tickers = [t for t in available_tickers() if t != "SPY" and t not in UNSEEN]
     tick = st.selectbox("Ticker", ["SPY"] + tickers, key="regime_ticker")
 
     st.subheader("Today")
