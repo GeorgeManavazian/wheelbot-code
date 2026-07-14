@@ -71,3 +71,55 @@ def test_intraday_none_matches_eod():
     b = run_wheel(ch, WheelConfig(**CFG), intraday=None)
     assert [t.action for t in a.trades] == [t.action for t in b.trades]
     assert a.final_cash == b.final_cash
+
+def test_zero_close_bar_never_triggers_or_fills():
+    # 62% of illiquid-ticker hourly bars are volume-0/close-0 prints (no trade
+    # that hour). A 0.00 close must be IGNORED: it is not a price, and treating
+    # it as one hands the bot a free escape from any losing put (XOP 2020
+    # produced +2,582% fantasy P&L this way).
+    rows = [
+        ["2024-01-02","2024-01-19",17,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-03","2024-01-19",16,470,"P",5.00,5.20,5.10,5.10,-0.60,0.1,465.0],
+    ]
+    bars = pd.DataFrame({
+        "timestamp": pd.to_datetime(["2024-01-03 10:30","2024-01-03 11:30",
+                                     "2024-01-03 12:30"]),
+        "close": [0.0, 0.0, 5.20]})   # phantom prints, then a real deep-ITM price
+    marks = {(pd.Timestamp("2024-01-19"),470.0,"P"): bars}
+    res = run_wheel(_chain(rows), WheelConfig(**CFG), intraday=marks)
+    # no TP: the only real print (5.20) is far above the 1.00 threshold, and the
+    # EOD ask (5.20) is too. The zero bars must not have manufactured a close.
+    assert not [t for t in res.trades if t.action == "CLOSE_PUT"]
+
+def test_fill_skips_zero_bar_to_next_valid_price():
+    # trigger on a real bar; the NEXT bar is a phantom 0.00 -> fill must use the
+    # next VALID bar's price, never the phantom.
+    rows = [
+        ["2024-01-02","2024-01-19",17,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-03","2024-01-19",16,470,"P",1.75,1.80,1.775,1.775,-0.25,0.1,473.0],
+    ]
+    bars = pd.DataFrame({
+        "timestamp": pd.to_datetime(["2024-01-03 10:30","2024-01-03 11:30",
+                                     "2024-01-03 12:30"]),
+        "close": [0.90, 0.0, 1.10]})
+    marks = {(pd.Timestamp("2024-01-19"),470.0,"P"): bars}
+    res = run_wheel(_chain(rows), WheelConfig(**CFG), intraday=marks)
+    close_trade = [t for t in res.trades if t.action == "CLOSE_PUT"][0]
+    assert close_trade.price_per_contract == pytest.approx(1.10)
+    assert close_trade.date == bars.iloc[2]["timestamp"]
+
+def test_intraday_marks_drops_zero_volume_and_zero_close_bars():
+    from src.engine_v2.options.intraday import intraday_marks
+    df = pd.DataFrame({
+        "timestamp": pd.to_datetime(["2024-01-03 10:30","2024-01-03 11:30",
+                                     "2024-01-03 12:30"]),
+        "expiry": pd.Timestamp("2024-01-19"),
+        "strike": 470.0, "right": "P",
+        "close": [1.50, 0.0, 1.40],
+        "high": [1.6, 0.0, 1.5], "low": [1.4, 0.0, 1.3],
+        "volume": [10.0, 0.0, 0.0],
+    })
+    marks = intraday_marks(df)
+    g = marks[(pd.Timestamp("2024-01-19"), 470.0, "P")]
+    # 11:30 dropped (vol 0 AND close 0); 12:30 dropped (vol 0: not a trade)
+    assert list(g["close"]) == [1.50]
