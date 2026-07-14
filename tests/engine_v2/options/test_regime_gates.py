@@ -63,3 +63,43 @@ def test_stop_gate_without_stop_raises():
     st = _states([("2024-01-01","uptrend","calm")])
     with pytest.raises(ValueError):
         run_wheel(_chain(PUT_DAY), _cfg(regime_stop_gate=True), regime_states=st)
+
+# ---- entry gate ----
+
+def test_entry_gate_blocks_new_campaign_in_unpaid_decline():
+    st = _states([("2024-01-01","downtrend","calm")])
+    res = run_wheel(_chain(PUT_DAY), _cfg(regime_entry_gate=True), regime_states=st)
+    assert not [t for t in res.trades if t.action == "SELL_PUT"]
+    assert res.days_entry_gated == 1
+    assert (pd.Timestamp("2024-01-02"), "entry_gated", None) in res.gate_events
+
+def test_entry_gate_allows_entry_outside_unpaid_decline():
+    for trend, vol in [("uptrend","calm"), ("downtrend","stressed"), ("chop","normal")]:
+        st = _states([("2024-01-01",trend,vol)])
+        res = run_wheel(_chain(PUT_DAY), _cfg(regime_entry_gate=True), regime_states=st)
+        assert [t for t in res.trades if t.action == "SELL_PUT"], (trend, vol)
+        assert res.days_entry_gated == 0
+
+def test_entry_gate_unknown_state_allows_and_warns():
+    st = _states([("2023-06-01","downtrend","calm")])   # stale > 14d
+    res = run_wheel(_chain(PUT_DAY), _cfg(regime_entry_gate=True), regime_states=st)
+    assert [t for t in res.trades if t.action == "SELL_PUT"]
+    assert (pd.Timestamp("2024-01-02"), "gate_state_unknown", "entry") in res.warnings
+
+def test_entry_gate_does_not_gate_call_phase():
+    # assigned shares; the call phase continues the OLD campaign, so the call
+    # is written even though the state has turned unpaid-decline by then.
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
+        ["2024-01-09","2024-01-16",7,475,"C",1.00,1.10,1.05,1.05,0.30,0.1,465.0],
+    ]
+    st = _states([("2024-01-01","uptrend","calm"), ("2024-01-08","downtrend","calm")])
+    res = run_wheel(_chain(rows), _cfg(regime_entry_gate=True), regime_states=st)
+    assert [t.action for t in res.trades] == ["SELL_PUT", "ASSIGNED", "SELL_CALL"]
+
+def test_entry_gate_off_ignores_states_entirely():
+    st = _states([("2024-01-01","downtrend","calm")])
+    res = run_wheel(_chain(PUT_DAY), _cfg(), regime_states=st)
+    assert [t for t in res.trades if t.action == "SELL_PUT"]
+    assert res.days_entry_gated == 0 and res.gate_events == []

@@ -83,6 +83,8 @@ class WheelResult:
     days_flat: int = 0
     warnings: list = None
     days_shares_uncovered: int = 0
+    gate_events: list = None      # (date, kind, contract|None) — regime-gate actions
+    days_entry_gated: int = 0     # days the entry gate was the proximate blocker
 
 def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
               regime_states: pd.DataFrame | None = None) -> WheelResult:
@@ -106,6 +108,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
     basis = None  # assigned put's strike while shares are held (defense variants)
     campaign, rolls_this_campaign, campaign_premium = 0, 0, 0.0
     warnings, days_shares_uncovered = [], 0
+    gate_events, days_entry_gated = [], 0
     trades, equity = [], {}
     prev_d, days_flat = None, 0
 
@@ -118,6 +121,12 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
         if prev_d is not None and cfg.cash_yield > 0:
             cash *= (1 + cfg.cash_yield / 365) ** (d - prev_d).days
         prev_d = d
+
+        # regime state for today's gate checks: strictly-prior-day, staleness-
+        # bounded. Computed once per day; ("unknown","unknown") never gates.
+        g_trend = g_vol = None
+        if any_gate:
+            g_trend, g_vol = _state_before(regime_states, d)
 
         # 1) manage an existing short: take-profit, roll, stop, then expiry
         closed_today = None  # contract closed via TP this day (block same-day churn into it)
@@ -246,7 +255,22 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
         # into the identical contract just closed — that would be pure spread churn.
         if short is None and not no_entry_today:
             if phase == "PUT":
-                c = select_contract(day_chain, d, "P", cfg.put_delta, cfg.target_dte, cfg.ticker)
+                # entry gate: a NEW campaign never opens into an unpaid decline
+                # (the call phase below continues an old campaign — not gated).
+                # Consulted only here, at a would-enter moment; unknown state
+                # allows and warns (never gate on missing information).
+                entry_gated_today = False
+                if cfg.regime_entry_gate:
+                    if (g_trend, g_vol) == ("unknown", "unknown"):
+                        warnings.append((d, "gate_state_unknown", "entry"))
+                    elif is_unpaid_decline(g_trend, g_vol):
+                        days_entry_gated += 1
+                        gate_events.append((d, "entry_gated", None))
+                        entry_gated_today = True
+                if entry_gated_today:
+                    c = None
+                else:
+                    c = select_contract(day_chain, d, "P", cfg.put_delta, cfg.target_dte, cfg.ticker)
                 mark = option_mark(day_chain, d, c) if c is not None else None
                 if c is not None and c != closed_today and mark is not None:
                     n = int(cash // (c.strike * mult))
@@ -298,4 +322,5 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
         residual_settled = True
     return WheelResult(pd.Series(equity), trades, cash, shares, residual_settled,
                        days_flat=days_flat, warnings=warnings,
-                       days_shares_uncovered=days_shares_uncovered)
+                       days_shares_uncovered=days_shares_uncovered,
+                       gate_events=gate_events, days_entry_gated=days_entry_gated)
