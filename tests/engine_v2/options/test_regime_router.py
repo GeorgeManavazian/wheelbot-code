@@ -66,3 +66,101 @@ def test_unknown_state_routes_to_wheel_and_warns():
     res = run_regime_router(_chain(PUT_DAY), _cfg(), st)
     assert [t for t in res.trades if t.action == "SELL_PUT"]
     assert any(w[1] == "route_state_unknown" for w in res.warnings)
+
+# ---- TREND + CASH cells ----
+
+def test_uptrend_buys_100_lots_at_eod_spot():
+    res = run_regime_router(_chain(PUT_DAY), _cfg(), _states(UP))
+    buys = [t for t in res.trades if t.action == "BUY_SHARES"]
+    assert buys and buys[0].price_per_contract == 472.0
+    lots = int(50_000 // (472.0 * 100))
+    assert buys[0].contracts == lots
+    assert res.final_cash == pytest.approx(50_000 - lots * 100 * 472.0)
+    assert res.days_in_posture["TREND"] == 1
+
+def test_uptrend_holds_no_calls_written():
+    rows = PUT_DAY + [["2024-01-03","2024-01-10",7,470,"C",2.0,2.1,2.05,2.05,0.30,0.1,474.0]]
+    res = run_regime_router(_chain(rows), _cfg(), _states(UP))
+    assert not [t for t in res.trades if t.action == "SELL_CALL"]
+    assert not [t for t in res.trades if t.action == "SELL_SHARES"]
+
+def test_cash_cell_no_entries_days_counted():
+    st = _states([("2024-01-01","downtrend","normal",0.5)])
+    res = run_regime_router(_chain(PUT_DAY), _cfg(), st)
+    assert not [t for t in res.trades if t.action in ("SELL_PUT","BUY_SHARES")]
+    assert res.days_in_posture["CASH"] == 1
+
+def test_panic_cell_wheels():
+    st = _states([("2024-01-01","downtrend","stressed",0.9)])
+    res = run_regime_router(_chain(PUT_DAY), _cfg(), st)
+    assert [t for t in res.trades if t.action == "SELL_PUT"]
+
+# ---- border transitions (approach A) ----
+
+def test_uptrend_to_downtrend_sells_next_close():
+    rows = [PUT_DAY[0],
+            ["2024-01-03","2024-01-10",7,470,"P",2.0,2.1,2.05,2.05,-0.30,0.1,468.0]]
+    st = _states([("2024-01-01","uptrend","calm",0.2),
+                  ("2024-01-02","downtrend","normal",0.5)])
+    res = run_regime_router(_chain(rows), _cfg(), st)
+    assert res.trades[0].action == "BUY_SHARES"
+    sells = [t for t in res.trades if t.action == "SELL_SHARES"]
+    assert sells and pd.Timestamp(sells[0].date) == pd.Timestamp("2024-01-03")
+    assert sells[0].price_per_contract == 468.0
+    assert res.whipsaw_pairs == 1   # sold 1 day after buying
+
+def test_uptrend_to_chop_keeps_shares_starts_covered_calls_at_purchase_basis():
+    rows = [PUT_DAY[0],
+            ["2024-01-03","2024-01-10",7,465,"C",3.0,3.1,3.05,3.05,0.30,0.1,470.0],
+            ["2024-01-03","2024-01-10",7,475,"C",0.5,0.6,0.55,0.55,0.05,0.1,470.0]]
+    st = _states([("2024-01-01","uptrend","calm",0.2),
+                  ("2024-01-02","chop","normal",0.5)])
+    res = run_regime_router(_chain(rows), _cfg(), st)
+    assert not [t for t in res.trades if t.action == "SELL_SHARES"]
+    calls = [t for t in res.trades if t.action == "SELL_CALL"]
+    assert calls and calls[0].contract.strike >= 472.0   # basis = purchase px
+
+def test_chop_wheel_campaign_survives_flip_to_expiry():
+    rows = [PUT_DAY[0],
+            ["2024-01-03","2024-01-09",6,470,"P",2.0,2.1,2.05,2.05,-0.30,0.1,472.0],
+            ["2024-01-09","2024-01-09",0,470,"P",0.05,0.10,0.07,0.07,-0.01,0.1,475.0]]
+    st = _states([("2024-01-01","chop","normal",0.5),
+                  ("2024-01-02","uptrend","calm",0.2)])
+    res = run_regime_router(_chain(rows), _cfg(), st)
+    acts = [t.action for t in res.trades]
+    assert "SELL_PUT" in acts and "PUT_EXPIRED" in acts
+
+def test_panic_assignment_then_uptrend_flip_keeps_shares_no_calls():
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.0,2.1,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-09","2024-01-09",0,470,"P",5.0,5.1,5.05,5.05,-0.99,0.1,465.0],
+        ["2024-01-10","2024-01-17",7,475,"C",1.0,1.1,1.05,1.05,0.30,0.1,466.0]]
+    st = _states([("2024-01-01","downtrend","stressed",0.9),
+                  ("2024-01-09","uptrend","calm",0.2)])
+    res = run_regime_router(_chain(rows), _cfg(), st)
+    assert [t for t in res.trades if t.action == "ASSIGNED"]
+    assert not [t for t in res.trades if t.action in ("SELL_CALL","SELL_SHARES")]
+    assert res.final_shares == 100
+
+def test_same_day_state_flip_ignored():
+    st = _states([("2024-01-01","uptrend","calm",0.2),
+                  ("2024-01-02","downtrend","normal",0.5)])
+    res = run_regime_router(_chain(PUT_DAY), _cfg(), st)
+    assert [t for t in res.trades if t.action == "BUY_SHARES"]
+
+def test_future_state_rows_do_not_change_decisions():
+    a = run_regime_router(_chain(PUT_DAY), _cfg(), _states(UP))
+    b = run_regime_router(_chain(PUT_DAY), _cfg(),
+                          _states(UP + [("2024-06-01","downtrend","normal",0.5)]))
+    assert [(t.date, t.action) for t in a.trades] == [(t.date, t.action) for t in b.trades]
+
+def test_trend_sale_can_redeploy_same_day_into_panic():
+    # uptrend -> downtrend+stressed: shares sold at close AND a put may be
+    # sold the same close (spec sequencing rule).
+    rows = [PUT_DAY[0],
+            ["2024-01-03","2024-01-10",7,460,"P",3.0,3.1,3.05,3.05,-0.30,0.1,468.0]]
+    st = _states([("2024-01-01","uptrend","calm",0.2),
+                  ("2024-01-02","downtrend","stressed",0.9)])
+    res = run_regime_router(_chain(rows), _cfg(), st)
+    d3 = [t.action for t in res.trades if pd.Timestamp(t.date) == pd.Timestamp("2024-01-03")]
+    assert "SELL_SHARES" in d3 and "SELL_PUT" in d3
