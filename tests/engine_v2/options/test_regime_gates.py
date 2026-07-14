@@ -183,6 +183,33 @@ def test_stop_gate_unknown_state_allows_stop_and_warns():
     assert [t for t in res.trades if t.action == "STOP_CLOSE"]
     assert (pd.Timestamp("2024-01-03"), "gate_state_unknown", "stop") in res.warnings
 
+# ---- invariance + no-look-ahead ----
+
+def test_states_passed_flags_off_is_byte_identical():
+    st = _states([("2024-01-01","downtrend","calm")])
+    a = run_wheel(_chain(PUT_DAY), _cfg())
+    b = run_wheel(_chain(PUT_DAY), _cfg(), regime_states=st)
+    assert [(t.date, t.action, t.cash_after) for t in a.trades] == \
+           [(t.date, t.action, t.cash_after) for t in b.trades]
+    assert a.equity.equals(b.equity) and a.final_cash == b.final_cash
+
+def test_no_lookahead_future_states_do_not_change_decisions():
+    # identical states up to the chain window; extra FUTURE rows must not matter
+    base = [("2024-01-01","downtrend","calm")]
+    future = base + [("2024-06-01","uptrend","calm")]
+    cfg = _cfg(regime_entry_gate=True)
+    a = run_wheel(_chain(PUT_DAY), cfg, regime_states=_states(base))
+    b = run_wheel(_chain(PUT_DAY), cfg, regime_states=_states(future))
+    assert [(t.date, t.action) for t in a.trades] == [(t.date, t.action) for t in b.trades]
+    assert a.days_entry_gated == b.days_entry_gated == 1
+
+def test_same_day_state_is_not_used():
+    # state flips to unpaid decline ON the entry day; strictly-prior rule must
+    # use the previous (benign) day -> entry allowed.
+    st = _states([("2024-01-01","uptrend","calm"), ("2024-01-02","downtrend","calm")])
+    res = run_wheel(_chain(PUT_DAY), _cfg(regime_entry_gate=True), regime_states=st)
+    assert [t for t in res.trades if t.action == "SELL_PUT"]
+
 def test_stop_suppression_only_logged_when_stop_would_fire():
     # stressed state but the ask never reaches 3x credit -> no suppression event
     rows = [
