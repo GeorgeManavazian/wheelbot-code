@@ -62,7 +62,8 @@ The at-expiry buyback is removed. A tested put is now managed mid-life, while ex
 
 **Action** (single decision, two fills, same day):
 - Buy-to-close current put at the **ask** + commission.
-- Sell-to-open new put chosen by the existing `select_contract` at the *config* delta and *config* target DTE (nothing re-tuned), same contract count `n`. Must be a different contract than the one just closed; selection returning None or the identical contract → no roll today.
+- Sell-to-open new put at the *config* delta, same contract count `n`. Must be a different contract than the one just closed; selection returning None or the identical contract → no roll today.
+- **Destination (amended 2026-07-13b, twice-falsified by stress data):** the original draft re-used `select_contract` at the config target DTE. SPY 2017–2026 stress: all 143 tested-day opportunities failed the credit-only check (median deficit $2.69/share). First amendment extended time but re-picked the strike at the config delta (roll down-and-out) — still 143/143 debit (median $2.51): a ~50Δ buyback can never be funded by a 20Δ sale at these tenors. The canonical credit roll is **same strike, out in time**: destination = **the held strike**, in the expiry strictly beyond the held leg nearest to `held_expiry + target_dte` (tie → longer-dated); expiries without that exact strike are skipped in favor of the next-nearest that has it (`select_roll_contract` in `select.py`). Same strike keeps the assignment risk — the credit-only rule and the cap are the bounds on that. Fully derived; zero new knobs.
 - **Credit-only rule:** the roll executes only if `sell_proceeds(new) >= buy_cost(current)` (both commission-inclusive). Net debit rolls never execute. If the rule fails, nothing happens today; the trigger is re-evaluated tomorrow.
 - Trade log: `ROLL_CLOSE` (old contract) + `ROLL_OPEN` (new contract), same campaign id, roll counter incremented. (`ROLL_OPEN` is a new action name so rolls are distinguishable from fresh `SELL_PUT` entries.)
 
@@ -106,6 +107,35 @@ For a held short, in order: **TP check** (intraday then EOD, unchanged) → **ro
 ## Interaction with the frozen basket test
 
 The basket spec (2026-07-12, two pre-registered arms) is binding and untouched. Arm 1 (plain) is protected by the plain-path invariance test. Arm 2 (call>=basis) predates this repair: it must run on the engine commit its spec pinned, or — if the owner prefers the repaired floor — that is an **owner decision to amend the pre-registration before any basket data is seen**, recorded in the vault. This spec takes no position; it only flags the fork.
+
+## Amendment 2026-07-13c — audit-loop fixes (post-implementation review + stress)
+
+The owner-mandated audit/stress loop (multi-agent code review of the branch diff + real-data invariant stress on the four in-sample tickers) surfaced and fixed:
+
+1. **Zombie-expiry engine bug (severe, pre-existing).** Expiry resolution used `d == c.expiry`; when the expiry date itself is absent from the chain (real data gaps exist — SPY: 2018-12-05, 2025-01-09), the position never resolved and the engine silently froze for the rest of the backtest (observed: a short call stuck open 2018→2026). Fixed: resolution fires on the first trading day `>= expiry`, logging `expiry_resolved_late`. Plain-path SPY output verified byte-identical pre/post fix (no plain leg ever hit a gap).
+2. Roll and stop both logging one missing mark → single warning per day.
+3. `held_contracts` (intraday two-pass) taught the `ROLL_OPEN`/`ROLL_CLOSE`/`STOP_CLOSE` actions.
+4. `n_take_profits` counted rolls/stops as TPs → now CLOSE_PUT/CLOSE_CALL only.
+5. Defense report block gated on **enabled flags**, not fired counts — a defense that never fired still reports (the absence is the finding).
+6. Campaign P&L computed from each trade's own economics, not `cash_after` deltas — cash-yield interest no longer contaminates campaign win rates.
+7. Roll counterfactuals settle on the first trading day at/after a gap expiry (matching the engine) and expose `n_skipped` for legs beyond the data window; report and dashboard show it.
+8. Dashboard renders the defense block (campaigns, win rate, rolls, stops, counterfactual, uncovered days, warnings).
+9. `campaign_win_rate` formats as `n/a` instead of `nan%` when no campaign closed.
+
+Declined (style-only, churn > value, noted for honesty): extracting a helper for the repeated `cost = …; cash -= cost; campaign_premium -= cost` triple; `WheelResult.warnings: list = None` default.
+
+### Audit round 2 (2026-07-13, after session-limit rerun)
+
+Round-2 review's verifier fleet died on a session limit; the 17 unverified candidates were recovered from the workflow journal and verified inline. Fixed:
+
+1. **Phantom assignment on gap expiries.** Late resolution decided ITM/OTM with the post-gap day's spot — booking assignments/exercises from moves that happened after the option was dead. Moneyness now settles at the **last close at/before expiry** (past data, no look-ahead); fills still occur on the resolution day. Roll counterfactuals use the same settle rule.
+2. **Unbounded roll tenor.** `select_roll_contract` accepted any expiry beyond the held leg; a sparse far-dated strike grid could roll a 7-DTE campaign months out. The extension (new expiry − held expiry) must now sit inside `derived_band(target_dte)` — derived, no knob, mirrors the entry band.
+3. **Warning taxonomy.** `expiry_resolved_late` was counted as "skipped checks" in report + dashboard. Stats now expose `n_no_mark_days` and `n_late_expiries`; labels updated on both surfaces.
+4. `realized_dte` restricted to fresh entries again (the chart proves entry-selection determinism; rolled-in legs sit deliberately beyond the band).
+5. Dashboard: stale "No calls below basis" label/help (described the pre-repair floor and cited the pre-repair matrix as if applicable) rewritten; `Rolls` tile reuses `stats.n_rolls`; `getattr` guard against stale-session `WheelReport` without `defense`.
+6. Roll block: guard and fill share one computed cost/proceeds pair (a future fill-model change cannot admit debit rolls); dead `new_c != c` check removed.
+
+Declined round 2 (noted): unifying the four hand-maintained trade-action lists behind shared constants (worth doing when the next action type is added); replacing `_trade_cash_flow` with engine-emitted flows; `groupby` micro-optimization in the selector.
 
 ## Error handling
 

@@ -88,3 +88,19 @@ def test_blotter_reconciles_on_truncated_window():
     df = position_log(res, cfg)
     total = res.final_cash - cfg.starting_capital
     assert df["realized_pnl"].dropna().sum() == pytest.approx(total, abs=0.01)
+
+# ---- repair pass: roll rows + campaign ids in the blotter ----
+
+def test_roll_open_starts_its_own_row():
+    trades = [
+        _t("2024-01-02","SELL_PUT",470,"P",1,2.00),
+        _t("2024-01-04","ROLL_CLOSE",470,"P",1,3.10),
+        _t("2024-01-04","ROLL_OPEN",460,"P",1,3.20),
+        _t("2024-01-11","PUT_EXPIRED",460,"P",1,0.0),
+    ]
+    from src.engine_v2.options.wheel import WheelResult
+    res = WheelResult(pd.Series(dtype=float), trades, 0.0, 0)
+    log = position_log(res, WheelConfig(commission_per_contract=0.0))
+    opts = log[log["instrument"] == "PUT"]
+    assert list(opts["outcome"]) == ["Rolled", "Expired worthless"]
+    assert "campaign_id" in log.columns
