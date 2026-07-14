@@ -83,7 +83,6 @@ def wheel_stats(result, cfg) -> dict:
         "pct_days_flat": (result.days_flat / len(result.equity)) if len(result.equity) else 0.0,
         "n_rolls": len(of("ROLL_CLOSE")),
         "n_stops": len(of("STOP_CLOSE")),
-        "n_siege_exits": len(of("SIEGE_EXIT")),
         "n_campaigns": len({t.campaign_id for t in trades if t.campaign_id}),
         "n_warnings": len(getattr(result, "warnings", []) or []),
         # warnings by type — 'skipped check' and 'late expiry resolution' are
@@ -109,7 +108,7 @@ def _trade_cash_flow(t, cfg) -> float:
         return -t.contract.strike * mult * n
     if t.action == "CALLED_AWAY":
         return t.contract.strike * mult * n
-    if t.action in ("LIQUIDATE", "SIEGE_EXIT"):
+    if t.action == "LIQUIDATE":
         return px * mult * n
     return 0.0   # PUT_EXPIRED / CALL_EXPIRED
 
@@ -220,7 +219,6 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01",
             "days_entry_gated": getattr(result, "days_entry_gated", 0),
             "n_rolls_denied": sum(1 for e in ev if e[1] == "roll_denied_by_gate"),
             "n_stops_suppressed": sum(1 for e in ev if e[1] == "stop_suppressed_by_gate"),
-            "n_siege_exits": sum(1 for e in ev if e[1] == "siege_exit"),
             "n_state_unknown": sum(1 for w in wn if w[1] == "gate_state_unknown"),
         }
     return WheelReport(
@@ -300,7 +298,6 @@ def format_report(rep) -> str:
         L.append(f"  entry-gated days {g['days_entry_gated']}  "
                  f"rolls denied {g['n_rolls_denied']}  "
                  f"stops suppressed {g['n_stops_suppressed']}  "
-                 f"siege exits {g['n_siege_exits']}  "
                  f"state-unknown at would-act moments {g['n_state_unknown']}")
         L.append("  note: gated-entry counterfactual is not modeled — the paired "
                  "A/B run is the measurement")
@@ -351,16 +348,15 @@ def position_log(result, cfg) -> pd.DataFrame:
                     campaign_id=t.campaign_id))
                 assign = None
             open_opt = None
-        elif t.action in ("LIQUIDATE", "SIEGE_EXIT") and assign is not None:
+        elif t.action == "LIQUIDATE" and assign is not None:
+            # shares dumped at spot the moment assignment fired (LIQUIDATE is a
             # shares closure, not an option terminal — the put row was already
-            # written by the ASSIGNED trade. LIQUIDATE fires on assignment day;
-            # SIEGE_EXIT fires later, on an uncovered unpaid-decline day.
+            # written by the ASSIGNED trade).
             astrike, aqty, adate, _acid = assign
             spot = t.price_per_contract
             rows.append(dict(opened=adate, closed=t.date, instrument="SHARES",
                 strike=astrike, expiry=pd.NaT, qty=aqty,
-                credit=-astrike * mult * aqty,
-                outcome="Liquidated" if t.action == "LIQUIDATE" else "Siege exit",
+                credit=-astrike * mult * aqty, outcome="Liquidated",
                 cost_to_close=spot * mult * aqty,
                 realized_pnl=(spot - astrike) * mult * aqty,
                 pct_of_credit=float("nan"), days_held=(t.date - adate).days,
