@@ -28,8 +28,20 @@ def leg_split(res, cfg):
     opts = log[log.instrument != "SHARES"]["realized_pnl"].sum()
     return opts, shares
 
+SEEN = ["SPY", "GDX", "SLV", "XOP"]
+UNSEEN = {"XBI", "EEM", "EWZ", "TLT", "ARKK"}
+
 def main():
-    tickers = [t.upper() for t in sys.argv[1:]] or available_tickers()
+    # default is the SEEN set, never available_tickers(): once the basket pull
+    # finished, "every chain on disk" silently includes the pre-registered
+    # unseen tickers (this exact leak happened 2026-07-14 — see the regime-gates
+    # spec's contamination amendment). Unseen requires the explicit flag.
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    tickers = [t.upper() for t in args] or SEEN
+    blocked = [t for t in tickers if t in UNSEEN]
+    if blocked and "--after-basket-run" not in sys.argv:
+        sys.exit(f"REFUSED: {blocked} are pre-registered unseen tickers. "
+                 f"Run the basket first, then pass --after-basket-run.")
     outd = Path("data/options/reports"); outd.mkdir(parents=True, exist_ok=True)
     lines = []
     for t in tickers:
