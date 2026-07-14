@@ -89,6 +89,20 @@ New "Regime" tab (read-only):
 - **Autopsy:** synthetic ledger with campaigns in known regimes → correct grouping; open campaign excluded from win rate.
 - Coverage folded into the engine_v2 gate (≥85%).
 
+## Amendment 2026-07-13e — audit findings (post-merge review, all fixed)
+
+Multi-agent review of the merged diff surfaced 10 verified findings, fixed same day:
+1. Regime tab crashed (IndexError) on tickers with < ~273 closes → empty-state guards on every surface.
+2. Autopsy tags had no staleness bound (campaign after the closes series' end inherited a months-old state) → `MAX_STALENESS_DAYS = 14`, else "unknown".
+3. Autopsy tag used the open day's own close (same-day leak on regime-flip days) → strictly-prior-day state, matching the engine's information rule.
+4. Regime tests required gitignored chain data → skipif-guarded; suite green on a fresh clone.
+5. WARMUP docstring claimed first state at day 200; vol percentile makes it ~273 → documented.
+6. Second regime taxonomy exists (`src/engine_v2/data/regime.py`, legacy, absolute-vol) → cross-referenced in both docstrings; consolidation deliberately deferred.
+7. Base-rates section silently skipped missing tickers → explicit warning.
+8. `closes_for` duplicated the chain filename convention → now imports `options.data.chain_path` (the binding convention).
+9. View re-read parquets up to 6×/rerun → `st.cache_data` (1h TTL).
+10. Per-column O(n) as-of slices in tagging → single searchsorted pass.
+
 ## Out of scope (phase 2+, each needs its own spec)
 
 - Wiring states into entry/roll/stop/assignment decisions (fixed rules, pre-registered, tested via the same A/B + execution-audit discipline as the defense repair)
