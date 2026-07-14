@@ -8,6 +8,27 @@ from .select import select_contract, select_roll_contract, option_mark
 
 MAX_ROLLS_PER_CAMPAIGN = 2   # then the normal expiry path (assignment) applies
 
+GATE_STALENESS_DAYS = 14   # mirrors regime.autopsy.MAX_STALENESS_DAYS (kept in
+                           # sync by hand: no shared module, to preserve the
+                           # options/ -> regime/ import direction)
+
+def is_unpaid_decline(trend: str, vol: str) -> bool:
+    """Falling without panic premium — the one cell the gates act on
+    (pre-registered, spec 2026-07-14). Never extended to a per-cell table."""
+    return trend == "downtrend" and vol in ("calm", "normal")
+
+def _state_before(states: pd.DataFrame, d: pd.Timestamp) -> tuple:
+    """(trend, vol) from the last state row STRICTLY before d (a decision on
+    day d cannot know day d's close — same rule as fills and autopsy tagging),
+    bounded by GATE_STALENESS_DAYS. Missing/stale -> ("unknown","unknown"):
+    gates never act on missing information."""
+    idx = states.index
+    pos = idx.searchsorted(pd.Timestamp(d)) - 1
+    if pos < 0 or (pd.Timestamp(d) - idx[pos]).days > GATE_STALENESS_DAYS:
+        return "unknown", "unknown"
+    row = states.iloc[pos]
+    return row["trend"], row["vol"]
+
 @dataclass
 class WheelConfig:
     starting_capital: float = 100_000.0
@@ -25,6 +46,11 @@ class WheelConfig:
     roll_tested_puts: bool = False       # mid-life roll of tested puts (credit-only, capped)
     liquidate_assignment: bool = False   # take assignment, dump all shares at that day's spot, back to puts
     put_stop_mult: float | None = None   # buy the put back when EOD ask >= mult x credit received (puts only)
+    # regime gates (macro phase 2, spec 2026-07-14) — all default-off so the
+    # plain path is byte-identical. Ticker state, strictly-prior-day.
+    regime_entry_gate: bool = False   # no new campaign opens in unpaid decline
+    regime_roll_gate: bool = False    # mid-life roll denied in unpaid decline
+    regime_stop_gate: bool = False    # put stop suppressed while vol == "stressed"
 
 @dataclass
 class Trade:
@@ -58,10 +84,18 @@ class WheelResult:
     warnings: list = None
     days_shares_uncovered: int = 0
 
-def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResult:
+def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
+              regime_states: pd.DataFrame | None = None) -> WheelResult:
     if cfg.liquidate_assignment and cfg.call_min_strike is not None:
         raise ValueError("liquidate_assignment never holds shares; call_min_strike "
                          "governs held shares — enable one, not both")
+    any_gate = cfg.regime_entry_gate or cfg.regime_roll_gate or cfg.regime_stop_gate
+    if any_gate and regime_states is None:
+        raise ValueError("a regime gate is on but no regime_states was passed — "
+                         "a gate with no state is a bug, not a run")
+    if cfg.regime_stop_gate and cfg.put_stop_mult is None:
+        raise ValueError("regime_stop_gate gates the put stop; put_stop_mult is "
+                         "None so the arm would be a silent no-op — refuse it")
     dates = sorted(pd.to_datetime(chain["date"]).unique())
     und = underlying_series(chain)
     # index the chain by date ONCE so per-day strike lookups touch ~one day's rows
