@@ -58,11 +58,6 @@ VARIANTS = {
     "all-gates":   {"roll_tested_puts": True, "put_stop_mult": 3.0,
                     "regime_entry_gate": True, "regime_roll_gate": True,
                     "regime_stop_gate": True},
-    # siege exit (spec 2026-07-14): uncovered unpaid-decline days re-derived
-    # from ledger share/coverage periods + the local state rules.
-    "basis+siege": {"call_min_strike": "basis", "regime_siege_exit": True},
-    "siege+egate": {"call_min_strike": "basis", "regime_siege_exit": True,
-                    "regime_entry_gate": True},
 }
 MANAGE = {"CLOSE_PUT", "CLOSE_CALL", "ROLL_CLOSE", "STOP_CLOSE"}
 TERMINAL = MANAGE | {"PUT_EXPIRED", "CALL_EXPIRED", "ASSIGNED", "CALLED_AWAY"}
@@ -204,53 +199,6 @@ def audit(ticker, name, overrides):
             mismatches.append(f"{ticker}/{name} {pd.Timestamp(d).date()} {kind} "
                               f"logged but vol state is {g[1]!r}, not stressed")
         fired["gate"] = fired.get("gate", 0) + 1
-    # siege exit: re-derive share-holding periods and call coverage from the
-    # ledger, then require: the FIRST uncovered unpaid-decline day of every
-    # period is exactly where the ledger exits — and a period the ledger holds
-    # to the end contains NO such day. Double-entry, both directions.
-    if cfg.regime_siege_exit:
-        chain_days = list(und.index)
-        call_legs = [(pd.Timestamp(l["opened"]).normalize(),
-                      pd.Timestamp(l["closed"]).normalize() if l["closed"] is not None else None)
-                     for l in positions_from_trades(res.trades)
-                     if l["contract"].right == "C"]
-        periods = []   # (start, end_day_or_None, ended_by)
-        start = None
-        for t in res.trades:
-            d0 = pd.Timestamp(t.date).normalize()
-            if t.action == "ASSIGNED":
-                start = d0
-            elif t.action in ("CALLED_AWAY", "SIEGE_EXIT") and start is not None:
-                periods.append((start, d0, t.action))
-                start = None
-        if start is not None:
-            periods.append((start, None, "OPEN_AT_END"))
-        for (p0, p1, ended_by) in periods:
-            # uncovered day d: shares held at the entry step's end, no call leg
-            # spanning d. CALLED_AWAY day itself: shares already gone (expiry
-            # resolution precedes the entry step); SIEGE_EXIT day IS uncovered.
-            if p1 is None:
-                days = [d for d in chain_days if d >= p0]
-            elif ended_by == "SIEGE_EXIT":
-                days = [d for d in chain_days if p0 <= d <= p1]
-            else:
-                days = [d for d in chain_days if p0 <= d < p1]
-            derived = None
-            for d in days:
-                covered = any(o <= d and (c is None or c > d) for (o, c) in call_legs)
-                if covered:
-                    continue
-                if _unpaid(*_asof(states, d)):
-                    derived = d
-                    break
-            actual = p1 if ended_by == "SIEGE_EXIT" else None
-            if derived != actual:
-                mismatches.append(f"{ticker}/{name} share period {p0.date()}→"
-                                  f"{p1.date() if p1 is not None else 'open'}: derived siege exit "
-                                  f"{derived.date() if derived is not None else 'none'}, "
-                                  f"ledger has {actual.date() if actual is not None else 'none'}")
-            elif actual is not None:
-                fired["gate"] = fired.get("gate", 0) + 1
     # double-entry on roll denials: the ledger's denial events and the audit's
     # independently re-derived would-execute-but-gated days must be identical.
     if cfg.regime_roll_gate:

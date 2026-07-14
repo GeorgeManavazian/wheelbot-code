@@ -80,3 +80,7 @@ Interpretation (recorded, not tuned around): siege days are not idle waste — t
 ## Out of scope
 
 - Rotation of freed cash to other tickers (bookmarked idea 1), strategy switching (bookmarked idea 5), any per-regime parameter, time-based siege stops, renting below basis in panic (rejected in brainstorm — re-opens the closed wound).
+
+## Amendment 2026-07-14b — owner kill, code removed
+
+Owner decision (2026-07-14, after reading the falsifying A/B): mechanic goes to the trash. Engine flag, tests, audit variants, and runner reverted from the codebase (revert of 045fd19 + 391dc07); this spec and amendment 14a stay as the permanent record, and `data/options/reports/siege_exit.txt` stays on disk. Plain path unaffected (suite green post-revert). Any future revival starts from this document, not from memory.

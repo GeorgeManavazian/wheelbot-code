@@ -236,8 +236,7 @@ def test_report_gates_block_present_when_flag_on_even_if_never_fired():
     ch = _chain(PUT_DAY); cfg = _cfg(regime_entry_gate=True)
     rep = wheel_report(run_wheel(ch, cfg, regime_states=st), ch, cfg)
     assert rep.gates == {"days_entry_gated": 0, "n_rolls_denied": 0,
-                         "n_stops_suppressed": 0, "n_siege_exits": 0,
-                         "n_state_unknown": 0}
+                         "n_stops_suppressed": 0, "n_state_unknown": 0}
     assert "Regime gates" in format_report(rep)
 
 def test_report_gates_none_on_plain_run():
