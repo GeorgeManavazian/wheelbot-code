@@ -7,16 +7,21 @@ importing the engine's decision code: the engine writes the ledger, this
 script recomputes it from the source documents. Agreement is the proof.
 
 Usage:  .venv/bin/python -m scripts.audit_defense_execution [TICKER ...]
+        .venv/bin/python -m scripts.audit_defense_execution --hourly [TICKER ...]
         (default: SPY GDX SLV XOP — the in-sample set; never run this on the
-        pre-registered unseen basket tickers before the basket run.)
+        pre-registered unseen basket tickers before the basket run. --hourly
+        audits the intraday-TP path against the raw hourly bar parquets and
+        skips tickers whose hourly file is not on disk.)
 
 Exit 0 = every held day accounted for, zero mismatches. Non-zero otherwise.
 """
+import os
 import sys
 import pandas as pd
 
 from src.engine_v2.options.wheel import (WheelConfig, run_wheel,
                                          MAX_ROLLS_PER_CAMPAIGN)
+from src.engine_v2.options.intraday import run_wheel_intraday
 from src.engine_v2.options.select import select_roll_contract, option_mark
 from src.engine_v2.regime.state import regime_series
 from src.engine_v2.regime.data import closes_for
@@ -209,7 +214,148 @@ def audit(ticker, name, overrides):
     return checked_days, fired, mismatches
 
 
+# ---------------------------------------------------------------------------
+# Hourly (intraday-TP) audit: the plain wheel with hourly fills, re-derived
+# from the RAW bar parquet with independent code (own validity filter, own
+# bar walk) — not via intraday_marks. For every ledger leg the audit derives
+# the first termination event (intraday TP fill / EOD TP / expiry) and its
+# exact timestamp + price, then requires the ledger to agree.
+# ---------------------------------------------------------------------------
+
+def _load_bars_independent(ticker):
+    """Raw hourly bars -> {(expiry, strike, right): ordered [timestamp, close]}.
+    Validity rule re-stated locally: a bar with no trade (volume 0) or a zero
+    close is not a price."""
+    path = f"data/options/{ticker.lower()}_ohlc_1h_all.parquet"
+    if not os.path.exists(path):
+        return None
+    df = pd.read_parquet(path)
+    df = df[(df["volume"] > 0) & (df["close"] > 0)]
+    return {(pd.Timestamp(e), float(s), r):
+            g[["timestamp", "close"]].sort_values("timestamp").reset_index(drop=True)
+            for (e, s, r), g in df.groupby(["expiry", "strike", "right"])}
+
+
+def audit_hourly(ticker, start="2020-01-01"):
+    ch = pd.read_parquet(f"data/options/{ticker.lower()}_greeks_eod_all.parquet")
+    ch["date"] = pd.to_datetime(ch["date"])
+    ch = ch[ch["date"] >= pd.Timestamp(start)].reset_index(drop=True)
+    bars_by_contract = _load_bars_independent(ticker)
+    if bars_by_contract is None:
+        return None
+    ih = pd.read_parquet(f"data/options/{ticker.lower()}_ohlc_1h_all.parquet")
+    ih = ih[ih["timestamp"] >= pd.Timestamp(start)].reset_index(drop=True)
+    cfg = WheelConfig(ticker=ticker, **BASE)
+    res = run_wheel_intraday(ch, cfg, ih)
+
+    und = ch.groupby("date")["underlying"].first()
+    by_date = {pd.Timestamp(k): g for k, g in ch.groupby("date")}
+    chain_days = sorted(und.index)
+    thresh_mult = 1 - cfg.take_profit_pct
+
+    mismatches, checked_days, verified = [], 0, {"intraday_tp": 0, "eod_tp": 0,
+                                                 "expiry": 0}
+    for leg in positions_from_trades(res.trades):
+        c, n, credit = leg["contract"], leg["n"], leg["credit"]
+        key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
+        opened = pd.Timestamp(leg["opened"]).normalize()
+        thresh = thresh_mult * credit
+        cbars = bars_by_contract.get(key)
+
+        expected = None   # (kind, when, price|None)
+        for d in chain_days:
+            if not (opened < d):
+                continue
+            checked_days += 1
+            if d < pd.Timestamp(c.expiry):
+                day = (cbars[cbars["timestamp"].dt.normalize() == d]
+                       .reset_index(drop=True)) if cbars is not None else None
+                hit = None
+                if day is not None and len(day) > 1:
+                    for i in range(len(day) - 1):
+                        if day.iloc[i]["close"] <= thresh:
+                            hit = (day.iloc[i + 1]["timestamp"],
+                                   float(day.iloc[i + 1]["close"]))
+                            break
+                if hit is not None:
+                    expected = ("INTRADAY_TP", hit[0], hit[1])
+                    break
+                mark = option_mark(by_date[d], d, c)
+                if mark is not None and mark.ask <= thresh:
+                    expected = ("EOD_TP", d, float(mark.ask))
+                    break
+            else:
+                expected = ("EXPIRY", d, None)
+                break
+
+        actual_when = leg["closed"]
+        actual_action = leg["close_action"]
+        loc = f"{ticker}/plain-hourly {c.strike}{c.right} exp {pd.Timestamp(c.expiry).date()}"
+        if expected is None:
+            if actual_action != "OPEN_AT_END":
+                mismatches.append(f"{loc}: no trigger derived but ledger closed "
+                                  f"via {actual_action} at {actual_when}")
+            continue
+        kind, when, price = expected
+        if kind in ("INTRADAY_TP", "EOD_TP"):
+            if actual_action not in ("CLOSE_PUT", "CLOSE_CALL"):
+                mismatches.append(f"{loc}: derived {kind} at {when} but ledger "
+                                  f"shows {actual_action} at {actual_when}")
+                continue
+            if pd.Timestamp(actual_when) != pd.Timestamp(when):
+                mismatches.append(f"{loc}: derived {kind} fill at {when} but "
+                                  f"ledger closed at {actual_when}")
+                continue
+            close_tr = [t for t in res.trades
+                        if t.action == actual_action and t.contract == c
+                        and pd.Timestamp(t.date) == pd.Timestamp(when)]
+            if not close_tr or abs(close_tr[0].price_per_contract - price) > 1e-9:
+                got = close_tr[0].price_per_contract if close_tr else "missing"
+                mismatches.append(f"{loc}: derived fill price {price} at {when}, "
+                                  f"ledger has {got}")
+                continue
+            verified["intraday_tp" if kind == "INTRADAY_TP" else "eod_tp"] += 1
+        else:  # EXPIRY
+            if actual_action not in ("PUT_EXPIRED", "CALL_EXPIRED", "ASSIGNED",
+                                     "CALLED_AWAY"):
+                mismatches.append(f"{loc}: derived expiry resolution at {when} "
+                                  f"but ledger shows {actual_action} at {actual_when}")
+                continue
+            if pd.Timestamp(actual_when).normalize() != pd.Timestamp(when).normalize():
+                mismatches.append(f"{loc}: derived expiry resolution {when} but "
+                                  f"ledger resolved at {actual_when}")
+                continue
+            verified["expiry"] += 1
+    return checked_days, verified, mismatches
+
+
+def main_hourly(tickers):
+    total_mm, lines = [], []
+    for t in tickers:
+        out = audit_hourly(t)
+        if out is None:
+            lines.append(f"{t:<4} plain-hourly  SKIPPED (no hourly parquet on disk)")
+            continue
+        days, ver, mm = out
+        lines.append(f"{t:<4} plain-hourly  held-days checked {days:>6}  "
+                     f"intraday TPs verified {ver['intraday_tp']:>4}  "
+                     f"EOD TPs {ver['eod_tp']:>4}  expiries {ver['expiry']:>4}  "
+                     f"mismatches {len(mm)}")
+        total_mm.extend(mm)
+    print("\n".join(lines))
+    if total_mm:
+        print(f"\n{len(total_mm)} MISMATCHES:")
+        print("\n".join(total_mm[:40]))
+        sys.exit(1)
+    print("\nHOURLY EXECUTION VERIFIED: every derived fill matches the ledger, "
+          "timestamp and price.")
+
+
 def main():
+    if "--hourly" in sys.argv:
+        args = [a for a in sys.argv[1:] if not a.startswith("--")]
+        main_hourly([t.upper() for t in args] or ["GDX", "SLV", "XOP"])
+        return
     tickers = [t.upper() for t in sys.argv[1:]] or ["SPY", "GDX", "SLV", "XOP"]
     total_mm, lines = [], []
     for t in tickers:
