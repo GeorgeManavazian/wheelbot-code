@@ -351,7 +351,123 @@ def main_hourly(tickers):
           "timestamp and price.")
 
 
+# ---------------------------------------------------------------------------
+# Portfolio-rotation audit (spec 2026-07-14-portfolio-rotation): every route
+# decision re-derived with the audit's OWN state lookup and ranking; every
+# leg's TP/expiry re-derived per ticker. Exit 0 required before citing results.
+# ---------------------------------------------------------------------------
+
+def _asof_row(states, d, max_stale_days=14):
+    prior = states.index[states.index < pd.Timestamp(d)]
+    if len(prior) == 0:
+        return None
+    last = prior[-1]
+    if (pd.Timestamp(d) - last).days > max_stale_days:
+        return None
+    return states.loc[last]
+
+
+def audit_portfolio():
+    from src.engine_v2.options.portfolio import (run_portfolio_wheel,
+                                                 ROTATION_TIE_ORDER,
+                                                 DEFAULT_CLEAN_START)
+    SEEN = ["SPY", "GDX", "SLV", "XOP"]
+    chains = {t: pd.read_parquet(f"data/options/{t.lower()}_greeks_eod_all.parquet")
+              for t in SEEN}
+    states = {t: regime_series(closes_for(t)) for t in SEEN}
+    cfg = WheelConfig(ticker="SPY", **BASE, call_min_strike="basis")
+    res = run_portfolio_wheel(chains, cfg, states)
+    by_date = {t: {pd.Timestamp(k): g for k, g in chains[t].groupby("date")}
+               for t in SEEN}
+    und = {t: chains[t].groupby("date")["underlying"].first() for t in SEEN}
+    mismatches, verified = [], {"routes": 0, "tp": 0, "expiry": 0}
+
+    # 1) route decisions: state eligibility + ranking re-derived locally
+    for (d, ranked, chosen) in res.route_events:
+        local = {}
+        for tk, engine_pct in ranked:
+            row = _asof_row(states[tk], d)
+            if row is not None and _unpaid(row["trend"], row["vol"]):
+                mismatches.append(f"portfolio {pd.Timestamp(d).date()} candidate {tk} "
+                                  f"is in unpaid decline — must not be a candidate")
+                continue
+            local_pct = -1.0 if row is None else float(row["vol_pctile"])
+            if abs(local_pct - engine_pct) > 1e-9:
+                mismatches.append(f"portfolio {pd.Timestamp(d).date()} {tk} engine "
+                                  f"pctile {engine_pct} != audit {local_pct}")
+            local[tk] = local_pct
+        if local:
+            top = sorted(local, key=lambda t: (-local[t], ROTATION_TIE_ORDER.index(t)))[0]
+            if top != chosen:
+                mismatches.append(f"portfolio {pd.Timestamp(d).date()} routed to "
+                                  f"{chosen}, audit ranks {top} first")
+            else:
+                verified["routes"] += 1
+
+    # 2) every SELL_PUT must be on a state-eligible ticker-day
+    for t_ in res.trades:
+        if t_.action == "SELL_PUT":
+            row = _asof_row(states[t_.contract.root], t_.date)
+            if row is not None and _unpaid(row["trend"], row["vol"]):
+                mismatches.append(f"portfolio {pd.Timestamp(t_.date).date()} SELL_PUT "
+                                  f"on {t_.contract.root} in unpaid decline")
+
+    # 3) per-ticker leg walk: TP (EOD) and expiry re-derived
+    thresh_mult = 1 - cfg.take_profit_pct
+    for tk in SEEN:
+        legs = positions_from_trades([t_ for t_ in res.trades
+                                      if t_.contract is not None
+                                      and getattr(t_.contract, "root", None) == tk])
+        for leg in legs:
+            c, n, credit = leg["contract"], leg["n"], leg["credit"]
+            opened = pd.Timestamp(leg["opened"])
+            days = [d for d in und[tk].index if opened < d]
+            expected = None
+            for d in days:
+                if d < pd.Timestamp(c.expiry):
+                    mark = option_mark(by_date[tk][pd.Timestamp(d)], d, c)
+                    if mark is not None and mark.ask <= thresh_mult * credit:
+                        expected = ("TP", d)
+                        break
+                else:
+                    expected = ("EXPIRY", d)
+                    break
+            loc = f"portfolio/{tk} {c.strike}{c.right} exp {pd.Timestamp(c.expiry).date()}"
+            if expected is None:
+                if leg["close_action"] != "OPEN_AT_END":
+                    mismatches.append(f"{loc}: no trigger derived, ledger has "
+                                      f"{leg['close_action']}")
+                continue
+            kind, when = expected
+            got_when = pd.Timestamp(leg["closed"]).normalize() if leg["closed"] is not None else None
+            if kind == "TP":
+                if leg["close_action"] not in ("CLOSE_PUT", "CLOSE_CALL") or \
+                        got_when != pd.Timestamp(when).normalize():
+                    mismatches.append(f"{loc}: derived TP {pd.Timestamp(when).date()}, "
+                                      f"ledger {leg['close_action']} at {got_when}")
+                else:
+                    verified["tp"] += 1
+            else:
+                if got_when is None or got_when != pd.Timestamp(when).normalize():
+                    mismatches.append(f"{loc}: derived expiry resolution "
+                                      f"{pd.Timestamp(when).date()}, ledger "
+                                      f"{leg['close_action']} at {got_when}")
+                else:
+                    verified["expiry"] += 1
+
+    print(f"portfolio  routes verified {verified['routes']}  TPs {verified['tp']}  "
+          f"expiries {verified['expiry']}  mismatches {len(mismatches)}")
+    if mismatches:
+        print("\n".join(mismatches[:40]))
+        sys.exit(1)
+    print("\nPORTFOLIO EXECUTION VERIFIED: every route and every leg termination "
+          "re-derived, ledger agrees.")
+
+
 def main():
+    if "--portfolio" in sys.argv:
+        audit_portfolio()
+        return
     if "--hourly" in sys.argv:
         args = [a for a in sys.argv[1:] if not a.startswith("--")]
         main_hourly([t.upper() for t in args] or ["GDX", "SLV", "XOP"])
