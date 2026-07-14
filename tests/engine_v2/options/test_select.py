@@ -121,11 +121,12 @@ def test_min_strike_no_inband_expiry_qualifies_returns_none():
 
 def test_roll_destination_same_strike_beyond_held_expiry():
     from src.engine_v2.options.select import select_roll_contract
-    # held 460P exp Jan-09; Jan-08 is not beyond; Jan-12 and Jan-17 both carry
-    # the 460 strike; anchor Jan-09 + 7 = Jan-16 -> Jan-17 wins.
+    # held 460P exp Jan-09; Jan-08 not beyond; Jan-15 (ext 6) and Jan-17
+    # (ext 8) are both inside the tenor band; anchor Jan-16 -> tie on error 1
+    # -> longer-dated Jan-17 wins.
     rows = [
         ["2024-01-04","2024-01-08",4,460,"P",3.00,3.10,3.05,3.05,-0.30,0.1,468.0],
-        ["2024-01-04","2024-01-12",8,460,"P",3.20,3.30,3.25,3.25,-0.30,0.1,468.0],
+        ["2024-01-04","2024-01-15",11,460,"P",3.20,3.30,3.25,3.25,-0.30,0.1,468.0],
         ["2024-01-04","2024-01-17",13,460,"P",4.20,4.30,4.25,4.25,-0.30,0.1,468.0],
     ]
     ch = _rows_chain(rows)
@@ -136,16 +137,27 @@ def test_roll_destination_same_strike_beyond_held_expiry():
 
 def test_roll_destination_skips_expiry_missing_the_strike():
     from src.engine_v2.options.select import select_roll_contract
-    # nearest-to-anchor expiry (Jan-17) lacks the 460 strike -> fall to Jan-12,
-    # which carries it.
+    # nearest-to-anchor in-band expiry (Jan-17) lacks the 460 strike -> fall to
+    # Jan-15, which carries it.
     rows = [
-        ["2024-01-04","2024-01-12",8,460,"P",3.20,3.30,3.25,3.25,-0.30,0.1,468.0],
+        ["2024-01-04","2024-01-15",11,460,"P",3.20,3.30,3.25,3.25,-0.30,0.1,468.0],
         ["2024-01-04","2024-01-17",13,455,"P",4.20,4.30,4.25,4.25,-0.30,0.1,468.0],
     ]
     ch = _rows_chain(rows)
     c = select_roll_contract(ch, pd.Timestamp("2024-01-04"), "P", 460.0,
                              pd.Timestamp("2024-01-09"), 7, "SPY")
-    assert c is not None and c.expiry == pd.Timestamp("2024-01-12")
+    assert c is not None and c.expiry == pd.Timestamp("2024-01-15")
+
+def test_roll_destination_rejects_out_of_band_tenor():
+    from src.engine_v2.options.select import select_roll_contract
+    # only listing with the strike is 16 days beyond the held expiry — outside
+    # derived_band(7)=(5,10) extension -> no roll destination.
+    rows = [
+        ["2024-01-04","2024-01-25",21,460,"P",5.20,5.30,5.25,5.25,-0.30,0.1,468.0],
+    ]
+    ch = _rows_chain(rows)
+    assert select_roll_contract(ch, pd.Timestamp("2024-01-04"), "P", 460.0,
+                                pd.Timestamp("2024-01-09"), 7, "SPY") is None
 
 def test_roll_destination_none_when_nothing_beyond():
     from src.engine_v2.options.select import select_roll_contract

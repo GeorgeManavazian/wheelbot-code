@@ -223,8 +223,9 @@ def test_stop_check_missing_mark_logs_warning():
 _ROLLABLE = [
     ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
     ["2024-01-04","2024-01-09",5,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,468.0],
-    # same strike, one cycle out — the canonical credit roll destination
-    ["2024-01-04","2024-01-11",7,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,468.0],
+    # same strike, one cycle out (ext 7d, inside the tenor band) — the
+    # canonical credit roll destination
+    ["2024-01-04","2024-01-16",12,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,468.0],
 ]
 
 def test_tested_put_rolls_midlife_with_credit():
@@ -235,13 +236,13 @@ def test_tested_put_rolls_midlife_with_credit():
     assert rc.price_per_contract == pytest.approx(3.10)   # buyback at ask
     assert ro.price_per_contract == pytest.approx(3.20)   # new leg at bid
     assert ro.contract.strike == 470.0            # same strike, out in time
-    assert ro.contract.expiry == pd.Timestamp("2024-01-11")
+    assert ro.contract.expiry == pd.Timestamp("2024-01-16")
     assert rc.campaign_id == ro.campaign_id == 1          # same saga
 
 def test_roll_requires_net_credit():
     # new leg bid (2.90) < buyback ask (3.10) -> net debit -> no roll
     rows = [_ROLLABLE[0], _ROLLABLE[1],
-        ["2024-01-04","2024-01-11",7,470,"P",2.90,3.00,2.95,2.95,-0.52,0.1,468.0]]
+        ["2024-01-04","2024-01-16",12,470,"P",2.90,3.00,2.95,2.95,-0.52,0.1,468.0]]
     res = run_wheel(_chain(rows), _cfg(roll_tested_puts=True))
     assert [t.action for t in res.trades] == ["SELL_PUT"]
 
@@ -249,7 +250,7 @@ def test_roll_not_triggered_when_not_tested():
     # spot 471 > strike 470 -> not tested -> no roll even though credit exists
     rows = [_ROLLABLE[0],
         ["2024-01-04","2024-01-09",5,470,"P",3.00,3.10,3.05,3.05,-0.45,0.1,471.0],
-        ["2024-01-04","2024-01-11",7,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,471.0]]
+        ["2024-01-04","2024-01-16",12,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,471.0]]
     res = run_wheel(_chain(rows), _cfg(roll_tested_puts=True))
     assert [t.action for t in res.trades] == ["SELL_PUT"]
 
@@ -258,17 +259,17 @@ def test_roll_cap_two_then_normal_expiry_path():
     # third leg runs to expiry and is assigned.
     rows = [
         ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
-        # day 2: tested, roll 1 -> 470P Jan-10 (same strike, out)
+        # day 2: tested, roll 1 -> 470P Jan-16 (ext 7)
         ["2024-01-03","2024-01-09",6,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,468.0],
-        ["2024-01-03","2024-01-10",7,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,468.0],
-        # day 3: tested again, roll 2 -> 470P Jan-11
-        ["2024-01-04","2024-01-10",6,470,"P",3.00,3.10,3.05,3.05,-0.60,0.1,458.0],
-        ["2024-01-04","2024-01-11",7,470,"P",3.20,3.30,3.25,3.25,-0.58,0.1,458.0],
-        # day 4: tested a third time, credit roll available - cap says NO
-        ["2024-01-05","2024-01-11",6,470,"P",3.00,3.10,3.05,3.05,-0.65,0.1,448.0],
-        ["2024-01-05","2024-01-12",7,470,"P",3.20,3.30,3.25,3.25,-0.62,0.1,448.0],
+        ["2024-01-03","2024-01-16",13,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,468.0],
+        # day 3: tested again, roll 2 -> 470P Jan-23 (ext 7)
+        ["2024-01-04","2024-01-16",12,470,"P",3.00,3.10,3.05,3.05,-0.60,0.1,458.0],
+        ["2024-01-04","2024-01-23",19,470,"P",3.20,3.30,3.25,3.25,-0.58,0.1,458.0],
+        # day 4: tested a third time, in-band credit roll available - cap says NO
+        ["2024-01-05","2024-01-23",18,470,"P",3.00,3.10,3.05,3.05,-0.65,0.1,448.0],
+        ["2024-01-05","2024-01-30",25,470,"P",3.20,3.30,3.25,3.25,-0.62,0.1,448.0],
         # expiry of the second rolled leg: ITM -> assigned
-        ["2024-01-11","2024-01-11",0,470,"P",25.00,25.10,25.05,25.05,-0.99,0.1,445.0],
+        ["2024-01-23","2024-01-23",0,470,"P",25.00,25.10,25.05,25.05,-0.99,0.1,445.0],
     ]
     res = run_wheel(_chain(rows), _cfg(roll_tested_puts=True, target_dte=7))
     acts = [t.action for t in res.trades]
@@ -281,7 +282,7 @@ def test_roll_beats_stop_when_both_would_fire():
     # new leg from the next day).
     rows = [_ROLLABLE[0],
         ["2024-01-04","2024-01-09",5,470,"P",6.50,6.60,6.55,6.55,-0.80,0.1,464.0],
-        ["2024-01-04","2024-01-11",7,470,"P",6.70,6.80,6.75,6.75,-0.75,0.1,464.0]]
+        ["2024-01-04","2024-01-16",12,470,"P",6.70,6.80,6.75,6.75,-0.75,0.1,464.0]]
     res = run_wheel(_chain(rows), _cfg(roll_tested_puts=True, put_stop_mult=3.0))
     acts = [t.action for t in res.trades]
     assert "ROLL_CLOSE" in acts and "STOP_CLOSE" not in acts
@@ -334,15 +335,28 @@ def test_floor_ratchets_down_as_call_premium_accrues():
 def test_expiry_missing_from_chain_resolves_on_next_trading_day():
     # the 470P expires Jan-09 but the chain has NO Jan-09 rows (data gap).
     # Old engine: position becomes an unmanageable zombie forever. Fixed:
-    # resolves on Jan-10 (first day >= expiry), logs expiry_resolved_late.
+    # resolves on Jan-10, and moneyness is decided at the LAST close at/before
+    # expiry (472 -> OTM), not the post-gap spot (464) — no phantom assignment
+    # from a move that happened after the option was dead.
     rows = [
         ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
         ["2024-01-10","2024-01-17",7,465,"P",2.00,2.10,2.05,2.05,-0.30,0.1,464.0],
     ]
     res = run_wheel(_chain(rows), _cfg())
     acts = [t.action for t in res.trades]
-    assert "ASSIGNED" in acts                       # 464 < 470 on resolution day
+    assert "PUT_EXPIRED" in acts and "ASSIGNED" not in acts
     assert any(w[1] == "expiry_resolved_late" for w in res.warnings)
+
+def test_gap_expiry_itm_at_last_close_still_assigns():
+    # last close at/before the gap expiry is ITM (468 < 470) -> assignment IS
+    # booked on the resolution day, even though the post-gap spot recovered.
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-08","2024-01-09",1,470,"P",3.00,3.10,3.05,3.05,-0.60,0.1,468.0],
+        ["2024-01-10","2024-01-17",7,465,"P",2.00,2.10,2.05,2.05,-0.30,0.1,475.0],
+    ]
+    res = run_wheel(_chain(rows), _cfg())
+    assert "ASSIGNED" in [t.action for t in res.trades]
 
 def test_missing_mark_with_roll_and_stop_logs_one_warning():
     # held contract has no mark row on a tested day; BOTH roll and stop enabled

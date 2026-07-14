@@ -45,10 +45,16 @@ def select_roll_contract(chain, date, right, strike, current_expiry, target_dte,
     if cand.empty:
         return None
     exps = cand.groupby("expiry")["dte"].first()
-    exps = exps[exps.index > pd.Timestamp(current_expiry)]
+    # tenor guard: the extension (new expiry - held expiry) must sit within the
+    # same derived band the entry uses — without it, a sparse strike grid could
+    # silently roll a 7-DTE campaign months out (no such expiry -> no roll).
+    lo, hi = derived_band(target_dte)
+    cur = pd.Timestamp(current_expiry)
+    ext = (exps.index - cur).days
+    exps = exps[(ext >= max(1, lo)) & (ext <= hi)]
     if exps.empty:
         return None
-    anchor = pd.Timestamp(current_expiry) + pd.Timedelta(days=target_dte)
+    anchor = cur + pd.Timedelta(days=target_dte)
     best = sorted(exps.index, key=lambda e: (abs((e - anchor).days), -exps[e]))[0]
     return Contract(root, best, float(strike), right)
 

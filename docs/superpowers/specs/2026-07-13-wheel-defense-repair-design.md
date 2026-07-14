@@ -124,6 +124,19 @@ The owner-mandated audit/stress loop (multi-agent code review of the branch diff
 
 Declined (style-only, churn > value, noted for honesty): extracting a helper for the repeated `cost = …; cash -= cost; campaign_premium -= cost` triple; `WheelResult.warnings: list = None` default.
 
+### Audit round 2 (2026-07-13, after session-limit rerun)
+
+Round-2 review's verifier fleet died on a session limit; the 17 unverified candidates were recovered from the workflow journal and verified inline. Fixed:
+
+1. **Phantom assignment on gap expiries.** Late resolution decided ITM/OTM with the post-gap day's spot — booking assignments/exercises from moves that happened after the option was dead. Moneyness now settles at the **last close at/before expiry** (past data, no look-ahead); fills still occur on the resolution day. Roll counterfactuals use the same settle rule.
+2. **Unbounded roll tenor.** `select_roll_contract` accepted any expiry beyond the held leg; a sparse far-dated strike grid could roll a 7-DTE campaign months out. The extension (new expiry − held expiry) must now sit inside `derived_band(target_dte)` — derived, no knob, mirrors the entry band.
+3. **Warning taxonomy.** `expiry_resolved_late` was counted as "skipped checks" in report + dashboard. Stats now expose `n_no_mark_days` and `n_late_expiries`; labels updated on both surfaces.
+4. `realized_dte` restricted to fresh entries again (the chart proves entry-selection determinism; rolled-in legs sit deliberately beyond the band).
+5. Dashboard: stale "No calls below basis" label/help (described the pre-repair floor and cited the pre-repair matrix as if applicable) rewritten; `Rolls` tile reuses `stats.n_rolls`; `getattr` guard against stale-session `WheelReport` without `defense`.
+6. Roll block: guard and fill share one computed cost/proceeds pair (a future fill-model change cannot admit debit rolls); dead `new_c != c` check removed.
+
+Declined round 2 (noted): unifying the four hand-maintained trade-action lists behind shared constants (worth doing when the next action type is added); replacing `_trade_cash_flow` with engine-emitted flows; `groupby` micro-optimization in the selector.
+
 ## Error handling
 
 | Situation | Behavior |

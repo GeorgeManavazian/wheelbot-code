@@ -82,17 +82,18 @@ def render():
     # deliberately not tunable knobs.
     DEFENSES = {
         "None (plain wheel)": {},
-        "No calls below basis": {"call_min_strike": "basis"},
+        "Calls at/above net basis": {"call_min_strike": "basis"},
         "Roll tested puts (mid-life)": {"roll_tested_puts": True},
         "Liquidate at assignment": {"liquidate_assignment": True},
         "Put stop at 3× credit": {"put_stop_mult": 3.0},
     }
     defense_name = st.selectbox(
         "Defense", list(DEFENSES), key="w_defense",
-        help="Post-assignment / exit mechanics. Fixed pre-registered set — see "
-             "spec amendment 2026-07-12b. 'No calls below basis' was the only "
-             "one that helped on the 4-ticker matrix; the others are kept for "
-             "honest comparison.")
+        help="Post-assignment / exit mechanics. Fixed set, repaired per the "
+             "2026-07-13 defense-repair spec: the basis floor is now NET basis "
+             "(assignment strike minus premium banked) and the roll is the "
+             "mid-life same-strike credit-only roll. Pre-repair matrix results "
+             "are provenance-only and describe the OLD mechanics.")
 
     # Per-ticker hourly OHLC; the pull is still in flight for some tickers.
     intra = None if ticker_name == FIXTURE_TICKER else intraday_path(ticker)
@@ -173,14 +174,14 @@ def render():
 
         # Defense diagnostics — the campaign-level answer to "did the defense
         # help", visible wherever the defense is chosen.
-        if rep.defense:
+        if getattr(rep, "defense", None):
             dd = rep.defense
             st.subheader("Defense stats (campaign-level)")
             wr = dd["campaign_win_rate"]
             e1, e2, e3, e4 = st.columns(4)
             e1.metric("Campaigns", dd["n_campaigns"])
             e2.metric("Campaign win rate", "n/a" if pd.isna(wr) else f"{wr:.0%}")
-            e3.metric("Rolls", sum(k * v for k, v in dd["rolls_per_campaign"].items()))
+            e3.metric("Rolls", rep.stats["n_rolls"])
             e4.metric("Stops", dd["n_stops"])
             adv = dd["roll_advantage_total"]
             skip = dd.get("roll_counterfactual_skipped", 0)
@@ -189,7 +190,8 @@ def render():
                 f"(helped {dd['roll_advantage_positive']}, hurt {dd['roll_advantage_negative']})"
                 + (f" · {skip} leg(s) beyond data window" if skip else "")
                 + f" · shares uncovered {dd['days_shares_uncovered']} days"
-                + f" · skipped checks {dd['n_warnings']}")
+                + f" · no-mark days {dd['n_no_mark_days']}"
+                + f" · late expiry resolutions {dd['n_late_expiries']}")
             if dd["liquidate_fill_note"]:
                 st.caption("Liquidation fills at EOD spot — no stock spread/slippage "
                            "modeled (options pay full spread).")

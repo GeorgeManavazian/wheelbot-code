@@ -71,8 +71,12 @@ def wheel_stats(result, cfg) -> dict:
         "commission_paid": commission,
         "net_premium": prem_in - prem_out - commission,
         "assignment_rate": (len(of("ASSIGNED")) / n_puts) if n_puts else 0.0,
+        # entry legs only: the realized-DTE chart proves ENTRY selection
+        # determinism against the derived band; rolled-in legs sit deliberately
+        # beyond it (held expiry + target) and would pollute the proof.
         "realized_dte": pd.Series(
-            [(pd.Timestamp(t.contract.expiry) - pd.Timestamp(t.date)).days for t in sells],
+            [(pd.Timestamp(t.contract.expiry) - pd.Timestamp(t.date)).days
+             for t in of("SELL_PUT") + of("SELL_CALL")],
             dtype=int).value_counts().sort_index(),
         "n_days_flat": result.days_flat,
         "pct_days_flat": (result.days_flat / len(result.equity)) if len(result.equity) else 0.0,
@@ -80,6 +84,12 @@ def wheel_stats(result, cfg) -> dict:
         "n_stops": len(of("STOP_CLOSE")),
         "n_campaigns": len({t.campaign_id for t in trades if t.campaign_id}),
         "n_warnings": len(getattr(result, "warnings", []) or []),
+        # warnings by type — 'skipped check' and 'late expiry resolution' are
+        # different data-quality signals; never conflate them in a report.
+        "n_no_mark_days": sum(1 for w in (getattr(result, "warnings", []) or [])
+                              if w[1] in ("roll_check_no_mark", "stop_check_no_mark")),
+        "n_late_expiries": sum(1 for w in (getattr(result, "warnings", []) or [])
+                               if w[1] == "expiry_resolved_late"),
         "days_shares_uncovered": getattr(result, "days_shares_uncovered", 0),
     }
 
@@ -140,11 +150,11 @@ def roll_counterfactuals(result, chain, cfg) -> pd.DataFrame:
             o = opens.get((t.contract, t.campaign_id))
             exp = pd.Timestamp(t.contract.expiry)
             if exp not in und.index:
-                # expiry day absent from the chain (data gap) — settle the
-                # counterfactual on the first trading day at/after expiry,
-                # matching the engine's own late-resolution rule.
-                later = und.index[und.index >= exp]
-                exp = later[0] if len(later) else None
+                # expiry day absent from the chain (data gap) — settle at the
+                # LAST close at/before expiry, matching the engine's own
+                # late-resolution moneyness rule (wheel.py).
+                pre = und.index[und.index <= exp]
+                exp = pre[-1] if len(pre) else None
             if o is None or exp is None:
                 skipped += 1
                 continue
@@ -194,6 +204,8 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01",
             "roll_counterfactual_skipped": int(cf.attrs.get("n_skipped", 0)),
             "days_shares_uncovered": stats["days_shares_uncovered"],
             "n_warnings": stats["n_warnings"],
+            "n_no_mark_days": stats["n_no_mark_days"],
+            "n_late_expiries": stats["n_late_expiries"],
             "liquidate_fill_note": bool(cfg.liquidate_assignment),
         }
     return WheelReport(
@@ -261,7 +273,8 @@ def format_report(rep) -> str:
                  f"(helped {dd['roll_advantage_positive']}, hurt {dd['roll_advantage_negative']})"
                  + skip_s)
         L.append(f"  days shares uncovered {dd['days_shares_uncovered']}  "
-                 f"skipped checks {dd['n_warnings']}")
+                 f"no-mark days {dd['n_no_mark_days']}  "
+                 f"late expiry resolutions {dd['n_late_expiries']}")
         if dd["liquidate_fill_note"]:
             L.append("  note: liquidation fills at EOD spot — no stock spread/slippage modeled "
                      "(options pay full spread)")

@@ -140,12 +140,14 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                     new_c = select_roll_contract(day_chain, d, "P", c.strike,
                                                  c.expiry, cfg.target_dte, cfg.ticker)
                     new_mark = option_mark(day_chain, d, new_c) if new_c is not None else None
-                    if (new_c is not None and new_c != c and new_mark is not None
-                            and sell_proceeds(new_mark, n, cfg) >= buy_cost(mark, n, cfg)):
-                        cost = buy_cost(mark, n, cfg)
+                    cost = buy_cost(mark, n, cfg)
+                    proceeds = (sell_proceeds(new_mark, n, cfg)
+                                if new_mark is not None else None)
+                    # credit-only: guard and fill use the SAME numbers, so a
+                    # future fill-model change cannot let debit rolls through.
+                    if proceeds is not None and proceeds >= cost:
                         cash -= cost; campaign_premium -= cost
                         trades.append(Trade(d, "ROLL_CLOSE", c, n, mark.ask, cash, campaign))
-                        proceeds = sell_proceeds(new_mark, n, cfg)
                         cash += proceeds; campaign_premium += proceeds
                         short = {"contract": new_c, "contracts": n,
                                  "credit": new_mark.bid, "last_mid": new_mark.mid}
@@ -174,10 +176,18 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
             # an unmanageable zombie that freezes the engine for the rest of
             # the backtest. Late resolution is logged.
             if short is not None and d >= c.expiry:
+                # moneyness is decided at the last close AT/BEFORE expiry —
+                # past data, no look-ahead. Deciding with the post-gap spot
+                # would book phantom assignments/exercises from price moves
+                # that happened after the option was already dead.
+                settle_spot = spot
                 if d > c.expiry:
                     warnings.append((d, "expiry_resolved_late", c))
+                    pre = und[und.index <= c.expiry]
+                    if len(pre):
+                        settle_spot = float(pre.iloc[-1])
                 if c.right == "P":
-                    if spot < c.strike:
+                    if settle_spot < c.strike:
                         cash -= c.strike * mult * n; shares += mult * n; phase = "CALL"
                         basis = c.strike
                         trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash, campaign))
@@ -189,7 +199,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None) -> WheelResu
                     else:
                         trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash, campaign))
                 else:
-                    if spot > c.strike:
+                    if settle_spot > c.strike:
                         cash += c.strike * mult * n; shares -= mult * n; phase = "PUT"
                         basis = None
                         trades.append(Trade(d, "CALLED_AWAY", c, n, c.strike, cash, campaign))

@@ -88,12 +88,12 @@ def _rows_cfg(**kw):
 _ROLL_SAGA = [
     ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
     ["2024-01-04","2024-01-09",5,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,468.0],
-    # same strike, out in time (amendment 2026-07-13b destination)
-    ["2024-01-04","2024-01-11",7,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,468.0],
+    # same strike, out in time (amendment 2026-07-13b destination, ext 7)
+    ["2024-01-04","2024-01-16",12,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,468.0],
     # expiry of the ORIGINAL leg (for the counterfactual): spot 466 -> intrinsic 4.00
     ["2024-01-09","2024-01-09",0,470,"P",4.00,4.10,4.05,4.05,-0.99,0.1,466.0],
     # rolled leg expires worthless (spot back above the strike)
-    ["2024-01-11","2024-01-11",0,470,"P",0.05,0.10,0.075,0.075,-0.01,0.1,471.0],
+    ["2024-01-16","2024-01-16",0,470,"P",0.05,0.10,0.075,0.075,-0.01,0.1,471.0],
 ]
 
 def _roll_result():
@@ -178,16 +178,17 @@ def test_campaign_pnl_excludes_cash_yield_interest():
     ct = campaign_table(res, cfg)
     assert ct.iloc[0]["pnl"] == pytest.approx(200.0)
 
-def test_counterfactual_settles_on_next_day_when_expiry_missing():
+def test_counterfactual_settles_at_last_close_before_gap_expiry():
     from src.engine_v2.options.report import roll_counterfactuals
-    # original leg expiry Jan-09 has no chain rows; underlying on Jan-10 (466)
-    # is used instead -> intrinsic 4.00 -> held pnl -200. Nothing skipped.
+    # original leg expiry Jan-09 has no chain rows; settle uses the LAST close
+    # at/before expiry (Jan-04, 466 -> intrinsic 4.00), matching the engine's
+    # late-resolution rule -> held pnl -200. Nothing skipped.
     saga = [
         ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
-        ["2024-01-04","2024-01-09",5,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,468.0],
-        ["2024-01-04","2024-01-11",7,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,468.0],
-        ["2024-01-10","2024-01-11",1,470,"P",3.90,4.10,4.00,4.00,-0.80,0.1,466.0],
-        ["2024-01-11","2024-01-11",0,470,"P",0.05,0.10,0.075,0.075,-0.01,0.1,471.0],
+        ["2024-01-04","2024-01-09",5,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,466.0],
+        ["2024-01-04","2024-01-16",12,470,"P",3.20,3.30,3.25,3.25,-0.52,0.1,466.0],
+        ["2024-01-10","2024-01-16",6,470,"P",3.90,4.10,4.00,4.00,-0.80,0.1,469.0],
+        ["2024-01-16","2024-01-16",0,470,"P",0.05,0.10,0.075,0.075,-0.01,0.1,471.0],
     ]
     ch = _rows_chain(saga)
     cfg = _rows_cfg(roll_tested_puts=True)
