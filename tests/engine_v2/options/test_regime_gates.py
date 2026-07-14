@@ -38,6 +38,12 @@ def test_is_unpaid_decline_cells():
     assert not is_unpaid_decline("chop", "normal")
     assert not is_unpaid_decline("unknown", "unknown")
 
+def test_staleness_constant_matches_autopsy():
+    # hand-synced by design (no shared module, to keep options/ -> regime/
+    # import direction); this test IS the sync enforcement.
+    from src.engine_v2.regime.autopsy import MAX_STALENESS_DAYS
+    assert GATE_STALENESS_DAYS == MAX_STALENESS_DAYS
+
 def test_state_before_is_strictly_prior():
     st = _states([("2024-01-01","uptrend","calm"), ("2024-01-02","downtrend","calm")])
     assert _state_before(st, pd.Timestamp("2024-01-02")) == ("uptrend", "calm")
@@ -105,6 +111,17 @@ def test_entry_gate_off_ignores_states_entirely():
     assert [t for t in res.trades if t.action == "SELL_PUT"]
     assert res.days_entry_gated == 0 and res.gate_events == []
 
+def test_entry_gate_not_counted_when_no_viable_entry():
+    # unpaid decline BUT no contract near the target delta -> baseline could
+    # not have entered either; the gate must not claim the block.
+    rows = [["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.02,0.1,472.0]]
+    # delta 0.02 vs target 0.30: select_contract still returns nearest-delta,
+    # so starve by cash instead: strike 470 x 100 > tiny capital -> n = 0.
+    st = _states([("2024-01-01","downtrend","calm")])
+    res = run_wheel(_chain(PUT_DAY), _cfg(starting_capital=1_000.0,
+                                          regime_entry_gate=True), regime_states=st)
+    assert res.days_entry_gated == 0 and res.gate_events == []
+
 # ---- roll gate ----
 # tested put mid-life (spot 468 <= 470), same-strike out-roll available for
 # credit; both potential legs settle OTM so the run ends clean.
@@ -138,6 +155,34 @@ def test_roll_gate_unknown_state_allows_and_warns():
     res = run_wheel(_chain(ROLL_ROWS), cfg, regime_states=st)
     assert [t for t in res.trades if t.action == "ROLL_CLOSE"]
     assert (pd.Timestamp("2024-01-03"), "gate_state_unknown", "roll") in res.warnings
+
+def test_roll_denial_not_logged_when_roll_could_not_execute():
+    # unpaid decline, put tested, but NO destination expiry exists -> the
+    # un-gated engine could not have rolled; no denial event may be logged.
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        ["2024-01-03","2024-01-09",6,470,"P",3.00,3.10,3.05,3.05,-0.55,0.1,468.0],
+        ["2024-01-09","2024-01-09",0,470,"P",0.05,0.10,0.07,0.07,-0.01,0.1,475.0],
+    ]
+    st = _states([("2024-01-01","downtrend","normal")])
+    cfg = _cfg(roll_tested_puts=True, regime_roll_gate=True)
+    res = run_wheel(_chain(rows), cfg, regime_states=st)
+    assert not [e for e in res.gate_events if e[1] == "roll_denied_by_gate"]
+
+def test_roll_gate_does_not_swallow_no_mark_warning():
+    # gated state AND missing mark on the tested day: the data-gap warning must
+    # still be recorded (the gate check sits after the mark check).
+    rows = [
+        ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
+        # tested day exists in the chain via another strike, but 470P has no row
+        ["2024-01-03","2024-01-09",6,460,"P",1.00,1.10,1.05,1.05,-0.20,0.1,468.0],
+        ["2024-01-09","2024-01-09",0,470,"P",0.05,0.10,0.07,0.07,-0.01,0.1,475.0],
+    ]
+    st = _states([("2024-01-01","downtrend","normal")])
+    cfg = _cfg(roll_tested_puts=True, regime_roll_gate=True)
+    res = run_wheel(_chain(rows), cfg, regime_states=st)
+    assert any(w[1] == "roll_check_no_mark" for w in res.warnings)
+    assert not [e for e in res.gate_events if e[1] == "roll_denied_by_gate"]
 
 def test_denied_roll_does_not_consume_stop_check():
     # same day: roll denied by gate AND stop threshold crossed -> stop still

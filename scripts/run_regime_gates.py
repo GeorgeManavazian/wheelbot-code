@@ -12,7 +12,7 @@ import pandas as pd
 from pathlib import Path
 from src.engine_v2.options.data import chain_path
 from src.engine_v2.options.wheel import run_wheel, WheelConfig
-from src.engine_v2.options.report import wheel_report
+from src.engine_v2.options.report import wheel_report, buy_hold_curve
 from src.engine_v2.regime.state import regime_series
 from src.engine_v2.regime.data import closes_for
 
@@ -55,11 +55,16 @@ def main():
                 lines.append(f"{label:<22} {res.equity.iloc[-1] - cfg.starting_capital:>10,.0f} "
                              f"{rep.metrics['sharpe']:>7.2f} {rep.metrics['max_drawdown']:>8.1%} "
                              f"{fired:>19} {g.get('n_state_unknown', 0):>8}")
-        bh = ch.groupby('date')['underlying'].first()
-        lines.append(f"{'buy-hold ' + t:<22} {100_000 * (bh.iloc[-1] / bh.iloc[0] - 1):>10,.0f}")
+        cap = BASE["starting_capital"]
+        bh = buy_hold_curve(ch, cap)
+        lines.append(f"{'buy-hold ' + t:<22} {bh.iloc[-1] - cap:>10,.0f}")
     txt = "\n".join(lines)
-    Path("data/options/reports").mkdir(parents=True, exist_ok=True)
-    Path("data/options/reports/regime_gates.txt").write_text(txt)
+    outd = Path("data/options/reports"); outd.mkdir(parents=True, exist_ok=True)
+    # the canonical pre-registered artifact is the full seen-set run; any other
+    # ticker subset writes a suffixed file so a spot-check can never clobber it.
+    fname = ("regime_gates.txt" if tickers == SEEN
+             else f"regime_gates_{'_'.join(t.lower() for t in tickers)}.txt")
+    (outd / fname).write_text(txt)
     print(txt)
 
 if __name__ == "__main__":

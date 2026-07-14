@@ -52,6 +52,10 @@ class WheelConfig:
     regime_roll_gate: bool = False    # mid-life roll denied in unpaid decline
     regime_stop_gate: bool = False    # put stop suppressed while vol == "stressed"
 
+    @property
+    def any_regime_gate(self) -> bool:
+        return self.regime_entry_gate or self.regime_roll_gate or self.regime_stop_gate
+
 @dataclass
 class Trade:
     date: pd.Timestamp
@@ -91,7 +95,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
     if cfg.liquidate_assignment and cfg.call_min_strike is not None:
         raise ValueError("liquidate_assignment never holds shares; call_min_strike "
                          "governs held shares — enable one, not both")
-    any_gate = cfg.regime_entry_gate or cfg.regime_roll_gate or cfg.regime_stop_gate
+    any_gate = cfg.any_regime_gate
     if any_gate and regime_states is None:
         raise ValueError("a regime gate is on but no regime_states was passed — "
                          "a gate with no state is a bug, not a run")
@@ -171,19 +175,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
             if (short is not None and cfg.roll_tested_puts and c.right == "P"
                     and d < c.expiry and spot <= c.strike
                     and rolls_this_campaign < MAX_ROLLS_PER_CAMPAIGN):
-                # roll gate: no extension into an unpaid decline. Consulted only
-                # at a would-roll moment; denial re-evaluates tomorrow and must
-                # NOT consume the stop check (only an EXECUTED roll does).
-                roll_gated_today = False
-                if cfg.regime_roll_gate:
-                    if (g_trend, g_vol) == ("unknown", "unknown"):
-                        warnings.append((d, "gate_state_unknown", "roll"))
-                    elif is_unpaid_decline(g_trend, g_vol):
-                        gate_events.append((d, "roll_denied_by_gate", c))
-                        roll_gated_today = True
-                if roll_gated_today:
-                    pass
-                elif mark is None:
+                if mark is None:
                     warnings.append((d, "roll_check_no_mark", c))
                     mark_warned_today = True
                 else:
@@ -200,7 +192,21 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                                 if new_mark is not None else None)
                     # credit-only: guard and fill use the SAME numbers, so a
                     # future fill-model change cannot let debit rolls through.
-                    if proceeds is not None and proceeds >= cost:
+                    # roll gate: no extension into an unpaid decline. Consulted
+                    # only at the would-execute moment — after the destination
+                    # and credit checks — so a logged denial means a roll that
+                    # WOULD have executed (same would-act rule as the stop
+                    # gate). Denial re-evaluates tomorrow and must NOT consume
+                    # the stop check (only an EXECUTED roll does). Unknown
+                    # state allows and warns.
+                    roll_gated_today = False
+                    if proceeds is not None and proceeds >= cost and cfg.regime_roll_gate:
+                        if (g_trend, g_vol) == ("unknown", "unknown"):
+                            warnings.append((d, "gate_state_unknown", "roll"))
+                        elif is_unpaid_decline(g_trend, g_vol):
+                            gate_events.append((d, "roll_denied_by_gate", c))
+                            roll_gated_today = True
+                    if proceeds is not None and proceeds >= cost and not roll_gated_today:
                         cash -= cost; campaign_premium -= cost
                         trades.append(Trade(d, "ROLL_CLOSE", c, n, mark.ask, cash, campaign))
                         cash += proceeds; campaign_premium += proceeds
@@ -275,32 +281,34 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
         # into the identical contract just closed — that would be pure spread churn.
         if short is None and not no_entry_today:
             if phase == "PUT":
-                # entry gate: a NEW campaign never opens into an unpaid decline
-                # (the call phase below continues an old campaign — not gated).
-                # Consulted only here, at a would-enter moment; unknown state
-                # allows and warns (never gate on missing information).
-                entry_gated_today = False
-                if cfg.regime_entry_gate:
-                    if (g_trend, g_vol) == ("unknown", "unknown"):
-                        warnings.append((d, "gate_state_unknown", "entry"))
-                    elif is_unpaid_decline(g_trend, g_vol):
-                        days_entry_gated += 1
-                        gate_events.append((d, "entry_gated", None))
-                        entry_gated_today = True
-                if entry_gated_today:
-                    c = None
-                else:
-                    c = select_contract(day_chain, d, "P", cfg.put_delta, cfg.target_dte, cfg.ticker)
+                c = select_contract(day_chain, d, "P", cfg.put_delta, cfg.target_dte, cfg.ticker)
                 mark = option_mark(day_chain, d, c) if c is not None else None
                 if c is not None and c != closed_today and mark is not None:
                     n = int(cash // (c.strike * mult))
                     if n > 0:
-                        campaign += 1
-                        rolls_this_campaign, campaign_premium = 0, 0.0
-                        proceeds = sell_proceeds(mark, n, cfg)
-                        cash += proceeds; campaign_premium += proceeds
-                        short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
-                        trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
+                        # entry gate: a NEW campaign never opens into an unpaid
+                        # decline (the call phase below continues an old
+                        # campaign — not gated). Consulted only HERE, at the
+                        # would-open moment — after selection/mark/sizing — so
+                        # days_entry_gated counts exactly the days the gate was
+                        # the proximate blocker, not days the baseline could
+                        # not have entered anyway. Unknown state allows and
+                        # warns (never gate on missing information).
+                        entry_gated_today = False
+                        if cfg.regime_entry_gate:
+                            if (g_trend, g_vol) == ("unknown", "unknown"):
+                                warnings.append((d, "gate_state_unknown", "entry"))
+                            elif is_unpaid_decline(g_trend, g_vol):
+                                days_entry_gated += 1
+                                gate_events.append((d, "entry_gated", None))
+                                entry_gated_today = True
+                        if not entry_gated_today:
+                            campaign += 1
+                            rolls_this_campaign, campaign_premium = 0, 0.0
+                            proceeds = sell_proceeds(mark, n, cfg)
+                            cash += proceeds; campaign_premium += proceeds
+                            short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
+                            trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
             elif phase == "CALL" and shares >= mult:
                 floor = None
                 if cfg.call_min_strike == "basis" and basis is not None:

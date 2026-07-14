@@ -212,7 +212,7 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01",
     gates = None
     # same visibility rule as the defense block: an ARMED gate that never fired
     # must still show its block — the absence of fires is itself the finding.
-    if cfg.regime_entry_gate or cfg.regime_roll_gate or cfg.regime_stop_gate:
+    if cfg.any_regime_gate:
         ev = getattr(result, "gate_events", []) or []
         wn = getattr(result, "warnings", []) or []
         gates = {
@@ -298,7 +298,7 @@ def format_report(rep) -> str:
         L.append(f"  entry-gated days {g['days_entry_gated']}  "
                  f"rolls denied {g['n_rolls_denied']}  "
                  f"stops suppressed {g['n_stops_suppressed']}  "
-                 f"state-unknown consultations {g['n_state_unknown']}")
+                 f"state-unknown at would-act moments {g['n_state_unknown']}")
         L.append("  note: gated-entry counterfactual is not modeled — the paired "
                  "A/B run is the measurement")
     return "\n".join(L)
