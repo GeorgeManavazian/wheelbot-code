@@ -50,3 +50,22 @@ def test_warmup_open_date_is_unknown():
     up = _closes("up")
     tagged = campaign_regimes(res, cfg, up, up)
     assert tagged.iloc[0]["market_trend"] == "unknown"
+
+def test_tag_uses_strictly_prior_day_state():
+    # campaign opens the day the trend flips at the close: tag must be the
+    # PRIOR day's state (a trader placing the trade cannot know today's close).
+    from src.engine_v2.regime.state import regime_series
+    from src.engine_v2.regime.autopsy import _tag
+    up = _closes("up")
+    states = regime_series(up)
+    d = states.index[-1]                     # last state day
+    fake = states.copy()
+    fake.loc[d, "trend"] = "downtrend"       # pretend the close flipped today
+    assert _tag([d], fake, "trend") == [states.iloc[-2]["trend"]]
+
+def test_tag_stale_state_is_unknown():
+    from src.engine_v2.regime.state import regime_series
+    from src.engine_v2.regime.autopsy import _tag
+    states = regime_series(_closes("up"))
+    late = states.index[-1] + pd.Timedelta(days=30)   # after series ends
+    assert _tag([late], states, "trend") == ["unknown"]

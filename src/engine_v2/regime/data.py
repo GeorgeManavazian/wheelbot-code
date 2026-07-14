@@ -1,8 +1,11 @@
 """Daily closes for the regime advisor, from data already on disk.
-No network. Long bars fixture first (2010+), chain underlying (2017+) second."""
+No network. Long bars fixture first (2010+), chain underlying (2017+) second.
+Chain path comes from options.data.chain_path — the binding filename
+convention lives there, never duplicated here."""
 from __future__ import annotations
 import os
 import pandas as pd
+from ..options.data import chain_path
 
 BARS = "fixtures/bars_etf_universe_2010_2026.parquet"
 
@@ -14,7 +17,7 @@ def closes_for(symbol: str, bars_path: str = BARS) -> pd.Series:
             s = bars[(symbol, "Close")].dropna()
             s.index = pd.to_datetime(s.index)
             return s.sort_index().rename(symbol)
-    chain = f"data/options/{symbol.lower()}_greeks_eod_all.parquet"
+    chain = chain_path(symbol)
     if os.path.exists(chain):
         df = pd.read_parquet(chain, columns=["date", "underlying"])
         s = df.groupby("date")["underlying"].first()

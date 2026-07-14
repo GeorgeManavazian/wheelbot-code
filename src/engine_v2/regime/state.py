@@ -1,10 +1,20 @@
 """Per-day market regime from daily closes alone. Fixed ex-ante thresholds —
-never swept. All windows trailing: the state on day d uses closes <= d only."""
+never swept. All windows trailing: the state on day d uses closes <= d only.
+
+NOTE: a legacy classifier exists at src/engine_v2/data/regime.py (bull/bear +
+absolute-vol calm/high, consumed by backtest metrics). The two are DIFFERENT
+taxonomies for different consumers; if you change thresholds here, check
+whether that one needs the same intent. Consolidation deferred deliberately
+(regime-advisor spec, declined items).
+
+Effective warmup: the first emitted state needs the 200d SMA (WARMUP) AND a
+vol percentile, which needs VOL_WINDOW returns + VOL_MIN observations —
+in practice the first row lands ~273 trading days in, not 200."""
 from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-WARMUP = 200          # trading days before the first state is emitted
+WARMUP = 200          # SMA200 horizon; real first-state day is later (see above)
 VOL_WINDOW = 21       # realized-vol window (days)
 VOL_LOOKBACK = 756    # percentile lookback (~3y)
 VOL_MIN = 252         # minimum history for the percentile (~1y)

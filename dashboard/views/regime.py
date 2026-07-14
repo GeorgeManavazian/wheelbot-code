@@ -8,12 +8,22 @@ from src.engine_v2.regime.base_rates import base_rate_table
 from src.engine_v2.regime.autopsy import campaign_regimes, autopsy_table
 from src.engine_v2.options.data import available_tickers
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _states_for(symbol: str) -> pd.DataFrame:
+    """Cached closes+states — render() touches up to 2 symbols in 3 sections;
+    without this every Streamlit rerun re-reads the parquet 6 times."""
+    return regime_series(closes_for(symbol))
+
 def current_state_lines(symbol: str) -> list:
-    states = regime_series(closes_for(symbol))
+    states = _states_for(symbol)
+    if states.empty:
+        return [f"{symbol} — not enough history for a regime state "
+                f"(needs ~273 trading days of closes)."]
     row = states.iloc[-1]
     return [f"{symbol} — {describe(row)}",
             f"as of {states.index[-1].date()}"]
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def base_rate_display(symbol: str) -> pd.DataFrame:
     return base_rate_table(closes_for(symbol))
 
@@ -37,6 +47,10 @@ def render():
         try:
             tbl = base_rate_display(sym)
         except FileNotFoundError:
+            st.warning(f"No daily closes on disk for {sym} — base rates skipped.")
+            continue
+        if tbl.empty:
+            st.warning(f"{sym}: not enough history for base rates.")
             continue
         st.write(f"**{sym}**")
         st.dataframe(tbl.style.format({"win_rate": "{:.0%}", "median_fwd": "{:+.2%}",

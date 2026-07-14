@@ -5,12 +5,29 @@ import pandas as pd
 from ..options.report import campaign_table
 from .state import regime_series
 
+MAX_STALENESS_DAYS = 14   # calendar days; older last-known state -> "unknown"
+
 def _tag(dates, states: pd.DataFrame, col: str) -> list:
+    """State as of STRICTLY BEFORE the open date (a trade placed on day d
+    cannot know day d's close — same rule as the engine), and never more than
+    MAX_STALENESS_DAYS stale (a closes series that ends before the campaign
+    opened must say 'unknown', not silently reuse a months-old state)."""
+    return [row[col] for row in _tag_rows(dates, states)]
+
+_UNKNOWN = {"trend": "unknown", "vol": "unknown"}
+
+def _tag_rows(dates, states: pd.DataFrame) -> list:
+    """One as-of lookup per date (searchsorted, strictly-prior + staleness),
+    shared by every column — not one O(n) slice per column per campaign."""
+    idx = states.index
     out = []
     for d in dates:
         d = pd.Timestamp(d)
-        prior = states.loc[:d]
-        out.append(prior.iloc[-1][col] if len(prior) else "unknown")
+        pos = idx.searchsorted(d) - 1          # last state STRICTLY before d
+        if pos < 0 or (d - idx[pos]).days > MAX_STALENESS_DAYS:
+            out.append(_UNKNOWN)
+        else:
+            out.append(states.iloc[pos])
     return out
 
 def campaign_regimes(result, cfg, market_closes: pd.Series,
@@ -19,8 +36,9 @@ def campaign_regimes(result, cfg, market_closes: pd.Series,
     mkt, tkr = regime_series(market_closes), regime_series(ticker_closes)
     ct = ct.copy()
     for prefix, states in (("market", mkt), ("ticker", tkr)):
-        ct[f"{prefix}_trend"] = _tag(ct["opened"], states, "trend")
-        ct[f"{prefix}_vol"] = _tag(ct["opened"], states, "vol")
+        rows = _tag_rows(ct["opened"], states)
+        ct[f"{prefix}_trend"] = [r["trend"] for r in rows]
+        ct[f"{prefix}_vol"] = [r["vol"] for r in rows]
     return ct
 
 def autopsy_table(campaigns: pd.DataFrame, by: str = "market") -> pd.DataFrame:
