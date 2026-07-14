@@ -147,7 +147,13 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                 key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
                 if intraday is not None and key in intraday:
                     bars = intraday[key]
-                    day = (bars[bars["timestamp"].dt.normalize() == d]
+                    # close > 0 only: hourly bars are trade prints, and hours
+                    # with no trade arrive as close=0 — not a price. Treating a
+                    # 0 as a price lets any losing put "TP" at a phantom fill
+                    # (XOP 2020: +2,582% fantasy). Trigger and fill both use
+                    # valid prints only; "next bar" means next VALID bar.
+                    day = (bars[(bars["timestamp"].dt.normalize() == d)
+                                & (bars["close"] > 0)]
                            .sort_values("timestamp").reset_index(drop=True))
                     # decide on bar i, fill at bar i+1's close (no same-bar fills).
                     # A cross on the day's LAST bar has no next bar -> no intraday

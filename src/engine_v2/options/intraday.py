@@ -45,6 +45,11 @@ def pull_option_intraday(client, symbol, expiration, start, end,
     return pd.concat(frames, ignore_index=True)
 
 def intraday_marks(df: pd.DataFrame) -> dict:
+    # volume > 0 and close > 0 only: a bar with no trade is not a price. On
+    # illiquid tickers ~60% of hourly bars are volume-0/close-0 placeholders;
+    # letting them through hands the TP check phantom fills (see the engine's
+    # zero-bar guard — this filter is the first line, that guard the second).
+    df = df[(df["volume"] > 0) & (df["close"] > 0)]
     out = {}
     for (exp, strike, right), g in df.groupby(["expiry","strike","right"]):
         out[(pd.Timestamp(exp), float(strike), right)] = \
