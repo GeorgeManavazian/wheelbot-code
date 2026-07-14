@@ -51,10 +51,16 @@ class WheelConfig:
     regime_entry_gate: bool = False   # no new campaign opens in unpaid decline
     regime_roll_gate: bool = False    # mid-life roll denied in unpaid decline
     regime_stop_gate: bool = False    # put stop suppressed while vol == "stressed"
+    # regime siege exit (spec 2026-07-14): uncovered shares sold on unpaid-
+    # decline days, held through panic. Requires the basis floor (sieges are
+    # floor-created). Default-off.
+    regime_siege_exit: bool = False
 
     @property
     def any_regime_gate(self) -> bool:
-        return self.regime_entry_gate or self.regime_roll_gate or self.regime_stop_gate
+        """Any regime-consuming mechanic armed (all require regime_states)."""
+        return (self.regime_entry_gate or self.regime_roll_gate
+                or self.regime_stop_gate or self.regime_siege_exit)
 
 @dataclass
 class Trade:
@@ -102,6 +108,12 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
     if cfg.regime_stop_gate and cfg.put_stop_mult is None:
         raise ValueError("regime_stop_gate gates the put stop; put_stop_mult is "
                          "None so the arm would be a silent no-op — refuse it")
+    if cfg.regime_siege_exit and cfg.call_min_strike is None:
+        raise ValueError("regime_siege_exit manages basis-floor sieges; without "
+                         "call_min_strike the arm would be a near-no-op — refuse it")
+    if cfg.regime_siege_exit and cfg.liquidate_assignment:
+        raise ValueError("liquidate_assignment never holds shares; there is no "
+                         "siege to exit — enable one, not both")
     dates = sorted(pd.to_datetime(chain["date"]).unique())
     und = underlying_series(chain)
     # index the chain by date ONCE so per-day strike lookups touch ~one day's rows
@@ -337,6 +349,21 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
             days_flat += 1
         if short is None and phase == "CALL" and shares >= mult:
             days_shares_uncovered += 1
+            # regime siege exit (spec 2026-07-14): an uncovered day in an
+            # unpaid decline sells the shares — the autopsy says complacent
+            # decline bleeds while panic recovers, so panic (stressed) HOLDS.
+            # Strictly-prior-day state; unknown holds and warns. Stock fills
+            # at EOD spot, no stock-leg spread modeled (same label as
+            # liquidate_assignment). Re-entry is tomorrow's entry step.
+            if cfg.regime_siege_exit:
+                if (g_trend, g_vol) == ("unknown", "unknown"):
+                    warnings.append((d, "gate_state_unknown", "siege"))
+                elif is_unpaid_decline(g_trend, g_vol):
+                    cash += shares * spot
+                    trades.append(Trade(d, "SIEGE_EXIT", None, shares // mult,
+                                        spot, cash, campaign))
+                    gate_events.append((d, "siege_exit", None))
+                    shares = 0; phase = "PUT"; basis = None
 
         # 3) mark equity (short MTM at mid; carry last mid across gaps)
         liab = 0.0

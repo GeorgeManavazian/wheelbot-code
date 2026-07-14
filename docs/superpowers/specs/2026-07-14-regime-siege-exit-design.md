@@ -71,6 +71,12 @@ All four seen tickers, raw, per-ticker, no aggregation, owner judges (no kill ru
 - No-look-ahead: state flip on the exit day itself must not trigger (strictly-prior rule) — same property shape as the gates.
 - Coverage: engine_v2 gate ≥95%.
 
+## Amendment 2026-07-14a — A/B verdict (same day): FALSIFIED in-sample
+
+Pre-registered arms ran on the seen tickers (EOD, frozen config, XOP from 2020-07-01; execution-audited, 0 mismatches). The mechanic cut uncovered days exactly as designed (GDX 818 → 183) and destroyed P&L everywhere doing it: SPY +106.1k → +84.7k, GDX +155.6k → +27.6k, SLV +134.1k → +30.6k, XOP +136.5k → +84.6k; the shares leg flipped from positive to deeply negative on every ticker (GDX +55.7k → −158.7k). The SE+E arm shows the same shape.
+
+Interpretation (recorded, not tuned around): siege days are not idle waste — they are the recovery the basis floor exists to wait for. Exiting on unpaid decline realizes bottoms; the autopsy's bleed-cell evidence concerns campaign OPENS, not mid-siege holds. **No variant fishing follows from this** (no vol-cell tweaks, no thresholds) — that path is how the original strategy died. Code remains merged and default-off (plain path byte-identical); the flag is a falsified experiment kept for provenance. Owner decision on formal kill recorded in the vault.
+
 ## Out of scope
 
 - Rotation of freed cash to other tickers (bookmarked idea 1), strategy switching (bookmarked idea 5), any per-regime parameter, time-based siege stops, renting below basis in panic (rejected in brainstorm — re-opens the closed wound).
