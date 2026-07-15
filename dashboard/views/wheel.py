@@ -12,10 +12,19 @@ from src.engine_v2.options.report import wheel_report
 FIXTURE_TICKER = "SPY (2024 sample fixture)"
 FIXTURE = "fixtures/spy_wheel_cycle.parquet"
 
+# Pre-registered unseen basket tickers (amendment 2026-07-13d, binding): the
+# dashboard must not offer them until the basket run reports — one dropdown
+# click here would burn the out-of-sample set. Same guard as the runner scripts.
+UNSEEN = {"XBI", "EEM", "EWZ", "TLT", "ARKK", "QQQ"}
+
+# XOP's chain is unadjusted through its 1:4 reverse split (2020-03-31) —
+# results that span it book phantom gains (STATUS 2026-07-14).
+XOP_CLEAN_START = pd.Timestamp("2020-07-01")
+
 
 def _sources() -> dict:
-    """Ticker -> EOD chain path. Real per-ticker data first, fixture fallback."""
-    out = {t: chain_path(t) for t in available_tickers()}
+    """Ticker -> EOD chain path. Seen tickers only + fixture fallback."""
+    out = {t: chain_path(t) for t in available_tickers() if t not in UNSEEN}
     if os.path.exists(FIXTURE):
         out[FIXTURE_TICKER] = FIXTURE
     return out
@@ -55,7 +64,10 @@ def render():
         if _load.get("end"):
             st.session_state["wheel_end"] = pd.Timestamp(_load["end"]).date()
 
-    ticker_name = st.selectbox("Ticker", list(sources), key="wheel_data")
+    ticker_name = st.selectbox(
+        "Ticker", list(sources), key="wheel_data",
+        help="Unseen basket tickers (XBI EEM EWZ TLT ARKK QQQ) are hidden until "
+             "the pre-registered basket run reports — amendment 2026-07-13d.")
     path = sources[ticker_name]
     ticker = "SPY" if ticker_name == FIXTURE_TICKER else ticker_name
     if not os.path.exists(path):
@@ -66,6 +78,10 @@ def render():
     dc1, dc2 = st.columns(2)
     start = dc1.date_input("Start", value=min_d, min_value=min_d, max_value=max_d, key="wheel_start")
     end = dc2.date_input("End", value=max_d, min_value=min_d, max_value=max_d, key="wheel_end")
+    if ticker == "XOP" and pd.Timestamp(start) < XOP_CLEAN_START:
+        st.warning("XOP's chain is split-broken before 2020-07-01 (unadjusted 1:4 "
+                   "reverse split 2020-03-31): any window spanning it books phantom "
+                   "gains. Numbers from this window are provenance-only.")
 
     c1, c2, c3 = st.columns(3)
     put_delta = c1.number_input("Put delta", 0.05, 0.50, 0.20, 0.05, key="w_pd")
@@ -80,20 +96,52 @@ def render():
 
     # Pre-registered defense arms (spec amendment 2026-07-12b) — a fixed set,
     # deliberately not tunable knobs.
+    # Curated to the 2026-07-14 verdicts: mechanics that lost their A/B in
+    # every form (ungated stop — falsified at every threshold 1.5–5×; plain
+    # roll — cosmetic; liquidate-at-assignment — sells every bottom) are gone
+    # from the menu. Roll and stop survive only weather-gated. The basis floor
+    # has NO weather variant on purpose: its weather version (siege exit) was
+    # pre-registered, tested, and falsified the same day. Removed variants
+    # remain runnable via scripts/ for provenance.
     DEFENSES = {
         "None (plain wheel)": {},
-        "Calls at/above net basis": {"call_min_strike": "basis"},
-        "Roll tested puts (mid-life)": {"roll_tested_puts": True},
-        "Liquidate at assignment": {"liquidate_assignment": True},
-        "Put stop at 3× credit": {"put_stop_mult": 3.0},
+        "Basis floor — never rent below cost (keeper)":
+            {"call_min_strike": "basis"},
+        "Basis floor + entry gate (weather)":
+            {"call_min_strike": "basis", "regime_entry_gate": True},
+        "Roll tested puts, weather-gated":
+            {"roll_tested_puts": True, "regime_roll_gate": True},
+        "Put stop 3×, weather-gated":
+            {"put_stop_mult": 3.0, "regime_stop_gate": True},
     }
+    _HELP = {
+        "None (plain wheel)": "The baseline everything is judged against.",
+        "Basis floor — never rent below cost (keeper)":
+            "The one mechanic that transformed results (GDX +31%→+144%). "
+            "Refuses to sell covered calls below net cost, so recoveries get "
+            "ridden instead of sold at the bottom. No weather variant: that "
+            "was the siege exit — tested and falsified 2026-07-14.",
+        "Basis floor + entry gate (weather)":
+            "Basis floor plus: no NEW campaign opens in an unpaid decline "
+            "(falling + calm/normal vol). Entry gate alone tested "
+            "mixed-negative — judge with the A/B report, not this run alone.",
+        "Roll tested puts, weather-gated":
+            "Mid-life same-strike credit-only roll, denied in unpaid declines. "
+            "Verdict so far: cosmetic — helps about as often as it hurts.",
+        "Put stop 3×, weather-gated":
+            "Stop-loss that is NOT allowed to fire during panic (stressed "
+            "vol). The ungated stop lost at every threshold tested; the gate "
+            "halves the damage. Survival tool, not a P&L tool.",
+    }
+    # History rows may reference retired defense names — fall back to plain.
+    if st.session_state.get("w_defense") not in DEFENSES:
+        st.session_state.pop("w_defense", None)
     defense_name = st.selectbox(
         "Defense", list(DEFENSES), key="w_defense",
-        help="Post-assignment / exit mechanics. Fixed set, repaired per the "
-             "2026-07-13 defense-repair spec: the basis floor is now NET basis "
-             "(assignment strike minus premium banked) and the roll is the "
-             "mid-life same-strike credit-only roll. Pre-repair matrix results "
-             "are provenance-only and describe the OLD mechanics.")
+        help="Curated to the 2026-07-14 verdicts. Retired (falsified) variants "
+             "— ungated stop, plain roll, liquidate-at-assignment — live on in "
+             "scripts and reports as provenance.")
+    st.caption(_HELP[defense_name])
 
     # Per-ticker hourly OHLC; the pull is still in flight for some tickers.
     intra = None if ticker_name == FIXTURE_TICKER else intraday_path(ticker)
@@ -113,11 +161,18 @@ def render():
                           call_delta=call_delta, target_dte=int(target_dte),
                           take_profit_pct=tp_slider / 100.0, ticker=ticker,
                           **DEFENSES[defense_name])
+        states = None
+        if cfg.any_regime_gate:
+            # ticker regime states, strictly-prior-day inside the engine
+            from src.engine_v2.regime.state import regime_series
+            from src.engine_v2.regime.data import closes_for
+            states = regime_series(closes_for(ticker))
         if intraday_on and intra:
             from src.engine_v2.options.intraday import run_wheel_intraday
-            res = run_wheel_intraday(ch, cfg, pd.read_parquet(intra))
+            res = run_wheel_intraday(ch, cfg, pd.read_parquet(intra),
+                                     regime_states=states)
         else:
-            res = run_wheel(ch, cfg)
+            res = run_wheel(ch, cfg, regime_states=states)
         rep = wheel_report(res, ch, cfg)
         st.session_state["_wheel_result"] = (res, rep, cfg, ch)
 
@@ -195,6 +250,21 @@ def render():
             if dd["liquidate_fill_note"]:
                 st.caption("Liquidation fills at EOD spot — no stock spread/slippage "
                            "modeled (options pay full spread).")
+
+        # Regime-gate diagnostics — shown whenever a gate is armed, even if it
+        # never fired (absence-of-fire is itself the finding).
+        if getattr(rep, "gates", None) is not None:
+            g = rep.gates
+            st.subheader("Regime gates (ticker state, strictly-prior-day)")
+            g1, g2, g3, g4 = st.columns(4)
+            g1.metric("Entry-gated days", g["days_entry_gated"])
+            g2.metric("Rolls denied", g["n_rolls_denied"])
+            g3.metric("Stops suppressed", g["n_stops_suppressed"])
+            g4.metric("State unknown", g["n_state_unknown"],
+                      help="Gate consultations at would-act moments where the "
+                           "regime state was missing/stale — gates default-allow.")
+            st.caption("Gated-entry counterfactual is not modeled — the paired "
+                       "A/B run is the measurement (reports/regime_gates.txt).")
 
         st.subheader("Equity vs buy & hold")
         bench = {}
