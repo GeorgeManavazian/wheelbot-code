@@ -95,8 +95,18 @@ label.
   callers.)
 - `_cell(states, d, split_chop=False)` — after computing `(trend, vol, unknown)`
   as today, if `split_chop and trend == "chop"`: read `px = _px_before(states, d)`;
-  if `px is not None and px >= 0` → return `"TREND", trend, vol, False`. Otherwise
-  unchanged. The router passes `cfg.split_chop` into `_cell`.
+  if `px is not None and px >= 0` → return **`"TREND", "uptrend", vol, False`**.
+  Otherwise unchanged. The router passes `cfg.split_chop` into `_cell`.
+- **The returned trend is relabeled to `"uptrend"`, not left as `"chop"`.** The
+  router's transitions key on the returned trend (`g_trend`): `g_trend=="chop"`
+  hands trend shares to the wheel, `g_trend=="downtrend"` force-sells. A
+  chop-recovering day must be a genuine hold, so it must present as `uptrend` to
+  those transitions — otherwise a held position would be handed straight to the
+  wheel on the same day, defeating the rule. Consequence: when price later drops
+  below the 200-line, `g_trend` becomes `"chop"` again (px < 0, not relabeled) and
+  the existing hand-to-wheel transition fires correctly; a drop to real downtrend
+  force-sells exactly as for any TREND position. `route_log` records the effective
+  (relabeled) trend, which is the routing decision actually taken.
 - **Byte-identical invariant:** with `split_chop=False`, `_cell` returns exactly
   today's classification; the router output is identical to v1 on all four seen
   tickers. Test-pinned. Protects merged v1 (`be2bc3d`).
@@ -105,8 +115,10 @@ label.
 
 - `_cell_local` gains the same split, with its OWN independent `px_vs_200` lookup
   (re-derived from the local state series, NOT imported from the engine — the
-  referee's independence is the whole point). It must read px from its own
-  strictly-prior row.
+  referee's independence is the whole point). It reads px from its own as-of row,
+  and for a chop-recovering day returns `("TREND", "uptrend")` — the same relabel
+  the engine applies, so the referee's share-action day-walk (which keys on the
+  returned trend for its hand-to-wheel and forced-sale checks) mirrors the engine.
 - `audit_router` adds a `split_chop=True` arm alongside the existing arms
   (mirroring how the conviction-trim arm is audited), re-deriving every route +
   share action + leg termination for the split config. `--router` must exit 0.
