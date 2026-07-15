@@ -495,7 +495,7 @@ def _cell_local(states, d):
     return "WHEEL", row["trend"]
 
 
-def audit_router():
+def audit_router(hourly=False):
     from src.engine_v2.options.regime_router import run_regime_router
     from src.engine_v2.options.portfolio import DEFAULT_CLEAN_START
     from src.engine_v2.options.data import chain_path
@@ -508,7 +508,18 @@ def audit_router():
             ch = ch[ch["date"] >= DEFAULT_CLEAN_START[t]].reset_index(drop=True)
         states = regime_series(closes_for(t))
         cfg = WheelConfig(ticker=t, **BASE, call_min_strike="basis")
-        res = run_regime_router(ch, cfg, states)
+        cbars_by_key = None
+        if hourly:
+            from src.engine_v2.options.intraday import run_regime_router_intraday
+            cbars_by_key = _load_bars_independent(t)
+            if cbars_by_key is None:
+                lines.append(f"{t:<4} router-hourly  SKIPPED (no hourly parquet on disk)")
+                continue
+            ih = pd.read_parquet(f"data/options/{t.lower()}_ohlc_1h_all.parquet")
+            ih["timestamp"] = pd.to_datetime(ih["timestamp"])
+            res = run_regime_router_intraday(ch, cfg, ih, states)
+        else:
+            res = run_regime_router(ch, cfg, states)
         und = ch.groupby("date")["underlying"].first()
         by_date = {pd.Timestamp(k): g for k, g in ch.groupby("date")}
         mismatches, ver = [], {"shares": 0, "opts": 0, "tp": 0, "expiry": 0,
@@ -574,39 +585,57 @@ def audit_router():
         for leg in legs:
             c, n, credit = leg["contract"], leg["n"], leg["credit"]
             opened = pd.Timestamp(leg["opened"])
-            expected = None
+            expected = None   # (kind, when[, price])
             for d in [dd for dd in und.index if pd.Timestamp(dd) > opened]:
                 d = pd.Timestamp(d)
                 if d < pd.Timestamp(c.expiry):
+                    if hourly:
+                        key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
+                        cb = cbars_by_key.get(key)
+                        day = (cb[cb["timestamp"].dt.normalize() == d].reset_index(drop=True)
+                               if cb is not None else None)
+                        hit = None
+                        if day is not None and len(day) > 1:
+                            for i in range(len(day) - 1):
+                                if day.iloc[i]["close"] <= thresh_mult * credit:
+                                    hit = (day.iloc[i + 1]["timestamp"],
+                                           float(day.iloc[i + 1]["close"]))
+                                    break
+                        if hit is not None:
+                            expected = ("TP", hit[0], hit[1]); break
                     mark = option_mark(by_date[d], d, c)
                     if mark is not None and mark.ask <= thresh_mult * credit:
-                        expected = ("TP", d); break
+                        expected = ("TP", d, None); break
                 else:
-                    expected = ("EXPIRY", d); break
-            loc = f"{t}/router {c.strike}{c.right} exp {pd.Timestamp(c.expiry).date()}"
+                    expected = ("EXPIRY", d, None); break
+            loc = f"{t}/router{'-hourly' if hourly else ''} {c.strike}{c.right} exp {pd.Timestamp(c.expiry).date()}"
             if expected is None:
                 if leg["close_action"] != "OPEN_AT_END":
                     mismatches.append(f"{loc}: no trigger derived, ledger "
                                       f"{leg['close_action']}")
                 continue
-            kind, when = expected
-            got_when = (pd.Timestamp(leg["closed"]).normalize()
+            kind, when, price = expected
+            got_when = (pd.Timestamp(leg["closed"])
                         if leg["closed"] is not None else None)
             if kind == "TP":
-                if leg["close_action"] in ("CLOSE_PUT", "CLOSE_CALL") and \
-                        got_when == when.normalize():
+                ok = leg["close_action"] in ("CLOSE_PUT", "CLOSE_CALL")
+                if hourly and price is not None:  # intraday: exact timestamp match
+                    ok = ok and got_when is not None and got_when == pd.Timestamp(when)
+                else:                              # EOD: day-level match
+                    ok = ok and got_when is not None and got_when.normalize() == pd.Timestamp(when).normalize()
+                if ok:
                     ver["tp"] += 1
                 else:
-                    mismatches.append(f"{loc}: derived TP {when.date()}, ledger "
+                    mismatches.append(f"{loc}: derived TP {when}, ledger "
                                       f"{leg['close_action']} at {got_when}")
             else:
-                if got_when == when.normalize():
+                if got_when is not None and got_when.normalize() == pd.Timestamp(when).normalize():
                     ver["expiry"] += 1
                 else:
-                    mismatches.append(f"{loc}: derived expiry {when.date()}, "
+                    mismatches.append(f"{loc}: derived expiry {pd.Timestamp(when).date()}, "
                                       f"ledger {leg['close_action']} at {got_when}")
 
-        lines.append(f"{t:<4} router  share-actions {ver['shares']:>3}  forced-sales "
+        lines.append(f"{t:<4} router{'-hourly' if hourly else ''}  share-actions {ver['shares']:>3}  forced-sales "
                      f"{ver['forced']:>2}  option-entries {ver['opts']:>4}  "
                      f"TPs {ver['tp']:>4}  expiries {ver['expiry']:>3}  "
                      f"mismatches {len(mismatches)}")
@@ -653,13 +682,16 @@ def audit_router():
         print("\nAUDIT INCONCLUSIVE: zero decisions examined — refusing to report "
               "VERIFIED on an empty run.")
         sys.exit(1)
-    print("\nROUTER EXECUTION VERIFIED: every route, share action, and leg "
+    print("\nROUTER-HOURLY EXECUTION VERIFIED: every route, share action, and "
+          "intraday/EOD leg termination re-derived; ledger agrees."
+          if hourly else
+          "\nROUTER EXECUTION VERIFIED: every route, share action, and leg "
           "termination re-derived; ledger agrees.")
 
 
 def main():
     if "--router" in sys.argv:
-        audit_router()
+        audit_router(hourly="--hourly" in sys.argv)
         return
     if "--portfolio" in sys.argv:
         audit_portfolio()
