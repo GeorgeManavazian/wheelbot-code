@@ -601,6 +601,34 @@ def audit_router():
                      f"TPs {ver['tp']:>4}  expiries {ver['expiry']:>3}  "
                      f"mismatches {len(mismatches)}")
         total_mm.extend(mismatches)
+
+        # conviction-trim arm (spec 2026-07-15): every BUY_SHARES on a derived
+        # stressed-uptrend day must be full//2, else full. Full lots are
+        # reconstructed from the ledger alone (before-buy cash = cash_after +
+        # spent), so the audit never trusts the engine's own sizing.
+        trim_cfg = WheelConfig(ticker=t, **BASE, call_min_strike="basis",
+                               conviction_trim=True)
+        trim_res = run_regime_router(ch, trim_cfg, states)
+        tmm, tver = [], 0
+        for tr in trim_res.trades:
+            if tr.action != "BUY_SHARES":
+                continue
+            d = pd.Timestamp(tr.date)
+            spot = tr.price_per_contract
+            before = tr.cash_after + tr.contracts * 100 * spot
+            full = int(before // (spot * 100))
+            row = _asof_row(states, d)
+            stressed = row is not None and row["vol"] == "stressed"
+            want = full // 2 if stressed else full
+            if tr.contracts != want:
+                tmm.append(f"{t} {d.date()} trimmed BUY_SHARES {tr.contracts} != "
+                           f"{want} (stressed={stressed}, full={full})")
+            else:
+                tver += 1
+        lines.append(f"{t:<4} router+trim  buys {tver:>3}  trimmed-entries "
+                     f"{trim_res.n_trimmed_entries:>3}  half-days "
+                     f"{trim_res.days_half_size:>4}  mismatches {len(tmm)}")
+        total_mm.extend(tmm)
     print("\n".join(lines))
     if total_mm:
         print(f"\n{len(total_mm)} MISMATCHES:")
