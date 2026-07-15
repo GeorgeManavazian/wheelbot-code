@@ -1,6 +1,7 @@
 """Wheel backtest page: pick ticker + config, run, see report. Thin view over
 wheel_report, built to the 2026-07-12 wheel engine API contract."""
 import os
+from dataclasses import replace
 import pandas as pd
 import streamlit as st
 from dashboard import charts, labels, theme
@@ -57,8 +58,6 @@ def render():
                 pass  # pre-contract rows stored "50%" strings; skip them
         if "capital" in _load:
             st.session_state["w_cap"] = int(_load["capital"])
-        if isinstance(_load.get("defense"), str):
-            st.session_state["w_defense"] = _load["defense"]
         if _load.get("start"):
             st.session_state["wheel_start"] = pd.Timestamp(_load["start"]).date()
         if _load.get("end"):
@@ -94,55 +93,6 @@ def render():
         c3.caption("100% = hold to expiry")
     capital = c3.number_input("Capital", 10_000, 1_000_000, 100_000, 10_000, key="w_cap")
 
-    # Pre-registered defense arms (spec amendment 2026-07-12b) — a fixed set,
-    # deliberately not tunable knobs.
-    # Curated to the 2026-07-14 verdicts: mechanics that lost their A/B in
-    # every form (ungated stop — falsified at every threshold 1.5–5×; plain
-    # roll — cosmetic; liquidate-at-assignment — sells every bottom) are gone
-    # from the menu. Roll and stop survive only weather-gated. The basis floor
-    # has NO weather variant on purpose: its weather version (siege exit) was
-    # pre-registered, tested, and falsified the same day. Removed variants
-    # remain runnable via scripts/ for provenance.
-    DEFENSES = {
-        "None (plain wheel)": {},
-        "Basis floor — never rent below cost (keeper)":
-            {"call_min_strike": "basis"},
-        "Basis floor + entry gate (weather)":
-            {"call_min_strike": "basis", "regime_entry_gate": True},
-        "Roll tested puts, weather-gated":
-            {"roll_tested_puts": True, "regime_roll_gate": True},
-        "Put stop 3×, weather-gated":
-            {"put_stop_mult": 3.0, "regime_stop_gate": True},
-    }
-    _HELP = {
-        "None (plain wheel)": "The baseline everything is judged against.",
-        "Basis floor — never rent below cost (keeper)":
-            "The one mechanic that transformed results (GDX +31%→+144%). "
-            "Refuses to sell covered calls below net cost, so recoveries get "
-            "ridden instead of sold at the bottom. No weather variant: that "
-            "was the siege exit — tested and falsified 2026-07-14.",
-        "Basis floor + entry gate (weather)":
-            "Basis floor plus: no NEW campaign opens in an unpaid decline "
-            "(falling + calm/normal vol). Entry gate alone tested "
-            "mixed-negative — judge with the A/B report, not this run alone.",
-        "Roll tested puts, weather-gated":
-            "Mid-life same-strike credit-only roll, denied in unpaid declines. "
-            "Verdict so far: cosmetic — helps about as often as it hurts.",
-        "Put stop 3×, weather-gated":
-            "Stop-loss that is NOT allowed to fire during panic (stressed "
-            "vol). The ungated stop lost at every threshold tested; the gate "
-            "halves the damage. Survival tool, not a P&L tool.",
-    }
-    # History rows may reference retired defense names — fall back to plain.
-    if st.session_state.get("w_defense") not in DEFENSES:
-        st.session_state.pop("w_defense", None)
-    defense_name = st.selectbox(
-        "Defense", list(DEFENSES), key="w_defense",
-        help="Curated to the 2026-07-14 verdicts. Retired (falsified) variants "
-             "— ungated stop, plain roll, liquidate-at-assignment — live on in "
-             "scripts and reports as provenance.")
-    st.caption(_HELP[defense_name])
-
     # Per-ticker hourly OHLC; the pull is still in flight for some tickers.
     intra = None if ticker_name == FIXTURE_TICKER else intraday_path(ticker)
     if ticker_name == FIXTURE_TICKER:
@@ -160,24 +110,22 @@ def render():
         cfg = WheelConfig(starting_capital=float(capital), put_delta=put_delta,
                           call_delta=call_delta, target_dte=int(target_dte),
                           take_profit_pct=tp_slider / 100.0, ticker=ticker,
-                          **DEFENSES[defense_name])
-        states = None
-        if cfg.any_regime_gate:
-            # ticker regime states, strictly-prior-day inside the engine
-            from src.engine_v2.regime.state import regime_series
-            from src.engine_v2.regime.data import closes_for
-            states = regime_series(closes_for(ticker))
+                          call_min_strike="basis")
+        plain_cfg = replace(cfg, call_min_strike=None)
         if intraday_on and intra:
             from src.engine_v2.options.intraday import run_wheel_intraday
-            res = run_wheel_intraday(ch, cfg, pd.read_parquet(intra),
-                                     regime_states=states)
+            intra_df = pd.read_parquet(intra)
+            res_basis = run_wheel_intraday(ch, cfg, intra_df, regime_states=None)
+            res_plain = run_wheel_intraday(ch, plain_cfg, intra_df, regime_states=None)
         else:
-            res = run_wheel(ch, cfg, regime_states=states)
-        rep = wheel_report(res, ch, cfg)
-        st.session_state["_wheel_result"] = (res, rep, cfg, ch)
+            res_basis = run_wheel(ch, cfg, regime_states=None)
+            res_plain = run_wheel(ch, plain_cfg, regime_states=None)
+        rep_basis = wheel_report(res_basis, ch, cfg)
+        rep_plain = wheel_report(res_plain, ch, plain_cfg)
+        st.session_state["_wheel_result"] = (res_basis, rep_basis, res_plain, rep_plain, cfg, ch)
 
         from dashboard.wheel_history import log_run
-        pnl = res.equity.iloc[-1] - cfg.starting_capital
+        pnl = res_basis.equity.iloc[-1] - cfg.starting_capital
         log_run({
             "ts": pd.Timestamp.now().isoformat(timespec="seconds"),
             "data_source": ticker_name,
@@ -189,19 +137,42 @@ def render():
             "take_profit": tp_slider,
             "capital": capital,
             "intraday": bool(intraday_on),
-            "defense": defense_name,
-            "total_return": rep.metrics["total_return"],
-            "max_drawdown": rep.metrics["max_drawdown"],
-            "sharpe": rep.metrics["sharpe"],
+            "defense": "basis",
+            "total_return": rep_basis.metrics["total_return"],
+            "max_drawdown": rep_basis.metrics["max_drawdown"],
+            "sharpe": rep_basis.metrics["sharpe"],
             "pnl": float(pnl),
-            "n_trades": len(res.trades),
-            "n_assignments": rep.stats["n_assignments"],
+            "n_trades": len(res_basis.trades),
+            "n_assignments": rep_basis.stats["n_assignments"],
+            "plain_total_return": rep_plain.metrics["total_return"],
         })
 
     stashed = st.session_state.get("_wheel_result")
     if stashed is not None:
-        res, rep, cfg, ch = stashed
+        res, rep, res_plain, rep_plain, cfg, ch = stashed
         pnl = res.equity.iloc[-1] - cfg.starting_capital
+
+        rows = {}
+        def _arm_row(equity, m):
+            return {"P&L": float(equity.iloc[-1] - cfg.starting_capital),
+                    "Return": m["total_return"], "Sharpe": m["sharpe"],
+                    "MaxDD": m["max_drawdown"]}
+        rows["Basis wheel"] = _arm_row(res.equity, rep.metrics)
+        rows["Plain wheel"] = _arm_row(res_plain.equity, rep_plain.metrics)
+        bu = rep.benchmark_underlying
+        rows[f"Buy-hold {rep.ticker}"] = {"P&L": None, "Return": bu["total_return"],
+                                          "Sharpe": None, "MaxDD": bu.get("max_drawdown")}
+        if rep.benchmark_spy is not None and rep.ticker != "SPY":
+            bs = rep.benchmark_spy
+            rows["Buy-hold SPY"] = {"P&L": None, "Return": bs["total_return"],
+                                    "Sharpe": None, "MaxDD": bs.get("max_drawdown")}
+        cmp_df = pd.DataFrame.from_dict(rows, orient="index")
+        st.subheader("Basis wheel vs plain wheel")
+        st.dataframe(cmp_df.style.format({
+            "P&L": lambda x: "" if pd.isna(x) else f"${x:,.0f}",
+            "Return": lambda x: "" if pd.isna(x) else f"{x:+.2%}",
+            "Sharpe": lambda x: "" if pd.isna(x) else f"{x:.2f}",
+            "MaxDD": lambda x: "" if pd.isna(x) else f"{x:.2%}"}), width="stretch")
 
         a, b, c, d = st.columns(4)
         a.metric("P&L", f"${pnl:,.0f}", f"{rep.metrics['total_return']:+.2%}")
@@ -251,21 +222,6 @@ def render():
                 st.caption("Liquidation fills at EOD spot — no stock spread/slippage "
                            "modeled (options pay full spread).")
 
-        # Regime-gate diagnostics — shown whenever a gate is armed, even if it
-        # never fired (absence-of-fire is itself the finding).
-        if getattr(rep, "gates", None) is not None:
-            g = rep.gates
-            st.subheader("Regime gates (ticker state, strictly-prior-day)")
-            g1, g2, g3, g4 = st.columns(4)
-            g1.metric("Entry-gated days", g["days_entry_gated"])
-            g2.metric("Rolls denied", g["n_rolls_denied"])
-            g3.metric("Stops suppressed", g["n_stops_suppressed"])
-            g4.metric("State unknown", g["n_state_unknown"],
-                      help="Gate consultations at would-act moments where the "
-                           "regime state was missing/stale — gates default-allow.")
-            st.caption("Gated-entry counterfactual is not modeled — the paired "
-                       "A/B run is the measurement (reports/regime_gates.txt).")
-
         st.subheader("Equity vs buy & hold")
         bench = {}
         from src.engine_v2.options.report import buy_hold_curve, spy_curve
@@ -273,6 +229,7 @@ def render():
         spy_b = spy_curve(cfg.starting_capital, res.equity.index)
         if spy_b is not None and rep.ticker != "SPY":
             bench["SPY"] = spy_b
+        bench["Plain wheel"] = res_plain.equity.reindex(res.equity.index).ffill()
         st.plotly_chart(charts.equity_curve(res.equity, bench), width="stretch")
 
         st.subheader("Year-by-year return")
