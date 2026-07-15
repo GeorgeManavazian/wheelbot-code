@@ -464,7 +464,156 @@ def audit_portfolio():
           "re-derived, ledger agrees.")
 
 
+# ---------------------------------------------------------------------------
+# Regime-router audit (spec 2026-07-14-regime-router-design): the per-day cell
+# and every action re-derived with the audit's OWN state lookup; share-lot
+# provenance reconstructed from the ledger; double-entry both directions.
+# ---------------------------------------------------------------------------
+
+def _cell_local(states, d):
+    """Audit's own routing cell: uptrend->TREND; downtrend+stressed->WHEEL;
+    downtrend else->CASH; chop or unknown->WHEEL."""
+    row = _asof_row(states, d)
+    if row is None:
+        return "WHEEL", "unknown"
+    if row["trend"] == "uptrend":
+        return "TREND", row["trend"]
+    if row["trend"] == "downtrend" and row["vol"] == "stressed":
+        return "WHEEL", row["trend"]
+    if row["trend"] == "downtrend":
+        return "CASH", row["trend"]
+    return "WHEEL", row["trend"]
+
+
+def audit_router():
+    from src.engine_v2.options.regime_router import run_regime_router
+    from src.engine_v2.options.portfolio import DEFAULT_CLEAN_START
+    from src.engine_v2.options.data import chain_path
+    SEEN = ["SPY", "GDX", "SLV", "XOP"]
+    total_mm, lines = [], []
+    for t in SEEN:
+        ch = pd.read_parquet(chain_path(t))
+        ch["date"] = pd.to_datetime(ch["date"])
+        if t in DEFAULT_CLEAN_START:
+            ch = ch[ch["date"] >= DEFAULT_CLEAN_START[t]].reset_index(drop=True)
+        states = regime_series(closes_for(t))
+        cfg = WheelConfig(ticker=t, **BASE, call_min_strike="basis")
+        res = run_regime_router(ch, cfg, states)
+        und = ch.groupby("date")["underlying"].first()
+        by_date = {pd.Timestamp(k): g for k, g in ch.groupby("date")}
+        mismatches, ver = [], {"shares": 0, "opts": 0, "tp": 0, "expiry": 0,
+                               "forced": 0}
+
+        # ONE chronological day-walk: the engine converts trend lots to wheel
+        # shares silently on the first chop day (no trade is written), so the
+        # audit must re-derive that conversion per DAY, not per trade — a
+        # trade-driven walk goes permanently stale (review 2026-07-14).
+        events = {}
+        for tr in sorted(res.trades, key=lambda x: pd.Timestamp(x.date)):
+            events.setdefault(pd.Timestamp(tr.date).normalize(), []).append(tr)
+        trend_lots_held = False
+        wheel_shares_held = False
+        for d in und.index:
+            d = pd.Timestamp(d)
+            cell, trend = _cell_local(states, d)
+            # silent conversion resolves before anything else that day
+            if trend_lots_held and trend == "chop":
+                trend_lots_held, wheel_shares_held = False, True
+            day_trades = events.get(d.normalize(), [])
+            for tr in day_trades:
+                if tr.action == "BUY_SHARES":
+                    if cell != "TREND" or trend_lots_held or wheel_shares_held:
+                        mismatches.append(f"{t} {d.date()} BUY_SHARES illegal "
+                                          f"(cell {cell}, trend_held {trend_lots_held}, "
+                                          f"wheel_held {wheel_shares_held})")
+                    else:
+                        ver["shares"] += 1
+                    trend_lots_held = True
+                elif tr.action == "SELL_SHARES":
+                    if not trend_lots_held or trend != "downtrend":
+                        mismatches.append(f"{t} {d.date()} SELL_SHARES illegal "
+                                          f"(trend {trend}, trend_held {trend_lots_held})")
+                    else:
+                        ver["shares"] += 1; ver["forced"] += 1
+                    trend_lots_held = False
+                elif tr.action == "SELL_PUT":
+                    if cell != "WHEEL":
+                        mismatches.append(f"{t} {d.date()} SELL_PUT outside wheel cell ({cell})")
+                    else:
+                        ver["opts"] += 1
+                elif tr.action == "SELL_CALL":
+                    if cell != "WHEEL":
+                        mismatches.append(f"{t} {d.date()} SELL_CALL outside wheel cell ({cell})")
+                    else:
+                        ver["opts"] += 1
+                elif tr.action == "ASSIGNED":
+                    wheel_shares_held = True
+                elif tr.action == "CALLED_AWAY":
+                    wheel_shares_held = False
+            # forced-sale double-entry (other direction): trend lots surviving
+            # a derived-downtrend day without a SELL_SHARES is a mismatch
+            if trend_lots_held and trend == "downtrend":
+                mismatches.append(f"{t} {d.date()} trend lots held on derived "
+                                  f"downtrend day but no SELL_SHARES")
+                trend_lots_held = False
+
+        # option-leg walk (TP EOD + expiry), same double-entry as --portfolio
+        thresh_mult = 1 - cfg.take_profit_pct
+        legs = positions_from_trades([tr for tr in res.trades
+                                      if tr.contract is not None])
+        for leg in legs:
+            c, n, credit = leg["contract"], leg["n"], leg["credit"]
+            opened = pd.Timestamp(leg["opened"])
+            expected = None
+            for d in [dd for dd in und.index if pd.Timestamp(dd) > opened]:
+                d = pd.Timestamp(d)
+                if d < pd.Timestamp(c.expiry):
+                    mark = option_mark(by_date[d], d, c)
+                    if mark is not None and mark.ask <= thresh_mult * credit:
+                        expected = ("TP", d); break
+                else:
+                    expected = ("EXPIRY", d); break
+            loc = f"{t}/router {c.strike}{c.right} exp {pd.Timestamp(c.expiry).date()}"
+            if expected is None:
+                if leg["close_action"] != "OPEN_AT_END":
+                    mismatches.append(f"{loc}: no trigger derived, ledger "
+                                      f"{leg['close_action']}")
+                continue
+            kind, when = expected
+            got_when = (pd.Timestamp(leg["closed"]).normalize()
+                        if leg["closed"] is not None else None)
+            if kind == "TP":
+                if leg["close_action"] in ("CLOSE_PUT", "CLOSE_CALL") and \
+                        got_when == when.normalize():
+                    ver["tp"] += 1
+                else:
+                    mismatches.append(f"{loc}: derived TP {when.date()}, ledger "
+                                      f"{leg['close_action']} at {got_when}")
+            else:
+                if got_when == when.normalize():
+                    ver["expiry"] += 1
+                else:
+                    mismatches.append(f"{loc}: derived expiry {when.date()}, "
+                                      f"ledger {leg['close_action']} at {got_when}")
+
+        lines.append(f"{t:<4} router  share-actions {ver['shares']:>3}  forced-sales "
+                     f"{ver['forced']:>2}  option-entries {ver['opts']:>4}  "
+                     f"TPs {ver['tp']:>4}  expiries {ver['expiry']:>3}  "
+                     f"mismatches {len(mismatches)}")
+        total_mm.extend(mismatches)
+    print("\n".join(lines))
+    if total_mm:
+        print(f"\n{len(total_mm)} MISMATCHES:")
+        print("\n".join(total_mm[:40]))
+        sys.exit(1)
+    print("\nROUTER EXECUTION VERIFIED: every route, share action, and leg "
+          "termination re-derived; ledger agrees.")
+
+
 def main():
+    if "--router" in sys.argv:
+        audit_router()
+        return
     if "--portfolio" in sys.argv:
         audit_portfolio()
         return
