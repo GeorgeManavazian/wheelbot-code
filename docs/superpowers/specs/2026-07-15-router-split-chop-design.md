@@ -1,8 +1,24 @@
 # v2 Router — split-chop-by-200 (`split_chop`) — design
 
+> ## ⛔ FALSIFIED IN-SAMPLE (2026-07-15) — ABANDONED, DO NOT REVIVE AS SPECIFIED
+> Built on branch `feat/router-split-chop` (deleted), referee-validated (routing
+> correct, 0 mismatches, 121/177/251/99 split-days fired), then A/B'd in-sample.
+> The rule **failed**: `ROUTER+split` tied or lost on all four seen tickers
+> (SPY 145.3 vs 148.6, GDX ~tie, SLV 248.8 vs 265.3, XOP 145.8 vs 160.8).
+> **Mechanism:** reclassifying chop-recovering days to the TREND cell buys shares,
+> but the TREND posture carries a **forced-exit on downtrend**, and chop is price
+> oscillating around the 200-line — so it buys, gets force-sold on the next dip,
+> and whipsaws (SELL_SHARES 0→2/8/18, whipsaws 0→2/8/15). The motivating
+> attribution measured per-day buy-hold return over above-200-chop days, which
+> assumed **frictionless holding**; the router's TREND posture cannot hold
+> frictionlessly. Vindicates the prior falsified findings (exits during declines
+> sell bottoms). Kept as the pre-registration record. The open question it
+> surfaced — *can a HOLD that does NOT force-sell on the dip recover the
+> surrender?* — is a separate, un-started design.
+
 **Date:** 2026-07-15
 **Project:** Chameleon (regime router) — `code/etf-bot`
-**Status:** design, PRE-REGISTERED — frozen before any out-of-sample run
+**Status:** FALSIFIED in-sample, abandoned (see banner above)
 **Depends on / consumes:** regime router (`regime_router.py`), regime state (`regime/state.py`, provides `px_vs_200`), referee (`scripts/audit_defense_execution.py`)
 
 ## Pre-registration statement (binding)
