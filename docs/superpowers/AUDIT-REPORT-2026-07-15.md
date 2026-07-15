@@ -45,8 +45,23 @@ Owner-requested fresh-context audit of the entire Chameleon bot: weather/regime,
 - **Faithful independent restatement:** `_cell_local` restates the routing table (uptrend→TREND; downtrend+stressed→WHEEL; downtrend-else→CASH; chop/unknown→WHEEL) as separate code matching the engine's `_cell` — a genuine second implementation, so a bug in either breaks the agreement rather than hiding.
 - **Double-entry, all modes:** each mode checks both directions (action-without-trigger AND trigger-without-action) and every held day is accounted; the router day-walk was hardened 2026-07-14 (chronological, silent trend→chop conversion re-derived per day). Conviction-trim block reconstructs full lots robustly (cfg.contract_multiplier + 1e-9 floor guard, fixed this session).
 - **Empirically:** all four modes exit 0 (default, --hourly, --portfolio, --router) on all applicable tickers.
-- **Honest boundary (not a defect):** the referee shares `regime_series` as INPUT with the engine (it does not re-implement the MA/percentile math). That is acceptable — `regime_series` is the shared upstream input (like the chain data), and it was independently proven look-ahead-free and threshold-correct by the weather-module audit above. The DECISION logic (how states become trades) is what the referee independently re-derives, and does.
+- **Honest boundary (not a defect):** the referee shares `regime_series` as INPUT with the engine (it does not re-implement the MA/percentile math). Acceptable — that's the shared upstream input, independently proven clean by the weather audit; the DECISION logic is what the referee re-derives.
+
+**Referee-hygiene findings (in the referee TOOLING, not the trading path — none fails a correct ledger today):**
+1. **Hardcoded `*100` in the default-mode roll credit test** (`audit_defense_execution.py:143-144`) instead of `cfg.contract_multiplier`, and the commission term isn't multiplier-scaled — could flip the roll would-execute decision differently from the engine IF a contract ever had `mult != 100`. Dormant (all ETF options are 100; 143 SPY / 124 GDX rolls verified clean). Notable because the conviction-trim block was fixed to use `tmult` this session but this older line was missed. **Recommend fixing (owner approval — it's on main).**
+2. **Roll audit reuses the engine's `select_roll_contract`** to pick the roll destination — so a bug in roll-destination *selection* would be invisible (ledger and expectation pick the same contract, agree by construction). Confined to which contract is chosen; the trigger arithmetic and all state/cell/sizing logic ARE independently re-derived. Honest scope limit of the roll audit, not a trading-path defect.
+3. **Vacuous-pass on empty input** — no mode refuses to print "VERIFIED" when zero decisions were examined; a degenerate/empty chain would exit 0 with nothing actually checked. Not triggered in normal operation. **Cheap guardrail worth adding (owner approval).**
+4. Informational: the `SELL_SHARES` forced-exit path has zero live coverage (0 forced sales on all 4 tickers — uptrends decay through chop, never a direct flip), so a bug there wouldn't be caught by the current basket.
 
 ## Bottom line for the owner
 
-Chameleon — weather report, wheel engine, router, and conviction trim — is **correct and stress-verified**. Nothing in the trading path is broken. The only actionable item surfaced is one **optional, trivial** robustness hardening (bars-path date de-dup in `data.py`), which affects no shipped result and no seen-ticker run. Everything remains in-sample on burned tickers; correctness ≠ profitability, and the out-of-sample verdict still waits on the basket run.
+Chameleon — weather report, wheel engine, router, and conviction trim — is **correct and stress-verified**. **Zero confirmed defects in the trading/decision path** across four cold module audits and the full empirical battery. The four auditors independently agreed, and the router's core byte-identical invariant was proven on all 9 tickers (not just the SPY anchor).
+
+**Actionable items (all optional, none affects any shipped trading result — awaiting your approval since they're on main):**
+1. `data.py` bars-path date de-dup (1 line) — latent robustness, trivial.
+2. Referee `audit_defense_execution.py:143-144` — use `cfg.contract_multiplier` not hardcoded `*100` in the default-mode roll credit test (dormant; consistency with the trim block already fixed).
+3. Referee vacuous-pass guard — refuse to print "VERIFIED" when zero decisions were checked (degenerate-input safety).
+
+All three are in NON-trading-path code (data loader + referee tooling), all dormant/degenerate, and none changes a seen-ticker result. I did NOT patch them — this audit is read-only; they're yours to greenlight.
+
+Everything remains in-sample on burned tickers; **correctness ≠ profitability**, and the out-of-sample verdict still waits on the basket run.
