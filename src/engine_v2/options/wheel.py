@@ -51,6 +51,7 @@ class WheelConfig:
     regime_entry_gate: bool = False   # no new campaign opens in unpaid decline
     regime_roll_gate: bool = False    # mid-life roll denied in unpaid decline
     regime_stop_gate: bool = False    # put stop suppressed while vol == "stressed"
+    conviction_trim: bool = False     # half-size trend HOLD entries in stressed vol (router only)
 
     @property
     def any_regime_gate(self) -> bool:
