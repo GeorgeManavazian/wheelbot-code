@@ -10,6 +10,7 @@ from pathlib import Path
 from src.engine_v2.options.data import chain_path
 from src.engine_v2.options.wheel import WheelConfig, run_wheel
 from src.engine_v2.options.regime_router import run_regime_router
+from src.engine_v2.options.intraday import run_regime_router_intraday
 from src.engine_v2.options.portfolio import DEFAULT_CLEAN_START
 from src.engine_v2.options.report import buy_hold_curve
 from src.engine_v2.backtest import metrics_simple as m
@@ -35,6 +36,7 @@ def line(name, eq, extra=""):
 
 def main():
     tickers = [t.upper() for t in sys.argv[1:] if not t.startswith("--")] or SEEN
+    hourly = "--hourly" in sys.argv
     # ALLOW-list, not deny-list: anything outside the seen set is refused
     # (a deny-list fails open on typos and new tickers — review 2026-07-14).
     blocked = [t for t in tickers if t not in SEEN]
@@ -53,6 +55,11 @@ def main():
         cfg = WheelConfig(ticker=t, **BASE)
 
         router = run_regime_router(ch, cfg, states)
+        router_h = None
+        if hourly:
+            ih = pd.read_parquet(f"data/options/{t.lower()}_ohlc_1h_all.parquet")
+            ih["timestamp"] = pd.to_datetime(ih["timestamp"])
+            router_h = run_regime_router_intraday(ch, cfg, ih, states)
         trim = run_regime_router(ch, WheelConfig(ticker=t, **BASE,
                                                  conviction_trim=True), states)
         solo = run_wheel(ch, cfg)
@@ -67,6 +74,12 @@ def main():
                           f"| days T/W/C {dip['TREND']}/{dip['WHEEL']}/{dip['CASH']}"
                           f"  transitions {transitions}  whipsaws {router.whipsaw_pairs}"
                           f"  unknown {sum(1 for w in router.warnings if w[1]=='route_state_unknown')}"))
+        if router_h is not None:
+            lines.append(line("ROUTER-hourly", router_h.equity,
+                              f"| intraday-TP {router_h.intraday_tp_fills}"
+                              f"  EOD-TP {router_h.eod_tp_fills}"
+                              f"  (intraday fills optimistic-biased: next-bar close,"
+                              f" hourly trade prints, no quotes)"))
         # conviction-trim arm: headline is max drawdown (a tail-control play).
         lines.append(line("ROUTER+trim", trim.equity,
                           f"| trimmed {trim.n_trimmed_entries}  half-days {trim.days_half_size}"
@@ -77,8 +90,12 @@ def main():
         lines.append("router per-year: " + "  ".join(f"{y}: {yr[y]:+.1%}" for y in yr.index))
     txt = "\n".join(lines)
     outd = Path("data/options/reports"); outd.mkdir(parents=True, exist_ok=True)
-    fname = ("regime_router.txt" if tickers == SEEN
-             else f"regime_router_{'_'.join(t.lower() for t in tickers)}.txt")
+    if hourly:
+        fname = ("regime_router_hourly.txt" if tickers == SEEN
+                 else f"regime_router_hourly_{'_'.join(t.lower() for t in tickers)}.txt")
+    else:
+        fname = ("regime_router.txt" if tickers == SEEN
+                 else f"regime_router_{'_'.join(t.lower() for t in tickers)}.txt")
     (outd / fname).write_text(txt)
     print(txt)
 
