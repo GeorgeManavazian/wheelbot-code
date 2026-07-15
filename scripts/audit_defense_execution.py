@@ -609,14 +609,17 @@ def audit_router():
         trim_cfg = WheelConfig(ticker=t, **BASE, call_min_strike="basis",
                                conviction_trim=True)
         trim_res = run_regime_router(ch, trim_cfg, states)
+        tmult = trim_cfg.contract_multiplier   # not hardcoded 100
         tmm, tver = [], 0
         for tr in trim_res.trades:
             if tr.action != "BUY_SHARES":
                 continue
             d = pd.Timestamp(tr.date)
             spot = tr.price_per_contract
-            before = tr.cash_after + tr.contracts * 100 * spot
-            full = int(before // (spot * 100))
+            # reconstruct pre-buy cash from the ledger; +1e-9 guards the floor
+            # against a 1-ULP shift from float non-associativity (review).
+            before = tr.cash_after + tr.contracts * tmult * spot
+            full = int(before / (spot * tmult) + 1e-9)
             row = _asof_row(states, d)
             stressed = row is not None and row["vol"] == "stressed"
             want = full // 2 if stressed else full

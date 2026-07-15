@@ -103,6 +103,10 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
     if cfg.regime_stop_gate and cfg.put_stop_mult is None:
         raise ValueError("regime_stop_gate gates the put stop; put_stop_mult is "
                          "None so the arm would be a silent no-op — refuse it")
+    if cfg.conviction_trim:
+        raise ValueError("conviction_trim is a router-only mechanic (it sizes the "
+                         "TREND hold); the solo wheel has no trend posture — set it "
+                         "on run_regime_router, not run_wheel")
     dates = sorted(pd.to_datetime(chain["date"]).unique())
     und = underlying_series(chain)
     # index the chain by date ONCE so per-day strike lookups touch ~one day's rows

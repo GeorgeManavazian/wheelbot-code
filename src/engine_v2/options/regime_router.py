@@ -155,7 +155,7 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                 # same expected return but a fatter crash tail — buy half size.
                 trimmed = cfg.conviction_trim and g_vol == "stressed"
                 if trimmed:
-                    lots = lots // 2
+                    lots = int(lots * TRIM_FRACTION)
                 if lots > 0:
                     campaign += 1
                     campaign_premium = 0.0

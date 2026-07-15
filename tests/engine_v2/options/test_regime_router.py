@@ -265,3 +265,25 @@ def test_trimmed_hold_converts_to_wheel_at_half():
     calls = [t for t in res.trades if t.action=="SELL_CALL"]
     # the wheel now rents exactly the half-size share count
     assert calls and calls[0].contracts == buy.contracts
+
+def test_conviction_trim_rejected_on_solo_wheel():
+    # router-only mechanic must not be silently ignored by the solo engine
+    ch = _chain(PUT_DAY)
+    with pytest.raises(ValueError):
+        run_wheel(ch, _cfg(conviction_trim=True))
+
+def test_trim_fraction_constant_is_live():
+    # editing TRIM_FRACTION must actually change sizing (guards the dead-const bug)
+    import src.engine_v2.options.regime_router as rr
+    st = _states([("2024-01-01","uptrend","stressed",0.9)])
+    orig = rr.TRIM_FRACTION
+    try:
+        rr.TRIM_FRACTION = 0.25
+        q = run_regime_router(_chain(PUT_DAY),
+                              _cfg(starting_capital=500_000.0, conviction_trim=True), st)
+        full = run_regime_router(_chain(PUT_DAY), _cfg(starting_capital=500_000.0), st)
+        f = [t for t in full.trades if t.action=="BUY_SHARES"][0].contracts
+        g = [t for t in q.trades if t.action=="BUY_SHARES"][0].contracts
+        assert g == int(f * 0.25)
+    finally:
+        rr.TRIM_FRACTION = orig
