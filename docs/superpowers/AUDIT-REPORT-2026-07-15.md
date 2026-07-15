@@ -40,9 +40,12 @@ Owner-requested fresh-context audit of the entire Chameleon bot: weather/regime,
 - Cash/equity no double-count (mutual exclusion makes `(shares+trend_shares)*spot` safe); conversion cash-neutral with basis=purchase price; whipsaw boundary exact (≤10 days). Counters correct. Conviction-trim edges correct (single-lot→no buy; touches only BUY_SHARES).
 - Scope notes (not bugs): router is EOD-only by design (no intraday param — correctly benchmarked against EOD wheel); trend shares are held (frozen) through an unknown-state stretch per Approach A.
 
-### 4. Referees (`audit_defense_execution.py`) — [PENDING 4th auditor; empirical: all modes exit 0]
-
-<!-- REFEREE-AUDITOR-SLOT -->
+### 4. Referees (`audit_defense_execution.py`) — SOUND (independence verified)
+- **No circularity:** the referee does NOT import the engine's decision helpers. It re-derives every decision with its OWN local copies — `_unpaid`, `_asof`, `_asof_row`, `_cell_local` (confirmed: no `_state_before`/`is_unpaid_decline`/`_cell` import; the 2026-07-14 circularity fix, which flipped the router-audit from engine imports to local copies, holds). `run_wheel`/`run_regime_router` are imported only to GENERATE the ledger under test — correct.
+- **Faithful independent restatement:** `_cell_local` restates the routing table (uptrend→TREND; downtrend+stressed→WHEEL; downtrend-else→CASH; chop/unknown→WHEEL) as separate code matching the engine's `_cell` — a genuine second implementation, so a bug in either breaks the agreement rather than hiding.
+- **Double-entry, all modes:** each mode checks both directions (action-without-trigger AND trigger-without-action) and every held day is accounted; the router day-walk was hardened 2026-07-14 (chronological, silent trend→chop conversion re-derived per day). Conviction-trim block reconstructs full lots robustly (cfg.contract_multiplier + 1e-9 floor guard, fixed this session).
+- **Empirically:** all four modes exit 0 (default, --hourly, --portfolio, --router) on all applicable tickers.
+- **Honest boundary (not a defect):** the referee shares `regime_series` as INPUT with the engine (it does not re-implement the MA/percentile math). That is acceptable — `regime_series` is the shared upstream input (like the chain data), and it was independently proven look-ahead-free and threshold-correct by the weather-module audit above. The DECISION logic (how states become trades) is what the referee independently re-derives, and does.
 
 ## Bottom line for the owner
 
