@@ -67,6 +67,18 @@ def test_wheel_page_has_no_defense_selectbox():
     assert "w_defense" not in keys
 
 
+def test_wheel_run_shows_basis_vs_plain_table():
+    at = AppTest.from_file("dashboard/app.py").run(timeout=60)
+    at.switch_page("views/wheel.py").run(timeout=60)
+    at.selectbox(key="wheel_data").set_value(FIXTURE_TICKER).run(timeout=60)
+    at.button(key="run_wheel").click().run(timeout=120)
+    assert not at.exception
+    # the comparison table is a dataframe indexed by arm name
+    idx = [str(x) for df in at.dataframe for x in df.value.index]
+    assert "Basis wheel" in idx
+    assert "Plain wheel" in idx
+
+
 def test_history_page_renders():
     # NOTE: AppTest.switch_page() derives its target page hash from the
     # *filename* of the given path (page_icon_and_name), then matches it

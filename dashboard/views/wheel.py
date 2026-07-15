@@ -1,6 +1,7 @@
 """Wheel backtest page: pick ticker + config, run, see report. Thin view over
 wheel_report, built to the 2026-07-12 wheel engine API contract."""
 import os
+from dataclasses import replace
 import pandas as pd
 import streamlit as st
 from dashboard import charts, labels, theme
@@ -110,16 +111,21 @@ def render():
                           call_delta=call_delta, target_dte=int(target_dte),
                           take_profit_pct=tp_slider / 100.0, ticker=ticker,
                           call_min_strike="basis")
+        plain_cfg = replace(cfg, call_min_strike=None)
         if intraday_on and intra:
             from src.engine_v2.options.intraday import run_wheel_intraday
-            res = run_wheel_intraday(ch, cfg, pd.read_parquet(intra), regime_states=None)
+            intra_df = pd.read_parquet(intra)
+            res_basis = run_wheel_intraday(ch, cfg, intra_df, regime_states=None)
+            res_plain = run_wheel_intraday(ch, plain_cfg, intra_df, regime_states=None)
         else:
-            res = run_wheel(ch, cfg, regime_states=None)
-        rep = wheel_report(res, ch, cfg)
-        st.session_state["_wheel_result"] = (res, rep, cfg, ch)
+            res_basis = run_wheel(ch, cfg, regime_states=None)
+            res_plain = run_wheel(ch, plain_cfg, regime_states=None)
+        rep_basis = wheel_report(res_basis, ch, cfg)
+        rep_plain = wheel_report(res_plain, ch, plain_cfg)
+        st.session_state["_wheel_result"] = (res_basis, rep_basis, res_plain, rep_plain, cfg, ch)
 
         from dashboard.wheel_history import log_run
-        pnl = res.equity.iloc[-1] - cfg.starting_capital
+        pnl = res_basis.equity.iloc[-1] - cfg.starting_capital
         log_run({
             "ts": pd.Timestamp.now().isoformat(timespec="seconds"),
             "data_source": ticker_name,
@@ -132,18 +138,41 @@ def render():
             "capital": capital,
             "intraday": bool(intraday_on),
             "defense": "basis",
-            "total_return": rep.metrics["total_return"],
-            "max_drawdown": rep.metrics["max_drawdown"],
-            "sharpe": rep.metrics["sharpe"],
+            "total_return": rep_basis.metrics["total_return"],
+            "max_drawdown": rep_basis.metrics["max_drawdown"],
+            "sharpe": rep_basis.metrics["sharpe"],
             "pnl": float(pnl),
-            "n_trades": len(res.trades),
-            "n_assignments": rep.stats["n_assignments"],
+            "n_trades": len(res_basis.trades),
+            "n_assignments": rep_basis.stats["n_assignments"],
+            "plain_total_return": rep_plain.metrics["total_return"],
         })
 
     stashed = st.session_state.get("_wheel_result")
     if stashed is not None:
-        res, rep, cfg, ch = stashed
+        res, rep, res_plain, rep_plain, cfg, ch = stashed
         pnl = res.equity.iloc[-1] - cfg.starting_capital
+
+        rows = {}
+        def _arm_row(equity, m):
+            return {"P&L": float(equity.iloc[-1] - cfg.starting_capital),
+                    "Return": m["total_return"], "Sharpe": m["sharpe"],
+                    "MaxDD": m["max_drawdown"]}
+        rows["Basis wheel"] = _arm_row(res.equity, rep.metrics)
+        rows["Plain wheel"] = _arm_row(res_plain.equity, rep_plain.metrics)
+        bu = rep.benchmark_underlying
+        rows[f"Buy-hold {rep.ticker}"] = {"P&L": None, "Return": bu["total_return"],
+                                          "Sharpe": None, "MaxDD": bu.get("max_drawdown")}
+        if rep.benchmark_spy is not None and rep.ticker != "SPY":
+            bs = rep.benchmark_spy
+            rows["Buy-hold SPY"] = {"P&L": None, "Return": bs["total_return"],
+                                    "Sharpe": None, "MaxDD": bs.get("max_drawdown")}
+        cmp_df = pd.DataFrame.from_dict(rows, orient="index")
+        st.subheader("Basis wheel vs plain wheel")
+        st.dataframe(cmp_df.style.format({
+            "P&L": lambda x: "" if pd.isna(x) else f"${x:,.0f}",
+            "Return": lambda x: "" if pd.isna(x) else f"{x:+.2%}",
+            "Sharpe": lambda x: "" if pd.isna(x) else f"{x:.2f}",
+            "MaxDD": lambda x: "" if pd.isna(x) else f"{x:.2%}"}), width="stretch")
 
         a, b, c, d = st.columns(4)
         a.metric("P&L", f"${pnl:,.0f}", f"{rep.metrics['total_return']:+.2%}")
@@ -200,6 +229,7 @@ def render():
         spy_b = spy_curve(cfg.starting_capital, res.equity.index)
         if spy_b is not None and rep.ticker != "SPY":
             bench["SPY"] = spy_b
+        bench["Plain wheel"] = res_plain.equity.reindex(res.equity.index).ffill()
         st.plotly_chart(charts.equity_curve(res.equity, bench), width="stretch")
 
         st.subheader("Year-by-year return")
