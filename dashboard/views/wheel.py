@@ -96,26 +96,52 @@ def render():
 
     # Pre-registered defense arms (spec amendment 2026-07-12b) — a fixed set,
     # deliberately not tunable knobs.
+    # Curated to the 2026-07-14 verdicts: mechanics that lost their A/B in
+    # every form (ungated stop — falsified at every threshold 1.5–5×; plain
+    # roll — cosmetic; liquidate-at-assignment — sells every bottom) are gone
+    # from the menu. Roll and stop survive only weather-gated. The basis floor
+    # has NO weather variant on purpose: its weather version (siege exit) was
+    # pre-registered, tested, and falsified the same day. Removed variants
+    # remain runnable via scripts/ for provenance.
     DEFENSES = {
         "None (plain wheel)": {},
-        "Calls at/above net basis": {"call_min_strike": "basis"},
-        "Roll tested puts (mid-life)": {"roll_tested_puts": True},
-        "Liquidate at assignment": {"liquidate_assignment": True},
-        "Put stop at 3× credit": {"put_stop_mult": 3.0},
-        # regime gates (spec 2026-07-14) — states auto-computed from daily closes
-        "Entry gate (regime)": {"regime_entry_gate": True},
-        "Roll + roll gate (regime)": {"roll_tested_puts": True,
-                                      "regime_roll_gate": True},
-        "Put stop 3× + stop gate (regime)": {"put_stop_mult": 3.0,
-                                             "regime_stop_gate": True},
+        "Basis floor — never rent below cost (keeper)":
+            {"call_min_strike": "basis"},
+        "Basis floor + entry gate (weather)":
+            {"call_min_strike": "basis", "regime_entry_gate": True},
+        "Roll tested puts, weather-gated":
+            {"roll_tested_puts": True, "regime_roll_gate": True},
+        "Put stop 3×, weather-gated":
+            {"put_stop_mult": 3.0, "regime_stop_gate": True},
     }
+    _HELP = {
+        "None (plain wheel)": "The baseline everything is judged against.",
+        "Basis floor — never rent below cost (keeper)":
+            "The one mechanic that transformed results (GDX +31%→+144%). "
+            "Refuses to sell covered calls below net cost, so recoveries get "
+            "ridden instead of sold at the bottom. No weather variant: that "
+            "was the siege exit — tested and falsified 2026-07-14.",
+        "Basis floor + entry gate (weather)":
+            "Basis floor plus: no NEW campaign opens in an unpaid decline "
+            "(falling + calm/normal vol). Entry gate alone tested "
+            "mixed-negative — judge with the A/B report, not this run alone.",
+        "Roll tested puts, weather-gated":
+            "Mid-life same-strike credit-only roll, denied in unpaid declines. "
+            "Verdict so far: cosmetic — helps about as often as it hurts.",
+        "Put stop 3×, weather-gated":
+            "Stop-loss that is NOT allowed to fire during panic (stressed "
+            "vol). The ungated stop lost at every threshold tested; the gate "
+            "halves the damage. Survival tool, not a P&L tool.",
+    }
+    # History rows may reference retired defense names — fall back to plain.
+    if st.session_state.get("w_defense") not in DEFENSES:
+        st.session_state.pop("w_defense", None)
     defense_name = st.selectbox(
         "Defense", list(DEFENSES), key="w_defense",
-        help="Post-assignment / exit mechanics. Fixed set, repaired per the "
-             "2026-07-13 defense-repair spec: the basis floor is now NET basis "
-             "(assignment strike minus premium banked) and the roll is the "
-             "mid-life same-strike credit-only roll. Pre-repair matrix results "
-             "are provenance-only and describe the OLD mechanics.")
+        help="Curated to the 2026-07-14 verdicts. Retired (falsified) variants "
+             "— ungated stop, plain roll, liquidate-at-assignment — live on in "
+             "scripts and reports as provenance.")
+    st.caption(_HELP[defense_name])
 
     # Per-ticker hourly OHLC; the pull is still in flight for some tickers.
     intra = None if ticker_name == FIXTURE_TICKER else intraday_path(ticker)
