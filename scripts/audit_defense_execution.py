@@ -585,7 +585,7 @@ def audit_router(hourly=False):
         for leg in legs:
             c, n, credit = leg["contract"], leg["n"], leg["credit"]
             opened = pd.Timestamp(leg["opened"])
-            expected = None   # (kind, when[, price])
+            expected = None   # (kind, when, price|None)
             for d in [dd for dd in und.index if pd.Timestamp(dd) > opened]:
                 d = pd.Timestamp(d)
                 if d < pd.Timestamp(c.expiry):
@@ -619,14 +619,20 @@ def audit_router(hourly=False):
                         if leg["closed"] is not None else None)
             if kind == "TP":
                 ok = leg["close_action"] in ("CLOSE_PUT", "CLOSE_CALL")
-                if hourly and price is not None:  # intraday: exact timestamp match
+                if hourly and price is not None:  # intraday: exact timestamp + price match
                     ok = ok and got_when is not None and got_when == pd.Timestamp(when)
+                    if ok:  # ledger fill price must equal the derived next-bar close
+                        close_tr = [tr for tr in res.trades
+                                    if tr.action == leg["close_action"]
+                                    and tr.contract == c
+                                    and pd.Timestamp(tr.date) == pd.Timestamp(when)]
+                        ok = bool(close_tr) and abs(close_tr[0].price_per_contract - price) <= 1e-9
                 else:                              # EOD: day-level match
                     ok = ok and got_when is not None and got_when.normalize() == pd.Timestamp(when).normalize()
                 if ok:
                     ver["tp"] += 1
                 else:
-                    mismatches.append(f"{loc}: derived TP {when}, ledger "
+                    mismatches.append(f"{loc}: derived TP {when} @ {price}, ledger "
                                       f"{leg['close_action']} at {got_when}")
             else:
                 if got_when is not None and got_when.normalize() == pd.Timestamp(when).normalize():
