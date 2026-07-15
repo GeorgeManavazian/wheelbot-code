@@ -78,3 +78,8 @@ def run_wheel_intraday(chain, cfg, intraday_df, regime_states=None):
     from .wheel import run_wheel
     return run_wheel(chain, cfg, intraday=intraday_marks(intraday_df),
                      regime_states=regime_states)
+
+def run_regime_router_intraday(chain, cfg, intraday_df, regime_states):
+    from .regime_router import run_regime_router
+    return run_regime_router(chain, cfg, regime_states,
+                             intraday=intraday_marks(intraday_df))

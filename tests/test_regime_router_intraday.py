@@ -158,3 +158,15 @@ def test_intraday_tp_close_then_trend_entry_preserves_whipsaw_index():
     # the payload: buy at date idx 11, sell at idx 12 -> one whipsaw pair.
     # Shadow bug corrupts trend_buy_idx to 0 -> 12 - 0 = 12 > 10 -> 0 pairs.
     assert res.whipsaw_pairs == 1
+
+
+def test_wrapper_equals_manual_intraday_call():
+    from src.engine_v2.options.intraday import run_regime_router_intraday
+    ch, states = _load("GDX")
+    cfg = WheelConfig(ticker="GDX", **BASE)
+    ih = pd.read_parquet("data/options/gdx_ohlc_1h_all.parquet")
+    a = run_regime_router_intraday(ch, cfg, ih, states)
+    b = run_regime_router(ch, cfg, states, intraday=intraday_marks(ih))
+    assert a.equity.equals(b.equity)
+    assert len(a.trades) == len(b.trades)
+    assert a.intraday_tp_fills == b.intraday_tp_fills
