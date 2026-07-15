@@ -140,8 +140,9 @@ def audit(ticker, name, overrides):
                 new_c = select_roll_contract(day_chain, d, "P", c.strike,
                                              c.expiry, cfg.target_dte, cfg.ticker)
                 nm = option_mark(day_chain, d, new_c) if new_c is not None else None
-                if nm is not None and (nm.bid * 100 * n - cfg.commission_per_contract * n
-                        ) >= (mark.ask * 100 * n + cfg.commission_per_contract * n):
+                _mult = cfg.contract_multiplier   # not hardcoded 100 (matches engine)
+                if nm is not None and (nm.bid * _mult * n - cfg.commission_per_contract * n
+                        ) >= (mark.ask * _mult * n + cfg.commission_per_contract * n):
                     if cfg.regime_roll_gate and _unpaid(*_asof(states, d)):
                         expected_denials.add(pd.Timestamp(d).normalize())
                     else:
@@ -330,13 +331,14 @@ def audit_hourly(ticker, start="2020-01-01"):
 
 
 def main_hourly(tickers):
-    total_mm, lines = [], []
+    total_mm, lines, total_checked = [], [], 0
     for t in tickers:
         out = audit_hourly(t)
         if out is None:
             lines.append(f"{t:<4} plain-hourly  SKIPPED (no hourly parquet on disk)")
             continue
         days, ver, mm = out
+        total_checked += days
         lines.append(f"{t:<4} plain-hourly  held-days checked {days:>6}  "
                      f"intraday TPs verified {ver['intraday_tp']:>4}  "
                      f"EOD TPs {ver['eod_tp']:>4}  expiries {ver['expiry']:>4}  "
@@ -346,6 +348,10 @@ def main_hourly(tickers):
     if total_mm:
         print(f"\n{len(total_mm)} MISMATCHES:")
         print("\n".join(total_mm[:40]))
+        sys.exit(1)
+    if total_checked == 0:
+        print("\nAUDIT INCONCLUSIVE: zero held-days examined — refusing to report "
+              "VERIFIED on an empty run.")
         sys.exit(1)
     print("\nHOURLY EXECUTION VERIFIED: every derived fill matches the ledger, "
           "timestamp and price.")
@@ -460,6 +466,10 @@ def audit_portfolio():
     if mismatches:
         print("\n".join(mismatches[:40]))
         sys.exit(1)
+    if verified["routes"] + verified["tp"] + verified["expiry"] == 0:
+        print("\nAUDIT INCONCLUSIVE: zero decisions examined — refusing to report "
+              "VERIFIED on an empty run.")
+        sys.exit(1)
     print("\nPORTFOLIO EXECUTION VERIFIED: every route and every leg termination "
           "re-derived, ledger agrees.")
 
@@ -490,7 +500,7 @@ def audit_router():
     from src.engine_v2.options.portfolio import DEFAULT_CLEAN_START
     from src.engine_v2.options.data import chain_path
     SEEN = ["SPY", "GDX", "SLV", "XOP"]
-    total_mm, lines = [], []
+    total_mm, lines, grand_checked = [], [], 0
     for t in SEEN:
         ch = pd.read_parquet(chain_path(t))
         ch["date"] = pd.to_datetime(ch["date"])
@@ -632,10 +642,16 @@ def audit_router():
                      f"{trim_res.n_trimmed_entries:>3}  half-days "
                      f"{trim_res.days_half_size:>4}  mismatches {len(tmm)}")
         total_mm.extend(tmm)
+        grand_checked += (ver["shares"] + ver["opts"] + ver["tp"]
+                          + ver["expiry"] + tver)
     print("\n".join(lines))
     if total_mm:
         print(f"\n{len(total_mm)} MISMATCHES:")
         print("\n".join(total_mm[:40]))
+        sys.exit(1)
+    if grand_checked == 0:
+        print("\nAUDIT INCONCLUSIVE: zero decisions examined — refusing to report "
+              "VERIFIED on an empty run.")
         sys.exit(1)
     print("\nROUTER EXECUTION VERIFIED: every route, share action, and leg "
           "termination re-derived; ledger agrees.")
@@ -653,10 +669,11 @@ def main():
         main_hourly([t.upper() for t in args] or ["GDX", "SLV", "XOP"])
         return
     tickers = [t.upper() for t in sys.argv[1:]] or ["SPY", "GDX", "SLV", "XOP"]
-    total_mm, lines = [], []
+    total_mm, lines, total_checked = [], [], 0
     for t in tickers:
         for name, ov in VARIANTS.items():
             days, fired, mm = audit(t, name, ov)
+            total_checked += days
             lines.append(f"{t:<4} {name:<12} held-days checked {days:>6}  "
                          f"rolls verified {fired['roll']:>4}  "
                          f"stops verified {fired['stop']:>4}  "
@@ -667,6 +684,10 @@ def main():
     if total_mm:
         print(f"\n{len(total_mm)} MISMATCHES:")
         print("\n".join(total_mm[:40]))
+        sys.exit(1)
+    if total_checked == 0:
+        print("\nAUDIT INCONCLUSIVE: zero held-days examined — refusing to report "
+              "VERIFIED on an empty run.")
         sys.exit(1)
     print("\nEXECUTION VERIFIED: every trigger fired, nothing fired without a trigger.")
 

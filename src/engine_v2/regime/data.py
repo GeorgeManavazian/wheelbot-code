@@ -16,7 +16,10 @@ def closes_for(symbol: str, bars_path: str = BARS) -> pd.Series:
         if isinstance(bars.columns, pd.MultiIndex) and symbol in bars.columns.get_level_values(0):
             s = bars[(symbol, "Close")].dropna()
             s.index = pd.to_datetime(s.index)
-            return s.sort_index().rename(symbol)
+            s = s.sort_index()
+            # de-dup dates to match the chain branch's groupby("date").first();
+            # a duplicate date would shift every rolling window by one bar.
+            return s[~s.index.duplicated(keep="last")].rename(symbol)
     chain = chain_path(symbol)
     if os.path.exists(chain):
         df = pd.read_parquet(chain, columns=["date", "underlying"])
