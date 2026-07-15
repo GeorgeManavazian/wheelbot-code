@@ -1,28 +1,39 @@
 #!/bin/bash
-# Added 2026-07-15: PROGRESS-BASED watchdog, replaces pull_watchdog.sh.
-# The v1 watchdog probed the terminal with a light list_expirations call that
-# kept answering 200 even while the bulk-data gRPC path was wedged — it slept
-# through a 5h AAPL stall. This one keys on the ground truth: are pull output
-# files still being written? If nothing new lands for STALL seconds while the
-# pull is running, the terminal is wedged (or dead) -> restart it. The pull's
-# convergence loop then resumes. Exits when the pull script exits.
+# Added 2026-07-15, rev2: REACHABILITY watchdog.
+# History: v1 used a light list_expirations probe and slept through a heavy-path
+# wedge. rev1 used file-mtime progress — but that conflates two very different
+# things: (a) a genuine local terminal wedge/death [restart fixes it] vs (b) US
+# market-hours throttling / the pull intentionally sleeping at its off-peak gate
+# [restart does NOTHING, just thrashes]. During market hours or the pull's
+# off-peak wait, files legitimately stop for hours; a progress watchdog would
+# restart every 15 min for no reason.
+# rev2: only restart when the terminal is genuinely UNREACHABLE — process dead, or
+# the light list probe fails repeatedly (terminal hung/crashed at the HTTP layer).
+# Heavy-path slowness is left alone: it's market-hours throttle, and the pull's
+# own off-peak gate (wait_healthy, SPY barometer) handles that correctly.
 set -u
 cd /Users/georgiemanavazian/Documents/Trading/code/etf-bot
 TT=/Users/georgiemanavazian/ThetaTerminal
 JAR=202607101.jar
-STALL=600          # 10 min with no new file = wedged
+HOST=http://127.0.0.1:25503
 CHECK=120
-EOD_DIR=data/options/all
-INT_DIR=data/options/intraday
+FAILS_TO_RESTART=6     # consecutive unreachable checks (~12 min) before restarting.
+                       # High on purpose: during market hours the pull's 4 workers
+                       # fill all 4 terminal slots with slow 40s+ requests, so a
+                       # light probe transiently can't get a slot and times out —
+                       # that's SATURATION, not a wedge, and a restart just kills
+                       # in-flight requests. Only a genuine multi-minute dead
+                       # terminal stays unreachable this long.
+PROBE_TIMEOUT=45       # generous so a queued-but-alive probe isn't called dead
 log(){ echo "[$(date '+%F %T')] watchdog2: $*"; }
 
-newest_mtime(){   # epoch secs of most-recently-modified pull output, 0 if none
-  find "$EOD_DIR" "$INT_DIR" -name '*.parquet' -type f -print0 2>/dev/null \
-    | xargs -0 stat -f '%m' 2>/dev/null | sort -rn | head -1
+reachable(){   # light liveness: does the HTTP layer answer at all? (not a data probe)
+  [ "$(curl -s --max-time $PROBE_TIMEOUT -o /dev/null -w '%{http_code}' \
+        "$HOST/v3/option/list/expirations?symbol=SPY" 2>/dev/null)" = "200" ]
 }
 
 restart_terminal(){
-  log "restarting terminal"
+  log "restarting terminal (unreachable)"
   pkill -f "$JAR" 2>/dev/null; sleep 5
   (cd "$TT" && nohup /opt/homebrew/opt/openjdk@21/bin/java \
       -XX:+IgnoreUnrecognizedVMOptions -Dtd.logDir=/tmp \
@@ -33,26 +44,20 @@ restart_terminal(){
   log "terminal restarted"
 }
 
-# Anchor progress to watchdog start, not absolute file age: pre-existing files
-# are hours old and must not trigger a false restart. We alarm on "no NEWER file
-# has appeared for STALL seconds," measured in wall-clock since we last saw one.
-log "started (stall threshold ${STALL}s)"
-prev_nm=$(newest_mtime); prev_nm=${prev_nm:-0}
-last_progress=$(date +%s)
+log "started (reachability mode; restart after ${FAILS_TO_RESTART} unreachable checks)"
+fails=0
 while pgrep -f "pull_resilient.sh" > /dev/null; do
   if ! pgrep -f "$JAR" > /dev/null; then
-    log "terminal process dead"; restart_terminal
-    last_progress=$(date +%s); sleep $CHECK; continue
+    log "terminal process dead"; restart_terminal; fails=0; sleep $CHECK; continue
   fi
-  nm=$(newest_mtime); nm=${nm:-0}; now=$(date +%s)
-  if [ "$nm" -gt "$prev_nm" ]; then
-    prev_nm=$nm; last_progress=$now       # a newer file appeared = progress
-  fi
-  idle=$((now - last_progress))
-  if [ "$idle" -ge "$STALL" ]; then
-    log "no new pull file for ${idle}s (>= ${STALL}) — terminal wedged"
-    restart_terminal
-    last_progress=$(date +%s)
+  if reachable; then
+    fails=0
+  else
+    fails=$((fails+1))
+    log "terminal unreachable (light probe fail ${fails}/${FAILS_TO_RESTART})"
+    if [ "$fails" -ge "$FAILS_TO_RESTART" ]; then
+      restart_terminal; fails=0
+    fi
   fi
   sleep $CHECK
 done
