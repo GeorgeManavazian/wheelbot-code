@@ -10,14 +10,13 @@ from pathlib import Path
 from src.engine_v2.options.data import chain_path
 from src.engine_v2.options.wheel import WheelConfig, run_wheel
 from src.engine_v2.options.regime_router import run_regime_router
+from src.engine_v2.options.portfolio import DEFAULT_CLEAN_START
 from src.engine_v2.options.report import buy_hold_curve
 from src.engine_v2.backtest import metrics_simple as m
 from src.engine_v2.regime.state import regime_series
 from src.engine_v2.regime.data import closes_for
 
 SEEN = ["SPY", "GDX", "SLV", "XOP"]
-UNSEEN = {"XBI", "EEM", "EWZ", "TLT", "ARKK", "QQQ"}
-XOP_CLEAN_START = pd.Timestamp("2020-07-01")
 BASE = dict(put_delta=0.20, call_delta=0.20, target_dte=7,
             take_profit_pct=0.50, starting_capital=100_000.0,
             call_min_strike="basis")
@@ -30,14 +29,17 @@ def perf(eq):
 
 def line(name, eq, extra=""):
     tot, cagr, sh, dd = perf(eq)
-    return (f"{name:<24} {eq.iloc[-1] - 100_000:>10,.0f} {tot:>8.1%} "
+    cap = BASE["starting_capital"]
+    return (f"{name:<24} {eq.iloc[-1] - cap:>10,.0f} {tot:>8.1%} "
             f"{cagr:>7.1%} {sh:>7.2f} {dd:>7.1%}  {extra}")
 
 def main():
     tickers = [t.upper() for t in sys.argv[1:] if not t.startswith("--")] or SEEN
-    blocked = [t for t in tickers if t in UNSEEN]
+    # ALLOW-list, not deny-list: anything outside the seen set is refused
+    # (a deny-list fails open on typos and new tickers — review 2026-07-14).
+    blocked = [t for t in tickers if t not in SEEN]
     if blocked and "--after-basket-run" not in sys.argv:
-        sys.exit(f"REFUSED: {blocked} are pre-registered unseen tickers. "
+        sys.exit(f"REFUSED: {blocked} are outside the seen set {SEEN}. "
                  f"Run the basket first, then pass --after-basket-run.")
     lines = ["Regime router A/B — frozen config, EOD, raw. Dual benchmarks:",
              "router must beat buy-hold (else just hold) AND solo wheel+basis",
@@ -45,8 +47,8 @@ def main():
     for t in tickers:
         ch = pd.read_parquet(chain_path(t))
         ch["date"] = pd.to_datetime(ch["date"])
-        if t == "XOP":
-            ch = ch[ch["date"] >= XOP_CLEAN_START].reset_index(drop=True)
+        if t in DEFAULT_CLEAN_START:
+            ch = ch[ch["date"] >= DEFAULT_CLEAN_START[t]].reset_index(drop=True)
         states = regime_series(closes_for(t))
         cfg = WheelConfig(ticker=t, **BASE)
 

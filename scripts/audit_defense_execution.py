@@ -487,14 +487,15 @@ def _cell_local(states, d):
 
 def audit_router():
     from src.engine_v2.options.regime_router import run_regime_router
+    from src.engine_v2.options.portfolio import DEFAULT_CLEAN_START
+    from src.engine_v2.options.data import chain_path
     SEEN = ["SPY", "GDX", "SLV", "XOP"]
-    XOP_CLEAN_START = pd.Timestamp("2020-07-01")
     total_mm, lines = [], []
     for t in SEEN:
-        ch = pd.read_parquet(f"data/options/{t.lower()}_greeks_eod_all.parquet")
+        ch = pd.read_parquet(chain_path(t))
         ch["date"] = pd.to_datetime(ch["date"])
-        if t == "XOP":
-            ch = ch[ch["date"] >= XOP_CLEAN_START].reset_index(drop=True)
+        if t in DEFAULT_CLEAN_START:
+            ch = ch[ch["date"] >= DEFAULT_CLEAN_START[t]].reset_index(drop=True)
         states = regime_series(closes_for(t))
         cfg = WheelConfig(ticker=t, **BASE, call_min_strike="basis")
         res = run_regime_router(ch, cfg, states)
@@ -503,68 +504,58 @@ def audit_router():
         mismatches, ver = [], {"shares": 0, "opts": 0, "tp": 0, "expiry": 0,
                                "forced": 0}
 
-        # share-lot provenance + legality, walked through the ledger in order
+        # ONE chronological day-walk: the engine converts trend lots to wheel
+        # shares silently on the first chop day (no trade is written), so the
+        # audit must re-derive that conversion per DAY, not per trade — a
+        # trade-driven walk goes permanently stale (review 2026-07-14).
+        events = {}
+        for tr in sorted(res.trades, key=lambda x: pd.Timestamp(x.date)):
+            events.setdefault(pd.Timestamp(tr.date).normalize(), []).append(tr)
         trend_lots_held = False
         wheel_shares_held = False
-        prev_trend = None
-        trades = sorted(res.trades, key=lambda x: pd.Timestamp(x.date))
-        for tr in trades:
-            d = pd.Timestamp(tr.date)
-            cell, trend = _cell_local(states, d)
-            if tr.action == "BUY_SHARES":
-                if cell != "TREND" or trend_lots_held or wheel_shares_held:
-                    mismatches.append(f"{t} {d.date()} BUY_SHARES illegal "
-                                      f"(cell {cell}, trend_held {trend_lots_held})")
-                else:
-                    ver["shares"] += 1
-                trend_lots_held = True
-            elif tr.action == "SELL_SHARES":
-                if not trend_lots_held or trend != "downtrend":
-                    mismatches.append(f"{t} {d.date()} SELL_SHARES illegal "
-                                      f"(trend {trend}, trend_held {trend_lots_held})")
-                else:
-                    ver["shares"] += 1
-                trend_lots_held = False
-            elif tr.action == "SELL_PUT":
-                if cell != "WHEEL":
-                    mismatches.append(f"{t} {d.date()} SELL_PUT outside wheel cell ({cell})")
-                else:
-                    ver["opts"] += 1
-            elif tr.action == "SELL_CALL":
-                if cell != "WHEEL":
-                    mismatches.append(f"{t} {d.date()} SELL_CALL outside wheel cell ({cell})")
-                else:
-                    ver["opts"] += 1
-            elif tr.action == "ASSIGNED":
-                wheel_shares_held = True
-            elif tr.action == "CALLED_AWAY":
-                wheel_shares_held = False
-            # trend->chop conversion: trend lots become wheel shares silently
-            if trend_lots_held and trend == "chop":
-                trend_lots_held, wheel_shares_held = False, True
-
-        # forced-sale double-entry: every day trend lots are held and the
-        # derived trend says downtrend must carry a SELL_SHARES
-        holding = False
-        sells = {pd.Timestamp(tr.date).normalize() for tr in trades
-                 if tr.action == "SELL_SHARES"}
-        buys = {pd.Timestamp(tr.date).normalize() for tr in trades
-                if tr.action == "BUY_SHARES"}
-        converted = set()
         for d in und.index:
             d = pd.Timestamp(d)
             cell, trend = _cell_local(states, d)
-            if holding and trend == "downtrend":
-                if d.normalize() not in sells:
-                    mismatches.append(f"{t} {d.date()} trend lots held on derived "
-                                      f"downtrend day but no SELL_SHARES")
-                else:
-                    ver["forced"] += 1
-                holding = False
-            elif holding and trend == "chop":
-                holding = False   # converted to wheel shares
-            if d.normalize() in buys:
-                holding = True
+            # silent conversion resolves before anything else that day
+            if trend_lots_held and trend == "chop":
+                trend_lots_held, wheel_shares_held = False, True
+            day_trades = events.get(d.normalize(), [])
+            for tr in day_trades:
+                if tr.action == "BUY_SHARES":
+                    if cell != "TREND" or trend_lots_held or wheel_shares_held:
+                        mismatches.append(f"{t} {d.date()} BUY_SHARES illegal "
+                                          f"(cell {cell}, trend_held {trend_lots_held}, "
+                                          f"wheel_held {wheel_shares_held})")
+                    else:
+                        ver["shares"] += 1
+                    trend_lots_held = True
+                elif tr.action == "SELL_SHARES":
+                    if not trend_lots_held or trend != "downtrend":
+                        mismatches.append(f"{t} {d.date()} SELL_SHARES illegal "
+                                          f"(trend {trend}, trend_held {trend_lots_held})")
+                    else:
+                        ver["shares"] += 1; ver["forced"] += 1
+                    trend_lots_held = False
+                elif tr.action == "SELL_PUT":
+                    if cell != "WHEEL":
+                        mismatches.append(f"{t} {d.date()} SELL_PUT outside wheel cell ({cell})")
+                    else:
+                        ver["opts"] += 1
+                elif tr.action == "SELL_CALL":
+                    if cell != "WHEEL":
+                        mismatches.append(f"{t} {d.date()} SELL_CALL outside wheel cell ({cell})")
+                    else:
+                        ver["opts"] += 1
+                elif tr.action == "ASSIGNED":
+                    wheel_shares_held = True
+                elif tr.action == "CALLED_AWAY":
+                    wheel_shares_held = False
+            # forced-sale double-entry (other direction): trend lots surviving
+            # a derived-downtrend day without a SELL_SHARES is a mismatch
+            if trend_lots_held and trend == "downtrend":
+                mismatches.append(f"{t} {d.date()} trend lots held on derived "
+                                  f"downtrend day but no SELL_SHARES")
+                trend_lots_held = False
 
         # option-leg walk (TP EOD + expiry), same double-entry as --portfolio
         thresh_mult = 1 - cfg.take_profit_pct

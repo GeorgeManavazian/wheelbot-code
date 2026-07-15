@@ -78,6 +78,12 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
             cash *= (1 + cfg.cash_yield / 365) ** (d - prev_d).days
         prev_d = d
         cell, g_trend, g_vol, unknown = _cell(regime_states, d)
+        if unknown and d not in unknown_logged_days:
+            # every routed unknown day is logged, whatever the posture — the
+            # report's unknown count must expose blind stretches, not just
+            # blind entries (review 2026-07-14).
+            warnings.append((d, "route_state_unknown", cfg.ticker))
+            unknown_logged_days.add(d)
 
         # 1) manage an open short by SOLO rules (never consults the cell)
         closed_today = None
@@ -147,9 +153,6 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                     basis = spot   # purchase price; used if later handed to the wheel
                     trades.append(Trade(d, "BUY_SHARES", None, lots, spot, cash, campaign))
             elif cell == "WHEEL":
-                if unknown and d not in unknown_logged_days:
-                    warnings.append((d, "route_state_unknown", cfg.ticker))
-                    unknown_logged_days.add(d)
                 c = select_contract(day_chain, d, "P", cfg.put_delta,
                                     cfg.target_dte, cfg.ticker)
                 mark = option_mark(day_chain, d, c) if c is not None else None
@@ -167,9 +170,6 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
         elif (short is None and shares >= mult and phase == "CALL"
               and cell == "WHEEL" and day_chain is not None):
             # covered-call entry, solo rules; ONLY in wheel cells (spec rule 6).
-            if unknown and d not in unknown_logged_days:
-                warnings.append((d, "route_state_unknown", cfg.ticker))
-                unknown_logged_days.add(d)
             floor = None
             if cfg.call_min_strike == "basis" and basis is not None:
                 floor = basis - campaign_premium / shares
@@ -193,7 +193,9 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
             posture = "CASH"
         days_in_posture[posture] += 1
         route_log.append((d, g_trend, g_vol, posture))
-        if short is None and shares >= mult and phase == "CALL":
+        # uncovered = the wheel FAILED to cover; TREND/CASH-cell days are
+        # exempt (calls are forbidden there, not failed — review 2026-07-14).
+        if short is None and shares >= mult and phase == "CALL" and cell == "WHEEL":
             days_shares_uncovered += 1
         liab = 0.0
         if short is not None:

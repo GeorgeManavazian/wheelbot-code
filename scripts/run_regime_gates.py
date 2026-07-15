@@ -31,9 +31,11 @@ ARMS = [  # (arm, baseline overrides, gated overrides)
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     tickers = [t.upper() for t in args] or SEEN
-    blocked = [t for t in tickers if t in UNSEEN]
+    # ALLOW-list: anything outside the seen set is refused (deny-lists fail
+    # open on typos/new tickers — review 2026-07-14).
+    blocked = [t for t in tickers if t not in SEEN]
     if blocked and "--after-basket-run" not in sys.argv:
-        sys.exit(f"REFUSED: {blocked} are pre-registered unseen tickers. "
+        sys.exit(f"REFUSED: {blocked} are outside the seen set {SEEN}. "
                  f"Run the basket first, then pass --after-basket-run.")
     lines = ["Regime gates A/B — frozen basket config, raw, no selection.",
              "Intraday fills not used here (EOD only). Gated-entry counterfactual",
