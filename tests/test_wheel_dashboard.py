@@ -59,6 +59,14 @@ def test_wheel_page_has_date_inputs():
     assert any(di.key == "wheel_end" for di in at.date_input)
 
 
+def test_wheel_page_has_no_defense_selectbox():
+    at = AppTest.from_file("dashboard/app.py").run(timeout=60)
+    at.switch_page("views/wheel.py").run(timeout=60)
+    assert not at.exception
+    keys = {s.key for s in at.selectbox}
+    assert "w_defense" not in keys
+
+
 def test_history_page_renders():
     # NOTE: AppTest.switch_page() derives its target page hash from the
     # *filename* of the given path (page_icon_and_name), then matches it
