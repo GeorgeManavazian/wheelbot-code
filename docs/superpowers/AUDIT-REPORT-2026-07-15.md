@@ -62,6 +62,8 @@ Chameleon — weather report, wheel engine, router, and conviction trim — is *
 2. Referee `audit_defense_execution.py:143-144` — use `cfg.contract_multiplier` not hardcoded `*100` in the default-mode roll credit test (dormant; consistency with the trim block already fixed).
 3. Referee vacuous-pass guard — refuse to print "VERIFIED" when zero decisions were checked (degenerate-input safety).
 
-All three are in NON-trading-path code (data loader + referee tooling), all dormant/degenerate, and none changes a seen-ticker result. I did NOT patch them — this audit is read-only; they're yours to greenlight.
+All three are in NON-trading-path code (data loader + referee tooling), all dormant/degenerate, and none changes a seen-ticker result.
+
+**UPDATE 2026-07-15: all three fixed (owner-approved) and merged @ d34c335** — bars-path date de-dup, referee `cfg.contract_multiplier` (no hardcoded 100), and the vacuous-pass guard (all four referee modes now refuse to print VERIFIED on zero decisions examined). 332 tests green; all referee modes still exit 0 on real data. The two informational items (roll-destination selection reuse; forced-sale path zero live coverage) are scope notes, not patched.
 
 Everything remains in-sample on burned tickers; **correctness ≠ profitability**, and the out-of-sample verdict still waits on the basket run.
