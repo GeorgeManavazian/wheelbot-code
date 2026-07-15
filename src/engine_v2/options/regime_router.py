@@ -14,6 +14,10 @@ from .select import select_contract, option_mark
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, _state_before,
                     sell_proceeds, buy_cost)
 
+TRIM_FRACTION = 0.5   # conviction trim (spec 2026-07-15): stressed-vol trend
+                      # HOLDs are bought at half size — tail control only. Round
+                      # and deliberately unfished.
+
 
 @dataclass
 class RouterResult:
@@ -27,6 +31,8 @@ class RouterResult:
     days_in_posture: dict = None  # {"CASH": n, "TREND": n, "WHEEL": n}
     days_shares_uncovered: int = 0
     whipsaw_pairs: int = 0        # SELL_SHARES <= 10 trading days after BUY_SHARES
+    n_trimmed_entries: int = 0    # half-size trend HOLD entries (conviction trim)
+    days_half_size: int = 0       # days holding a trimmed trend position
 
 
 def _cell(states: pd.DataFrame, d: pd.Timestamp):
@@ -64,7 +70,9 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
     campaign_premium = 0.0
     # trend sub-state
     trend_shares, trend_buy_idx = 0, None   # idx into dates of the BUY fill
+    trend_trimmed = False                   # was the current trend hold half-sized?
     whipsaw_pairs = 0
+    n_trimmed_entries, days_half_size = 0, 0
     warnings, route_log, trades, equity = [], [], [], {}
     days_in_posture = {"CASH": 0, "TREND": 0, "WHEEL": 0}
     prev_d, days_shares_uncovered = None, 0
@@ -130,19 +138,24 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                                 spot, cash, campaign))
             if trend_buy_idx is not None and (i - trend_buy_idx) <= 10:
                 whipsaw_pairs += 1
-            trend_shares, trend_buy_idx = 0, None
+            trend_shares, trend_buy_idx, trend_trimmed = 0, None, False
         elif trend_shares and g_trend == "chop":
             # hand trend shares to the wheel: rent them under the basis floor,
             # basis = purchase price (carried in `basis` at buy time).
             shares += trend_shares
             phase = "CALL"
-            trend_shares, trend_buy_idx = 0, None
+            trend_shares, trend_buy_idx, trend_trimmed = 0, None, False
 
         # 3) entries / posture actions
         if short is None and shares == 0 and trend_shares == 0:
             # totally flat: route fresh
             if cell == "TREND":
                 lots = int(cash // (spot * mult))
+                # conviction trim (spec 2026-07-15): stressed-vol holds carry the
+                # same expected return but a fatter crash tail — buy half size.
+                trimmed = cfg.conviction_trim and g_vol == "stressed"
+                if trimmed:
+                    lots = int(lots * TRIM_FRACTION)
                 if lots > 0:
                     campaign += 1
                     campaign_premium = 0.0
@@ -150,7 +163,10 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                     cash -= cost
                     trend_shares = lots * mult
                     trend_buy_idx = i
+                    trend_trimmed = trimmed
                     basis = spot   # purchase price; used if later handed to the wheel
+                    if trimmed:
+                        n_trimmed_entries += 1
                     trades.append(Trade(d, "BUY_SHARES", None, lots, spot, cash, campaign))
             elif cell == "WHEEL":
                 c = select_contract(day_chain, d, "P", cfg.put_delta,
@@ -192,6 +208,8 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
         else:
             posture = "CASH"
         days_in_posture[posture] += 1
+        if posture == "TREND" and trend_trimmed:
+            days_half_size += 1
         route_log.append((d, g_trend, g_vol, posture))
         # uncovered = the wheel FAILED to cover; TREND/CASH-cell days are
         # exempt (calls are forbidden there, not failed — review 2026-07-14).
@@ -216,4 +234,6 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                         residual_settled, warnings=warnings, route_log=route_log,
                         days_in_posture=days_in_posture,
                         days_shares_uncovered=days_shares_uncovered,
-                        whipsaw_pairs=whipsaw_pairs)
+                        whipsaw_pairs=whipsaw_pairs,
+                        n_trimmed_entries=n_trimmed_entries,
+                        days_half_size=days_half_size)

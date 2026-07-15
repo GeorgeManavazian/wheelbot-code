@@ -195,3 +195,95 @@ def test_trend_sale_can_redeploy_same_day_into_panic():
     res = run_regime_router(_chain(rows), _cfg(), st)
     d3 = [t.action for t in res.trades if pd.Timestamp(t.date) == pd.Timestamp("2024-01-03")]
     assert "SELL_SHARES" in d3 and "SELL_PUT" in d3
+
+# ---- conviction trim (spec 2026-07-15) ----
+
+def _states_trim(rows):  # alias for readability
+    return _states(rows)
+
+def test_trim_off_is_byte_identical():
+    from src.engine_v2.regime.state import regime_series
+    from src.engine_v2.regime.data import closes_for
+    ch = pd.read_parquet("data/options/gdx_greeks_eod_all.parquet")
+    st = regime_series(closes_for("GDX"))
+    base = dict(ticker="GDX", put_delta=0.20, call_delta=0.20, target_dte=7,
+                take_profit_pct=0.50, starting_capital=100_000.0, call_min_strike="basis")
+    a = run_regime_router(ch, WheelConfig(**base), st)
+    b = run_regime_router(ch, WheelConfig(**base, conviction_trim=False), st)
+    assert a.equity.equals(b.equity) and a.final_cash == b.final_cash
+    assert [(t.date, t.action, t.contracts) for t in a.trades] == \
+           [(t.date, t.action, t.contracts) for t in b.trades]
+
+def test_stressed_uptrend_entry_is_half_size():
+    st = _states([("2024-01-01","uptrend","stressed",0.9)])
+    full = run_regime_router(_chain(PUT_DAY), _cfg(starting_capital=500_000.0), st)
+    trim = run_regime_router(_chain(PUT_DAY),
+                             _cfg(starting_capital=500_000.0, conviction_trim=True), st)
+    f = [t for t in full.trades if t.action=="BUY_SHARES"][0]  # 10 lots
+    g = [t for t in trim.trades if t.action=="BUY_SHARES"][0]  # 5 lots
+    assert g.contracts == f.contracts // 2 and g.contracts > 0
+    assert trim.n_trimmed_entries == 1 and trim.days_half_size >= 1
+
+def test_calm_uptrend_entry_is_full_size():
+    st = _states([("2024-01-01","uptrend","calm",0.2)])
+    full = run_regime_router(_chain(PUT_DAY), _cfg(), st)
+    trim = run_regime_router(_chain(PUT_DAY), _cfg(conviction_trim=True), st)
+    assert [t for t in trim.trades if t.action=="BUY_SHARES"][0].contracts == \
+           [t for t in full.trades if t.action=="BUY_SHARES"][0].contracts
+    assert trim.n_trimmed_entries == 0 and trim.days_half_size == 0
+
+def test_trim_only_touches_trend_not_wheel():
+    st = _states([("2024-01-01","downtrend","stressed",0.9)])
+    a = run_regime_router(_chain(PUT_DAY), _cfg(), st)
+    b = run_regime_router(_chain(PUT_DAY), _cfg(conviction_trim=True), st)
+    assert [t.contracts for t in a.trades if t.action=="SELL_PUT"] == \
+           [t.contracts for t in b.trades if t.action=="SELL_PUT"]
+    assert b.n_trimmed_entries == 0
+
+def test_single_lot_trim_buys_nothing():
+    # spot so high that full = 1 lot; stressed -> 1//2 = 0 bought
+    rows = [["2024-01-02","2024-01-09",7,470,"P",2.0,2.1,2.05,2.05,-0.30,0.1,49000.0]]
+    st = _states([("2024-01-01","uptrend","stressed",0.9)])
+    res = run_regime_router(_chain(rows), _cfg(starting_capital=50_000.0,
+                            conviction_trim=True), st)
+    assert not [t for t in res.trades if t.action=="BUY_SHARES"]
+
+def test_no_lookahead_trim():
+    st = _states([("2024-01-01","uptrend","calm",0.2),
+                  ("2024-01-02","uptrend","stressed",0.9)])
+    res = run_regime_router(_chain(PUT_DAY), _cfg(conviction_trim=True), st)
+    assert res.n_trimmed_entries == 0   # prior day (calm) rules the entry
+
+def test_trimmed_hold_converts_to_wheel_at_half():
+    rows = [PUT_DAY[0],
+            ["2024-01-03","2024-01-10",7,475,"C",1.0,1.1,1.05,1.05,0.30,0.1,470.0]]
+    st = _states([("2024-01-01","uptrend","stressed",0.9),
+                  ("2024-01-02","chop","normal",0.5)])
+    res = run_regime_router(_chain(rows),
+                            _cfg(starting_capital=500_000.0, conviction_trim=True), st)
+    buy = [t for t in res.trades if t.action=="BUY_SHARES"][0]
+    calls = [t for t in res.trades if t.action=="SELL_CALL"]
+    # the wheel now rents exactly the half-size share count
+    assert calls and calls[0].contracts == buy.contracts
+
+def test_conviction_trim_rejected_on_solo_wheel():
+    # router-only mechanic must not be silently ignored by the solo engine
+    ch = _chain(PUT_DAY)
+    with pytest.raises(ValueError):
+        run_wheel(ch, _cfg(conviction_trim=True))
+
+def test_trim_fraction_constant_is_live():
+    # editing TRIM_FRACTION must actually change sizing (guards the dead-const bug)
+    import src.engine_v2.options.regime_router as rr
+    st = _states([("2024-01-01","uptrend","stressed",0.9)])
+    orig = rr.TRIM_FRACTION
+    try:
+        rr.TRIM_FRACTION = 0.25
+        q = run_regime_router(_chain(PUT_DAY),
+                              _cfg(starting_capital=500_000.0, conviction_trim=True), st)
+        full = run_regime_router(_chain(PUT_DAY), _cfg(starting_capital=500_000.0), st)
+        f = [t for t in full.trades if t.action=="BUY_SHARES"][0].contracts
+        g = [t for t in q.trades if t.action=="BUY_SHARES"][0].contracts
+        assert g == int(f * 0.25)
+    finally:
+        rr.TRIM_FRACTION = orig
