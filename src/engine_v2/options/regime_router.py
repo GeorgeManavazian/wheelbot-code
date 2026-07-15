@@ -33,6 +33,8 @@ class RouterResult:
     whipsaw_pairs: int = 0        # SELL_SHARES <= 10 trading days after BUY_SHARES
     n_trimmed_entries: int = 0    # half-size trend HOLD entries (conviction trim)
     days_half_size: int = 0       # days holding a trimmed trend position
+    intraday_tp_fills: int = 0    # TP closes filled at a next-valid hourly bar
+    eod_tp_fills: int = 0         # TP closes filled at EOD ask (no intraday hit)
 
 
 def _cell(states: pd.DataFrame, d: pd.Timestamp):
@@ -50,7 +52,7 @@ def _cell(states: pd.DataFrame, d: pd.Timestamp):
 
 
 def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
-                      regime_states: pd.DataFrame) -> RouterResult:
+                      regime_states: pd.DataFrame, intraday=None) -> RouterResult:
     if regime_states is None:
         raise ValueError("regime_states is required — a router without weather "
                          "is a bug, not a run")
@@ -77,6 +79,7 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
     days_in_posture = {"CASH": 0, "TREND": 0, "WHEEL": 0}
     prev_d, days_shares_uncovered = None, 0
     unknown_logged_days = set()
+    intraday_tp_fills, eod_tp_fills = 0, 0
 
     for i, d in enumerate(dates):
         d = pd.Timestamp(d)
@@ -98,14 +101,38 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
         if short is not None:
             c, n = short["contract"], short["contracts"]
             mark = option_mark(day_chain, d, c)
-            if (cfg.take_profit_pct is not None and cfg.take_profit_pct < 1.0
-                    and d < c.expiry and mark is not None
-                    and mark.ask <= (1 - cfg.take_profit_pct) * short["credit"]):
-                cost = buy_cost(mark, n, cfg)
-                cash -= cost; campaign_premium -= cost
-                trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                    c, n, mark.ask, cash, campaign))
-                short = None; closed_today = c
+            if cfg.take_profit_pct is not None and cfg.take_profit_pct < 1.0 and d < c.expiry:
+                thresh = (1 - cfg.take_profit_pct) * short["credit"]
+                tp_fired = False
+                key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
+                if intraday is not None and key in intraday:
+                    bars = intraday[key]
+                    # close > 0 only: a bar with no trade arrives as close=0 and
+                    # is not a price. Trigger and fill both use valid prints;
+                    # "next bar" means next VALID bar (mirrors wheel.py:153-174).
+                    day = (bars[(bars["timestamp"].dt.normalize() == d)
+                                & (bars["close"] > 0)]
+                           .sort_values("timestamp").reset_index(drop=True))
+                    # decide on bar i, fill at bar i+1's close. A cross on the
+                    # day's LAST bar has no next bar -> EOD check decides instead.
+                    for i in range(len(day) - 1):
+                        if day.iloc[i]["close"] <= thresh:
+                            fill = day.iloc[i + 1]
+                            cost = fill["close"] * mult * n + cfg.commission_per_contract * n
+                            cash -= cost; campaign_premium -= cost
+                            trades.append(Trade(fill["timestamp"],
+                                "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
+                                c, n, float(fill["close"]), cash, campaign))
+                            short = None; closed_today = c; tp_fired = True
+                            intraday_tp_fills += 1
+                            break
+                if not tp_fired and short is not None and mark is not None and mark.ask <= thresh:
+                    cost = buy_cost(mark, n, cfg)
+                    cash -= cost; campaign_premium -= cost
+                    trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
+                                        c, n, mark.ask, cash, campaign))
+                    short = None; closed_today = c
+                    eod_tp_fills += 1
             if short is not None and d >= c.expiry:
                 settle_spot = spot
                 if d > c.expiry:
@@ -236,4 +263,6 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                         days_shares_uncovered=days_shares_uncovered,
                         whipsaw_pairs=whipsaw_pairs,
                         n_trimmed_entries=n_trimmed_entries,
-                        days_half_size=days_half_size)
+                        days_half_size=days_half_size,
+                        intraday_tp_fills=intraday_tp_fills,
+                        eod_tp_fills=eod_tp_fills)
