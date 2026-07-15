@@ -115,9 +115,9 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                            .sort_values("timestamp").reset_index(drop=True))
                     # decide on bar i, fill at bar i+1's close. A cross on the
                     # day's LAST bar has no next bar -> EOD check decides instead.
-                    for i in range(len(day) - 1):
-                        if day.iloc[i]["close"] <= thresh:
-                            fill = day.iloc[i + 1]
+                    for bi in range(len(day) - 1):
+                        if day.iloc[bi]["close"] <= thresh:
+                            fill = day.iloc[bi + 1]
                             cost = fill["close"] * mult * n + cfg.commission_per_contract * n
                             cash -= cost; campaign_premium -= cost
                             trades.append(Trade(fill["timestamp"],
