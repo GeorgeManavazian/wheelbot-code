@@ -53,6 +53,8 @@ def main():
         cfg = WheelConfig(ticker=t, **BASE)
 
         router = run_regime_router(ch, cfg, states)
+        trim = run_regime_router(ch, WheelConfig(ticker=t, **BASE,
+                                                 conviction_trim=True), states)
         solo = run_wheel(ch, cfg)
         bh = buy_hold_curve(ch, cfg.starting_capital)
 
@@ -65,6 +67,10 @@ def main():
                           f"| days T/W/C {dip['TREND']}/{dip['WHEEL']}/{dip['CASH']}"
                           f"  transitions {transitions}  whipsaws {router.whipsaw_pairs}"
                           f"  unknown {sum(1 for w in router.warnings if w[1]=='route_state_unknown')}"))
+        # conviction-trim arm: headline is max drawdown (a tail-control play).
+        lines.append(line("ROUTER+trim", trim.equity,
+                          f"| trimmed {trim.n_trimmed_entries}  half-days {trim.days_half_size}"
+                          f"  <-- judge on maxDD vs ROUTER"))
         lines.append(line("solo wheel+basis", solo.equity))
         lines.append(line(f"buy-hold {t}", bh))
         yr = m.yearly_returns(router.equity)
