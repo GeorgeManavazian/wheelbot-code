@@ -72,3 +72,39 @@ def monthly_heatmap(equity: pd.Series) -> go.Figure:
     fig.update_layout(height=60 + 26 * max(len(grid.index), 1),
                       xaxis_title=None, yaxis_title=None)
     return theme.apply(fig)
+
+
+def candles_with_trades(bars: pd.DataFrame, overlay: pd.DataFrame) -> go.Figure:
+    """Daily candles with every position drawn as a horizontal segment at its
+    strike, coloured by outcome group.
+
+    Segments are batched into one trace per (group, open_ended) with None
+    separators inside — that makes the legend a filter (click "Assigned" to
+    isolate assignments) at no cost. One trace per segment would give a legend
+    with hundreds of entries.
+
+    open_ended is part of the key, not just the group: dash is a per-trace
+    property, and a group can hold both closed and open segments at once.
+    """
+    fig = go.Figure(go.Candlestick(
+        x=bars.index, open=bars["Open"], high=bars["High"],
+        low=bars["Low"], close=bars["Close"], name="Price",
+        increasing_line_color=theme.POSITIVE, decreasing_line_color=theme.NEGATIVE,
+        showlegend=False,
+    ))
+    for (group, open_ended), rows in overlay.groupby(["group", "open_ended"], sort=False):
+        xs, ys, texts = [], [], []
+        for _, r in rows.iterrows():
+            xs += [r["x0"], r["x1"], None]
+            ys += [r["y"], r["y"], None]
+            texts += [r["hover"], r["hover"], None]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, name=f"{group} (open)" if open_ended else group, mode="lines",
+            line=dict(color=theme.GROUP_COLORS[group], width=2,
+                      dash="dot" if open_ended else "solid"),
+            text=texts, hovertemplate="%{text}<extra></extra>",
+            connectgaps=False,
+        ))
+    fig.update_layout(height=460, xaxis_rangeslider_visible=False,
+                      hovermode="closest", xaxis_title=None, yaxis_title=None)
+    return theme.apply(fig)
