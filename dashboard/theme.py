@@ -12,6 +12,15 @@ POSITIVE = "#3fb950"
 NEGATIVE = "#f0836c"
 WARNING = "#e3b341"
 
+# Position outcome groups. trades.outcome_group() decides the group; this maps
+# it to paint. Keys must stay in sync with that function's return values.
+GROUP_COLORS = {
+    "Lost money": NEGATIVE,
+    "Assigned": WARNING,
+    "Kept premium": POSITIVE,
+    "Open": MUTED,
+}
+
 TEMPLATE_NAME = "quant_dark"
 
 

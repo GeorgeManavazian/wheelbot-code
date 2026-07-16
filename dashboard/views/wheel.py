@@ -4,7 +4,7 @@ import os
 from dataclasses import replace
 import pandas as pd
 import streamlit as st
-from dashboard import charts, labels, theme
+from dashboard import charts, labels, theme, trades
 from src.engine_v2.options.data import available_tickers, chain_path, intraday_path
 from src.engine_v2.options.select import derived_band
 from src.engine_v2.options.wheel import WheelConfig, run_wheel
@@ -285,20 +285,12 @@ def _style_blotter(display: pd.DataFrame, raw: pd.DataFrame):
     already been formatted to strings."""
     # Opacities tuned for the dark theme: fainter than this and the tint is
     # imperceptible against #0e1117 (first attempt used 0.06 — invisible).
-    lose = _hex_tint(theme.NEGATIVE, 0.22)
-    warn = _hex_tint(theme.WARNING, 0.20)
-    keep = _hex_tint(theme.POSITIVE, 0.14)
+    alpha = {"Lost money": 0.22, "Assigned": 0.20, "Kept premium": 0.14}
     tints = []
     for _, r in raw.iterrows():
-        pnl = r["realized_pnl"]
-        if pd.notna(pnl) and pnl < 0:
-            tints.append(f"background-color: {lose}")
-        elif r["outcome"] == "Assigned":
-            tints.append(f"background-color: {warn}")
-        elif pd.notna(pnl):
-            tints.append(f"background-color: {keep}")
-        else:
-            tints.append("")
+        grp = trades.outcome_group(r["realized_pnl"], r["outcome"])
+        tints.append(f"background-color: {_hex_tint(theme.GROUP_COLORS[grp], alpha[grp])}"
+                     if grp in alpha else "")
 
     def _rows(col):
         return tints
