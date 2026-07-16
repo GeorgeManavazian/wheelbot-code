@@ -152,110 +152,38 @@ def render():
         res, rep, res_plain, rep_plain, cfg, ch = stashed
         pnl = res.equity.iloc[-1] - cfg.starting_capital
 
-        rows = {}
-        def _arm_row(equity, m):
-            return {"P&L": float(equity.iloc[-1] - cfg.starting_capital),
-                    "Return": m["total_return"], "Sharpe": m["sharpe"],
-                    "MaxDD": m["max_drawdown"]}
-        rows["Basis wheel"] = _arm_row(res.equity, rep.metrics)
-        rows["Plain wheel"] = _arm_row(res_plain.equity, rep_plain.metrics)
-        bu = rep.benchmark_underlying
-        rows[f"Buy-hold {rep.ticker}"] = {"P&L": None, "Return": bu["total_return"],
-                                          "Sharpe": None, "MaxDD": bu.get("max_drawdown")}
-        if rep.benchmark_spy is not None and rep.ticker != "SPY":
-            bs = rep.benchmark_spy
-            rows["Buy-hold SPY"] = {"P&L": None, "Return": bs["total_return"],
-                                    "Sharpe": None, "MaxDD": bs.get("max_drawdown")}
-        cmp_df = pd.DataFrame.from_dict(rows, orient="index")
-        st.subheader("Basis wheel vs plain wheel")
-        st.dataframe(cmp_df.style.format({
-            "P&L": lambda x: "" if pd.isna(x) else f"${x:,.0f}",
-            "Return": lambda x: "" if pd.isna(x) else f"{x:+.2%}",
-            "Sharpe": lambda x: "" if pd.isna(x) else f"{x:.2f}",
-            "MaxDD": lambda x: "" if pd.isna(x) else f"{x:.2%}"}), width="stretch")
-
+        s = rep.stats
         a, b, c, d = st.columns(4)
         a.metric("P&L", f"${pnl:,.0f}", f"{rep.metrics['total_return']:+.2%}")
         b.metric("Sharpe", f"{rep.metrics['sharpe']:.2f}")
         c.metric("Max drawdown", f"{rep.metrics['max_drawdown']:.2%}")
         # Honest cross-ticker benchmark: real SPY, not the traded underlying.
+        # Flat days change what the benchmark comparison means, so the caveat
+        # rides on the tile it qualifies rather than sitting in its own banner:
+        # a bot flat 30% of a window is being measured against a benchmark that
+        # was invested for 100% of it.
+        flat_note = ""
+        if s["n_days_flat"]:
+            lo, hi = derived_band(cfg.target_dte)
+            flat_note = (f" Flat {s['n_days_flat']} days ({s['pct_days_flat']:.0%} of "
+                         f"the window) — no expiry inside the {lo}–{hi} DTE band. The "
+                         f"benchmark held {rep.ticker} on those days; the bot held cash.")
         if rep.benchmark_spy is not None:
             gap = rep.metrics["total_return"] - rep.benchmark_spy["total_return"]
             d.metric("vs SPY buy & hold", f"{gap:+.2%}",
                      help=f"Buy-hold real SPY returned "
-                          f"{rep.benchmark_spy['total_return']:+.2%} over this window.")
+                          f"{rep.benchmark_spy['total_return']:+.2%} over this window."
+                          + flat_note)
         else:
             d.metric("vs SPY buy & hold", "—",
-                     help="No SPY chain on disk to benchmark against.")
+                     help="No SPY chain on disk to benchmark against." + flat_note)
         st.caption(
             f"vs buy-hold {rep.ticker}: {rep.benchmark_underlying['total_return']:+.2%}"
             f"  ·  over {len(res.equity)} trading days")
 
-        # Days flat changes what the benchmark comparison even means — don't bury.
-        s = rep.stats
-        if s["n_days_flat"]:
-            st.warning(f"Flat {s['n_days_flat']} days ({s['pct_days_flat']:.0%} of the "
-                       f"window) — no expiry inside the {band_lo}–{band_hi} DTE band. "
-                       f"The benchmark held {rep.ticker} on those days; the bot held cash.")
-
-        # Defense diagnostics — the campaign-level answer to "did the defense
-        # help", visible wherever the defense is chosen.
-        if getattr(rep, "defense", None):
-            dd = rep.defense
-            st.subheader("Defense stats (campaign-level)")
-            wr = dd["campaign_win_rate"]
-            e1, e2, e3, e4 = st.columns(4)
-            e1.metric("Campaigns", dd["n_campaigns"])
-            e2.metric("Campaign win rate", "n/a" if pd.isna(wr) else f"{wr:.0%}")
-            e3.metric("Rolls", rep.stats["n_rolls"])
-            e4.metric("Stops", dd["n_stops"])
-            adv = dd["roll_advantage_total"]
-            skip = dd.get("roll_counterfactual_skipped", 0)
-            st.caption(
-                f"Roll counterfactual (short-leg approx): total advantage {adv:+,.0f} "
-                f"(helped {dd['roll_advantage_positive']}, hurt {dd['roll_advantage_negative']})"
-                + (f" · {skip} leg(s) beyond data window" if skip else "")
-                + f" · shares uncovered {dd['days_shares_uncovered']} days"
-                + f" · no-mark days {dd['n_no_mark_days']}"
-                + f" · late expiry resolutions {dd['n_late_expiries']}")
-            if dd["liquidate_fill_note"]:
-                st.caption("Liquidation fills at EOD spot — no stock spread/slippage "
-                           "modeled (options pay full spread).")
-
-        st.subheader("Equity vs buy & hold")
-        bench = {}
-        from src.engine_v2.options.report import buy_hold_curve, spy_curve
-        bench[rep.ticker] = buy_hold_curve(ch, cfg.starting_capital).reindex(res.equity.index).ffill()
-        spy_b = spy_curve(cfg.starting_capital, res.equity.index)
-        if spy_b is not None and rep.ticker != "SPY":
-            bench["SPY"] = spy_b
-        bench["Plain wheel"] = res_plain.equity.reindex(res.equity.index).ffill()
-        st.plotly_chart(charts.equity_curve(res.equity, bench), width="stretch")
-
         st.subheader("Year-by-year return")
         st.plotly_chart(charts.yearly_bars(rep.yearly_return, percent=True),
                         width="stretch")
-
-        st.subheader("Wheel stats")
-        t1, t2, t3, t4 = st.columns(4)
-        t1.metric("Puts sold", s["n_puts_sold"])
-        t1.metric("Calls sold", s["n_calls_sold"])
-        t2.metric("Assignments", s["n_assignments"],
-                  help=f"rate {s['assignment_rate']:.0%}")
-        t2.metric("Called away", s["n_called_away"])
-        t3.metric("Take-profits", s["n_take_profits"])
-        t3.metric("Net premium", f"${s['net_premium']:,.0f}")
-        t4.metric("Days flat", s["n_days_flat"], help=f"{s['pct_days_flat']:.0%} of window")
-        t4.metric("Commission", f"${s['commission_paid']:,.0f}")
-
-        # Deterministic selection, proven: DTE at each sale should cluster tight
-        # around the target, not spray across a window.
-        if len(s["realized_dte"]):
-            st.subheader("Realized DTE at sale")
-            st.caption("Selection is deterministic now — this should cluster at the target.")
-            st.plotly_chart(charts.yearly_bars(s["realized_dte"].sort_index(),
-                                               percent=False),
-                            width="stretch")
 
         st.subheader("Trade blotter")
         from src.engine_v2.options.report import position_log
