@@ -4,7 +4,7 @@ import os
 from dataclasses import replace
 import pandas as pd
 import streamlit as st
-from dashboard import charts, labels, theme, trades
+from dashboard import bars, charts, labels, theme, trades
 from src.engine_v2.options.data import available_tickers, chain_path, intraday_path
 from src.engine_v2.options.select import derived_band
 from src.engine_v2.options.wheel import WheelConfig, run_wheel
@@ -181,13 +181,29 @@ def render():
             f"vs buy-hold {rep.ticker}: {rep.benchmark_underlying['total_return']:+.2%}"
             f"  ·  over {len(res.equity)} trading days")
 
+        from src.engine_v2.options.report import position_log
+        blotter = position_log(res, cfg)
+
+        st.subheader("Trades on price")
+        # Window = the run's actual trading days. Not the date_input values (a
+        # user can pick a Saturday) and not ch["date"] (the chain runs past the
+        # equity window on expiries) — open-ended segments would then float out
+        # past the last candle.
+        w0, w1 = res.equity.index[0], res.equity.index[-1]
+        bars_df = bars.load_bars(rep.ticker, w0, w1)
+        if bars_df.empty:
+            st.info(f"No daily bars on disk for {rep.ticker} — candles unavailable. "
+                    f"The blotter below still lists every position.")
+        else:
+            st.plotly_chart(
+                charts.candles_with_trades(bars_df, trades.overlay_frame(blotter, w1)),
+                width="stretch")
+
         st.subheader("Year-by-year return")
         st.plotly_chart(charts.yearly_bars(rep.yearly_return, percent=True),
                         width="stretch")
 
         st.subheader("Trade blotter")
-        from src.engine_v2.options.report import position_log
-        blotter = position_log(res, cfg)
         display = blotter.copy()
         for col in ("opened", "closed", "expiry"):
             display[col] = pd.to_datetime(display[col]).dt.strftime("%Y-%m-%d").replace("NaT", "")
