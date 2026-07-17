@@ -466,3 +466,18 @@ def portfolio_campaign_table(result, cfg, last_spots) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["campaign_id", "ticker", "opened", "closed",
         "n_trades", "pnl_realized", "shares_held", "collateral", "open_at_end",
         "pnl_mtm", "pct_return"])
+
+def portfolio_summary_stats(campaigns) -> dict:
+    """Twin win-rate + tile numbers from a portfolio_campaign_table frame.
+    finished_win_rate hides nothing dishonestly (closed campaigns only);
+    soldtoday_win_rate marks open positions to market so hidden losses surface.
+    The gap between them is the honesty signal."""
+    closed = campaigns[~campaigns["open_at_end"]]
+    winners = closed[closed["pnl_realized"] > 0]
+    return {
+        "finished_win_rate": float((closed["pnl_realized"] > 0).mean()) if len(closed) else float("nan"),
+        "soldtoday_win_rate": float((campaigns["pnl_mtm"] > 0).mean()) if len(campaigns) else float("nan"),
+        "avg_pct_per_win": float(winners["pct_return"].mean()) if len(winners) else float("nan"),
+        "n_open": int(campaigns["open_at_end"].sum()),
+        "n_campaigns": int(len(campaigns)),
+    }
