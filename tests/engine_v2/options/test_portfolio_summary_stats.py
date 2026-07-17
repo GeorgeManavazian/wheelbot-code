@@ -41,3 +41,13 @@ def test_no_closed_campaigns_finished_rate_is_nan():
     s = portfolio_summary_stats(df)
     assert math.isnan(s["finished_win_rate"])
     assert math.isnan(s["avg_pct_per_win"])
+
+
+def test_empty_campaigns_no_crash():
+    df = pd.DataFrame(columns=["campaign_id", "open_at_end", "pnl_realized", "pnl_mtm", "pct_return"])
+    s = portfolio_summary_stats(df)
+    assert s["n_campaigns"] == 0
+    assert s["n_open"] == 0
+    assert math.isnan(s["finished_win_rate"])
+    assert math.isnan(s["soldtoday_win_rate"])
+    assert math.isnan(s["avg_pct_per_win"])

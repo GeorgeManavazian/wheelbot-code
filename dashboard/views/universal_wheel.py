@@ -15,7 +15,6 @@ from src.engine_v2.regime.data import closes_for
 from src.engine_v2.backtest import metrics_simple as m
 
 UNIVERSE = list(ROTATION_TIE_ORDER)
-XOP_CLEAN_START = pd.Timestamp("2020-07-01")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -35,7 +34,11 @@ def render():
                "N tickers at a time. Exploration only.")
     st.markdown("**Universe (fixed):** " + " · ".join(UNIVERSE))
 
-    chains, states = _load()
+    try:
+        chains, states = _load()
+    except FileNotFoundError:
+        st.warning("Missing options data for the universe. Pull the chains first.")
+        st.stop()
     all_dates = sorted({d for t in UNIVERSE for d in chains[t]["date"]})
     min_d, max_d = all_dates[0].date(), all_dates[-1].date()
 
@@ -53,14 +56,14 @@ def render():
     capital = c3.number_input("Capital", 10_000, 1_000_000, 100_000, 10_000, key="uw_cap")
     n_slots = st.slider("How many tickers at once (N)", 1, len(UNIVERSE), 5, key="uw_n")
 
-    if pd.Timestamp(start) < XOP_CLEAN_START:
+    if pd.Timestamp(start) < DEFAULT_CLEAN_START["XOP"]:
         st.caption("Note: XOP is split-broken before 2020-07-01; the engine clean-starts "
                    "it at 2020-07-01 automatically.")
 
     if st.button("Run", key="run_uw", type="primary"):
         w = {t: chains[t][(chains[t]["date"] >= pd.Timestamp(start))
                           & (chains[t]["date"] <= pd.Timestamp(end))] for t in UNIVERSE}
-        if sum(len(w[t]["date"].unique()) for t in UNIVERSE) < 5:
+        if len({d for t in UNIVERSE for d in w[t]["date"].unique()}) < 5:
             st.warning("Window too short."); st.stop()
         cfg = WheelConfig(ticker="SPY", put_delta=put_delta, call_delta=call_delta,
                           target_dte=int(target_dte), take_profit_pct=tp / 100.0,

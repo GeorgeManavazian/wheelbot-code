@@ -44,3 +44,20 @@ def test_two_campaigns_one_closed_one_open():
     assert c2["shares_held"] == 100
     # pnl_mtm marks the 100 GDX shares at last_spot 25
     assert abs(c2["pnl_mtm"] - (c2["pnl_realized"] + 100 * 25.0)) < 1e-9
+
+
+def test_open_short_put_at_end_is_open_and_marked():
+    d = pd.Timestamp("2021-01-04")
+    put = Contract("SPY", pd.Timestamp("2021-01-15"), 400.0, "P")
+    trades = [
+        # single campaign: SELL_PUT only, never closed -> still open short at end
+        Trade(d, "SELL_PUT", put, 1, 2.00, 100_000.0, campaign_id=1),
+    ]
+    result = PortfolioResult(pd.Series({d: 100_000.0}), trades, 100_000.0,
+                             {}, n_campaigns_opened=1)
+    ct = portfolio_campaign_table(result, _cfg(), {"SPY": 380.0})
+    row = ct[ct.campaign_id == 1].iloc[0]
+    assert row["open_at_end"] == True
+    expected_pnl_mtm = (2.00 * MULT - COMM) - max(400.0 - 380.0, 0.0) * MULT * 1
+    assert abs(row["pnl_mtm"] - expected_pnl_mtm) < 1e-9
+    assert abs(row["pnl_mtm"] - (-1800.65)) < 1e-9

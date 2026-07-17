@@ -427,11 +427,17 @@ def position_log(result, cfg) -> pd.DataFrame:
             "cost_to_close","realized_pnl","pct_of_credit","days_held","campaign_id"]
     return pd.DataFrame(rows, columns=cols)
 
+_PORTFOLIO_OPENS = {"SELL_PUT", "SELL_CALL", "ROLL_OPEN"}
+_PORTFOLIO_TERMINAL = {"CLOSE_PUT", "CLOSE_CALL", "PUT_EXPIRED", "CALL_EXPIRED",
+                       "ASSIGNED", "CALLED_AWAY", "ROLL_CLOSE", "STOP_CLOSE"}
+
 def portfolio_campaign_table(result, cfg, last_spots) -> pd.DataFrame:
     """One row per campaign for a PortfolioResult. campaign_table can't be
     reused: portfolio campaigns interleave across tickers by date (not
     contiguous) and final_shares is a dict. Groups by campaign_id. pnl_realized
-    is exact cash flow; pnl_mtm marks any still-held shares at last_spots."""
+    is exact cash flow; pnl_mtm marks any still-held shares at last_spots AND
+    any still-open short option (opens outnumber terminal closes) to intrinsic
+    value at the last spot — an open short is a liability, not a finished win."""
     mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
     agg = {}
     for t in result.trades:
@@ -440,10 +446,18 @@ def portfolio_campaign_table(result, cfg, last_spots) -> pd.DataFrame:
         if c is None:
             c = agg[cid] = dict(campaign_id=cid, ticker=t.contract.root,
                                 opened=t.date, closed=t.date, n_trades=0,
-                                pnl_realized=0.0, shares_held=0, collateral=0.0)
+                                pnl_realized=0.0, shares_held=0, collateral=0.0,
+                                opens_count=0, terminal_count=0, last_open_contract=None,
+                                last_open_n=0)
         c["n_trades"] += 1
         c["closed"] = t.date
         a, n, px = t.action, t.contracts, t.price_per_contract
+        if a in _PORTFOLIO_OPENS:
+            c["opens_count"] += 1
+            c["last_open_contract"] = t.contract
+            c["last_open_n"] = n
+        if a in _PORTFOLIO_TERMINAL:
+            c["terminal_count"] += 1
         if a in ("SELL_PUT", "SELL_CALL"):
             c["pnl_realized"] += px * mult * n - comm * n
             if a == "SELL_PUT" and c["collateral"] == 0.0:
@@ -459,9 +473,20 @@ def portfolio_campaign_table(result, cfg, last_spots) -> pd.DataFrame:
     rows = []
     for c in agg.values():
         held = c["shares_held"]
-        c["open_at_end"] = held > 0
-        c["pnl_mtm"] = c["pnl_realized"] + held * last_spots.get(c["ticker"], 0.0)
+        has_open_short = c["opens_count"] > c["terminal_count"]
+        c["open_at_end"] = (held > 0) or has_open_short
+        last_spot = last_spots.get(c["ticker"], 0.0)
+        liability = 0.0
+        oc = c["last_open_contract"]
+        if has_open_short and oc is not None:
+            n = c["last_open_n"]
+            if oc.right == "P":
+                liability = max(oc.strike - last_spot, 0.0) * mult * n
+            else:
+                liability = max(last_spot - oc.strike, 0.0) * mult * n
+        c["pnl_mtm"] = c["pnl_realized"] + held * last_spot - liability
         c["pct_return"] = c["pnl_realized"] / c["collateral"] if c["collateral"] else 0.0
+        del c["opens_count"], c["terminal_count"], c["last_open_contract"], c["last_open_n"]
         rows.append(c)
     return pd.DataFrame(rows, columns=["campaign_id", "ticker", "opened", "closed",
         "n_trades", "pnl_realized", "shares_held", "collateral", "open_at_end",
@@ -472,6 +497,9 @@ def portfolio_summary_stats(campaigns) -> dict:
     finished_win_rate hides nothing dishonestly (closed campaigns only);
     soldtoday_win_rate marks open positions to market so hidden losses surface.
     The gap between them is the honesty signal."""
+    if len(campaigns) == 0:
+        return {"finished_win_rate": float("nan"), "soldtoday_win_rate": float("nan"),
+                "avg_pct_per_win": float("nan"), "n_open": 0, "n_campaigns": 0}
     closed = campaigns[~campaigns["open_at_end"]]
     winners = closed[closed["pnl_realized"] > 0]
     return {
