@@ -6,7 +6,7 @@ from src.engine_v2.regime.data import closes_for
 from src.engine_v2.regime.state import regime_series, describe
 from src.engine_v2.regime.base_rates import base_rate_table
 from src.engine_v2.regime.autopsy import campaign_regimes, autopsy_table
-from src.engine_v2.options.data import available_tickers
+from dashboard.guard import SEEN
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _states_for(symbol: str) -> pd.DataFrame:
@@ -31,10 +31,8 @@ def render():
     st.title("Regime")
     st.caption("Read-only advisor: where the market is, what usually followed, "
                "and how the wheel's own campaigns fared by regime.")
-    # Unseen basket tickers hidden until the basket run reports (13d discipline,
-    # same guard as the Wheel tab) — even read-only surfaces stay consistent.
-    UNSEEN = {"XBI", "EEM", "EWZ", "TLT", "ARKK", "QQQ"}
-    tickers = [t for t in available_tickers() if t != "SPY" and t not in UNSEEN]
+    # Seen tickers only (allow-list, same guard as the Wheel/Chameleon pages).
+    tickers = [t for t in SEEN if t != "SPY"]
     tick = st.selectbox("Ticker", ["SPY"] + tickers, key="regime_ticker")
 
     st.subheader("Today")

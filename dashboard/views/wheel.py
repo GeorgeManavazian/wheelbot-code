@@ -5,18 +5,14 @@ from dataclasses import replace
 import pandas as pd
 import streamlit as st
 from dashboard import bars, charts, labels, theme, trades
-from src.engine_v2.options.data import available_tickers, chain_path, intraday_path
+from src.engine_v2.options.data import intraday_path
 from src.engine_v2.options.select import derived_band
 from src.engine_v2.options.wheel import WheelConfig, run_wheel
 from src.engine_v2.options.report import wheel_report
+from dashboard.guard import seen_sources
 
 FIXTURE_TICKER = "SPY (2024 sample fixture)"
 FIXTURE = "fixtures/spy_wheel_cycle.parquet"
-
-# Pre-registered unseen basket tickers (amendment 2026-07-13d, binding): the
-# dashboard must not offer them until the basket run reports — one dropdown
-# click here would burn the out-of-sample set. Same guard as the runner scripts.
-UNSEEN = {"XBI", "EEM", "EWZ", "TLT", "ARKK", "QQQ"}
 
 # XOP's chain is unadjusted through its 1:4 reverse split (2020-03-31) —
 # results that span it book phantom gains (STATUS 2026-07-14).
@@ -24,11 +20,8 @@ XOP_CLEAN_START = pd.Timestamp("2020-07-01")
 
 
 def _sources() -> dict:
-    """Ticker -> EOD chain path. Seen tickers only + fixture fallback."""
-    out = {t: chain_path(t) for t in available_tickers() if t not in UNSEEN}
-    if os.path.exists(FIXTURE):
-        out[FIXTURE_TICKER] = FIXTURE
-    return out
+    """Ticker -> EOD chain path. Seen (allow-listed) tickers + fixture fallback."""
+    return seen_sources(include_fixture_name=FIXTURE_TICKER, fixture_path=FIXTURE)
 
 
 def render():
@@ -65,8 +58,8 @@ def render():
 
     ticker_name = st.selectbox(
         "Ticker", list(sources), key="wheel_data",
-        help="Unseen basket tickers (XBI EEM EWZ TLT ARKK QQQ) are hidden until "
-             "the pre-registered basket run reports — amendment 2026-07-13d.")
+        help="Allow-list only: seen tickers (SPY GDX SLV XOP) plus the fixture, "
+             "until the pre-registered basket run reports — amendment 2026-07-13d.")
     path = sources[ticker_name]
     ticker = "SPY" if ticker_name == FIXTURE_TICKER else ticker_name
     if not os.path.exists(path):
