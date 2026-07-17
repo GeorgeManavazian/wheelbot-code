@@ -10,6 +10,7 @@ import pandas as pd
 from .select import select_contract, option_mark
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, sell_proceeds,
                     buy_cost, GATE_STALENESS_DAYS)
+from ..regime.state import is_good_renting_weather
 
 ROTATION_TIE_ORDER = ("SPY", "GDX", "SLV", "XOP")
 # XOP's chain is split-broken before this date (unadjusted 1:4 reverse split
@@ -41,7 +42,10 @@ def _row_before(states: pd.DataFrame, d: pd.Timestamp):
 
 
 def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
-                        clean_start: dict | None = None) -> PortfolioResult:
+                        clean_start: dict | None = None,
+                        selector: str = "vol_pctile") -> PortfolioResult:
+    if selector not in ("vol_pctile", "chop"):
+        raise ValueError(f"selector must be 'vol_pctile' or 'chop', got {selector!r}")
     if cfg.roll_tested_puts or cfg.put_stop_mult is not None or \
             cfg.liquidate_assignment or cfg.any_regime_gate:
         raise ValueError("portfolio v1 supports the plain+basis wheel only — "
@@ -139,7 +143,8 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
             if pos["short"] is None and pos["shares"] == 0 and pos["phase"] == "PUT":
                 pos = None
 
-        # 2) routing entry: flat -> richest-premium eligible ticker
+        # 2) routing entry: flat -> best eligible ticker (selector decides
+        #    eligibility + how "best" is scored)
         if pos is None:
             candidates = []
             for tk in universe:
@@ -147,8 +152,13 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
                 if day_chain is None or d < clean_start.get(tk, d):
                     continue
                 row = _row_before(regime_states[tk], d)
-                if row is not None and is_unpaid_decline(row["trend"], row["vol"]):
-                    continue
+                if selector == "chop":
+                    # good-to-rent only: chop + not stressed; unknown excluded
+                    if not is_good_renting_weather(row):
+                        continue
+                else:  # vol_pctile: today's gate — skip only unpaid declines
+                    if row is not None and is_unpaid_decline(row["trend"], row["vol"]):
+                        continue
                 c = select_contract(day_chain, d, "P", cfg.put_delta,
                                     cfg.target_dte, tk)
                 mark = option_mark(day_chain, d, c) if c is not None else None
@@ -158,8 +168,8 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
                 if n <= 0:
                     continue
                 if row is None:
-                    # unknown state: never gated on missing information, but
-                    # ranked below every known pctile (spec amendment 14a)
+                    # vol_pctile only reaches here (chop excluded None above):
+                    # unknown state ranked below every known pctile (amendment 14a)
                     warnings.append((d, "route_state_unknown", tk))
                     pct = -1.0
                 else:
