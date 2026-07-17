@@ -1,31 +1,33 @@
-"""Live trading universe: price-diverse, liquid, optionable. Spans price tiers so
+"""Live trading universe: price-diverse, liquid, OPTIONABLE. Spans price tiers so
 the bot is testable across $5k-$500k accounts (one put ties up strike*100
 collateral, so small accounts can only trade cheap underlyings). Owner-editable.
-Filtering to what an account can afford is a decision-layer concern (sub-project B)."""
+Filtering to what an account can afford is a decision-layer concern (sub-project B).
 
-# Low ($5-50): the inventory a ~$5k account can actually trade.
+Curated for LIQUID LISTED OPTIONS only: no mutual funds (zero options), no
+delisted names, no dotted symbols (Schwab API can't route "BRK.B"). Tier bands
+are approximate reference prices — variety is the point, not exact levels."""
+
+# Low ($5-50): the inventory a ~$5k account can actually trade (one put ~ $500-5k).
 _LOW = [
-    "GDX", "SLV", "XOP", "EWZ", "GDXJ", "XLF", "KRE", "EEM", "FXI", "USO",
-    "SOFI", "F", "PLTR", "NIO", "RIG", "SNAP", "T", "BAC", "WFC", "PFE",
-    "INTC", "CSCO", "KVUE", "VALE", "GOLD", "CCL", "MARA", "RIOT", "CHPT",
-    "LYFT", "HOOD", "AAL", "UAL", "PBR", "KGC", "AGNC", "NOK", "SIRI",
-    "GEVO", "BITF", "CLSK", "MSTR", "UPST", "SCCO", "HUT", "GLIBA", "X", "MT",
-    "RS", "CLF", "ARCH", "AVLR", "HYCH", "GPRO", "ARCC", "MAIN", "ORC", "OXLC",
+    "GDX", "GDXJ", "SLV", "XOP", "EWZ", "EEM", "FXI", "USO", "KRE", "XLF",
+    "KVUE", "F", "SOFI", "NIO", "RIG", "SNAP", "T", "BAC", "WFC", "PFE",
+    "INTC", "CSCO", "VALE", "GOLD", "CCL", "MARA", "RIOT", "CLSK", "HOOD",
+    "LYFT", "AAL", "UAL", "PBR", "KGC", "AGNC", "NOK", "SIRI", "CLF", "X",
+    "UPST", "CHPT", "GPRO", "BITO", "KMI", "PLUG", "AG", "HL", "SCCO",
 ]
 # Mid ($50-150).
 _MID = [
     "GLD", "XBI", "XLE", "XLK", "SMH", "IWM", "DIA", "EFA", "TLT", "HYG",
-    "AMD", "BABA", "PYPL", "UBER", "DIS", "KO", "PEP", "CVX", "XOM", "WMT",
-    "SBUX", "NKE", "MU", "C", "GM", "COIN", "SNOW", "SHOP", "MRNA", "ROKU",
-    "SEMI", "EWG", "EWJ", "EWU", "FXE", "EWI", "IVV", "VTV", "VOE", "VBR",
-    "AGG", "LQD", "VCIT", "SCHZ", "VGIT", "PFF", "VCSH", "ANGL", "IBND", "MBB",
+    "LQD", "VWO", "VEA", "AMD", "BABA", "PYPL", "UBER", "DIS", "KO", "PEP",
+    "CVX", "XOM", "WMT", "SBUX", "NKE", "C", "GM", "SNOW", "SHOP", "MRNA",
+    "ROKU", "PLTR", "MU", "SQ", "PINS", "DKNG", "CVS", "WBA", "DAL", "OXY",
 ]
 # High ($150-700+): only larger accounts reach these.
 _HIGH = [
-    "SPY", "QQQ", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "TSLA",
-    "NFLX", "AVGO", "CRM", "ADBE", "COST", "HD", "UNH", "LLY", "V", "MA",
-    "JPM", "GS", "CAT", "BA", "AMAT", "NOW", "PANW", "LRCX", "ISRG", "MELI",
-    "BRK.B", "VOO", "VEA", "VWO", "VBTLX", "FSKAX", "FTIHX",
-    "VFIAX", "VFITX", "FXAIX", "FZROX", "SCHB", "SWTSX", "SPLG", "SCHX", "SUSA", "SCHG",
+    "SPY", "QQQ", "VOO", "IVV", "IWF", "AAPL", "MSFT", "AMZN", "GOOGL",
+    "META", "NVDA", "TSLA", "NFLX", "AVGO", "CRM", "ADBE", "COST", "HD",
+    "UNH", "LLY", "V", "MA", "JPM", "GS", "CAT", "BA", "AMAT", "NOW",
+    "PANW", "LRCX", "ISRG", "MELI", "MSTR", "TSM", "ORCL", "ACN", "QCOM",
+    "TXN", "INTU", "SPGI",
 ]
 UNIVERSE = _LOW + _MID + _HIGH
