@@ -12,7 +12,8 @@ from .wheel import (Trade, WheelConfig, is_unpaid_decline, sell_proceeds,
                     buy_cost, GATE_STALENESS_DAYS)
 from ..regime.state import is_good_renting_weather
 
-ROTATION_TIE_ORDER = ("SPY", "GDX", "SLV", "XOP")
+ROTATION_TIE_ORDER = ("SPY", "GDX", "SLV", "XOP",
+                      "AAPL", "AMZN", "NVDA", "META", "FB")
 RESERVED_TICKERS = ("XBI", "EEM", "EWZ", "TLT", "ARKK")
 # XOP's chain is split-broken before this date (unadjusted 1:4 reverse split
 # 2020-03-31) — STATUS item; a ticker is ineligible before its clean start.
