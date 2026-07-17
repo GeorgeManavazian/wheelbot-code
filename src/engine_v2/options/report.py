@@ -25,6 +25,16 @@ class WheelReport:
     defense: dict | None = None   # campaign-level defense stats; None on plain runs
     gates: dict | None = None     # regime-gate counts; None when no gate armed
 
+@dataclass
+class RouterReport:
+    metrics: dict
+    posture: dict
+    fills: dict
+    benchmark_underlying: dict
+    yearly_return: pd.Series
+    blotter: pd.DataFrame
+    ticker: str = "SPY"
+
 def buy_hold_curve(chain, starting_capital) -> pd.Series:
     """Buy-hold the chain's OWN underlying (was spy_buy_hold, which silently
     benchmarked GDX against GDX on non-SPY chains)."""
@@ -235,6 +245,40 @@ def wheel_report(result, chain, cfg, recent_start="2021-07-01",
         ticker=cfg.ticker,
         defense=defense,
         gates=gates,
+    )
+
+def router_report(result, chain, cfg) -> RouterReport:
+    """Report for a RouterResult. Decoupled from wheel_report, which reads
+    result.days_flat (absent on RouterResult). Metrics use the same
+    metrics_simple functions as scripts/run_regime_router.py, so the page and
+    the CLI agree by construction."""
+    eq = result.equity
+    ppy = m.infer_periods_per_year(eq.index)
+    rets = eq.pct_change().fillna(0.0)
+    metrics = {
+        "total_return": float(eq.iloc[-1] / eq.iloc[0] - 1),
+        "cagr": m.cagr(eq, ppy),
+        "sharpe": m.sharpe(rets, ppy),
+        "max_drawdown": m.max_drawdown(eq),
+    }
+    rlog = result.route_log or []
+    transitions = sum(1 for a, b in zip(rlog, rlog[1:]) if a[3] != b[3])
+    unknown = sum(1 for w in (result.warnings or []) if w[1] == "route_state_unknown")
+    posture = {
+        "days": result.days_in_posture,
+        "transitions": transitions,
+        "whipsaws": result.whipsaw_pairs,
+        "unknown": unknown,
+    }
+    fills = {"intraday_tp": result.intraday_tp_fills, "eod_tp": result.eod_tp_fills}
+    bh = buy_hold_curve(chain, cfg.starting_capital)
+    benchmark_underlying = {"total_return": float(bh.iloc[-1] / bh.iloc[0] - 1)}
+    return RouterReport(
+        metrics=metrics, posture=posture, fills=fills,
+        benchmark_underlying=benchmark_underlying,
+        yearly_return=m.yearly_returns(eq),
+        blotter=position_log(result, cfg),
+        ticker=cfg.ticker,
     )
 
 def _pct(x): return "n/a" if pd.isna(x) else f"{x:+.2%}"
