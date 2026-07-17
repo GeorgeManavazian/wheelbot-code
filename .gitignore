@@ -10,3 +10,6 @@ splits/
 data/intraday/
 data/options/
 data/wheel_runs.csv
+
+# Schwab live-data venv (py3.12, schwab-py) — not the 3.9 backtest venv
+.venv-live/
