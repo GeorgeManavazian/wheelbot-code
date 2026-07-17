@@ -108,3 +108,20 @@ def candles_with_trades(bars: pd.DataFrame, overlay: pd.DataFrame) -> go.Figure:
     fig.update_layout(height=460, xaxis_rangeslider_visible=False,
                       hovermode="closest", xaxis_title=None, yaxis_title=None)
     return theme.apply(fig)
+
+
+def posture_bands(route_log) -> list:
+    """Collapse a per-day route_log [(date, trend, vol, posture), ...] into
+    contiguous spans (start_date, end_date, posture). end_date is inclusive."""
+    if not route_log:
+        return []
+    spans = []
+    s_date, cur = route_log[0][0], route_log[0][3]
+    prev = s_date
+    for d, _t, _v, posture in route_log[1:]:
+        if posture != cur:
+            spans.append((s_date, prev, cur))
+            s_date, cur = d, posture
+        prev = d
+    spans.append((s_date, prev, cur))
+    return spans
