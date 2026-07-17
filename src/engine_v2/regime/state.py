@@ -55,3 +55,11 @@ def describe(row) -> str:
     return (f"{row['trend'].capitalize()} ({abs(row['px_vs_200']):.1%} {side} 200d, {cross}), "
             f"{row['vol']} vol ({row['vol_pctile']:.0%} pctile), "
             f"{abs(row['drawdown']):.1%} off 252d high.")
+
+def is_good_renting_weather(row) -> bool:
+    """Good-to-rent weather for the chop scanner: range-bound (chop) and not
+    violently volatile (not stressed). Uptrends (hold instead) and downtrends
+    (falling knife) are excluded; a None/unknown row is not good-to-rent."""
+    if row is None:
+        return False
+    return row["trend"] == "chop" and row["vol"] != "stressed"
