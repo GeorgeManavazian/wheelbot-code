@@ -4,7 +4,7 @@ postures shaded on the price chart with an option-leg blotter. Exploration only
 import os
 import pandas as pd
 import streamlit as st
-from dashboard import bars, charts, labels, theme, trades
+from dashboard import bars, charts, labels, trades
 from dashboard.guard import seen_sources
 from src.engine_v2.options.data import intraday_path
 from src.engine_v2.options.select import derived_band
@@ -87,6 +87,10 @@ def render():
             h_lo, h_hi = ih["timestamp"].min().normalize(), ih["timestamp"].max().normalize()
             ch = ch[(ch["date"] >= h_lo) & (ch["date"] <= h_hi)].reset_index(drop=True)
             marks = intraday_marks(ih)
+            fallback_days = ch["date"].dt.normalize().nunique() - ih["timestamp"].dt.normalize().nunique()
+            if fallback_days > 0:
+                st.caption(f"⚠ {fallback_days} day(s) in the window have no hourly bar — "
+                           f"those fall back to EOD fills.")
         if ch["date"].nunique() < 5:
             st.warning("Window too short."); st.stop()
         states = regime_series(closes_for(ticker))
