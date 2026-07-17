@@ -13,6 +13,7 @@ from .wheel import (Trade, WheelConfig, is_unpaid_decline, sell_proceeds,
 from ..regime.state import is_good_renting_weather
 
 ROTATION_TIE_ORDER = ("SPY", "GDX", "SLV", "XOP")
+RESERVED_TICKERS = ("XBI", "EEM", "EWZ", "TLT", "ARKK")
 # XOP's chain is split-broken before this date (unadjusted 1:4 reverse split
 # 2020-03-31) — STATUS item; a ticker is ineligible before its clean start.
 DEFAULT_CLEAN_START = {"XOP": pd.Timestamp("2020-07-01")}
@@ -29,6 +30,7 @@ class PortfolioResult:
     warnings: list = None
     days_shares_uncovered: int = 0
     route_events: list = None   # (date, ranked [(ticker, pctile)], chosen)
+    n_campaigns_opened: int = 0
 
 
 def _row_before(states: pd.DataFrame, d: pd.Timestamp):
@@ -43,19 +45,24 @@ def _row_before(states: pd.DataFrame, d: pd.Timestamp):
 
 def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
                         clean_start: dict | None = None,
-                        selector: str = "vol_pctile") -> PortfolioResult:
+                        selector: str = "vol_pctile",
+                        n_slots: int = 1) -> PortfolioResult:
     if selector not in ("vol_pctile", "chop"):
         raise ValueError(f"selector must be 'vol_pctile' or 'chop', got {selector!r}")
+    if n_slots < 1:
+        raise ValueError(f"n_slots must be >= 1, got {n_slots}")
     if cfg.roll_tested_puts or cfg.put_stop_mult is not None or \
             cfg.liquidate_assignment or cfg.any_regime_gate:
-        raise ValueError("portfolio v1 supports the plain+basis wheel only — "
-                         "roll/stop/gates/liquidate are solo mechanics (spec "
-                         "2026-07-14-portfolio-rotation)")
+        raise ValueError("portfolio supports the plain+basis wheel only — "
+                         "roll/stop/gates/liquidate are solo mechanics")
     universe = sorted(chains, key=lambda t: ROTATION_TIE_ORDER.index(t)
                       if t in ROTATION_TIE_ORDER else len(ROTATION_TIE_ORDER))
     for t in universe:
+        if t in RESERVED_TICKERS:
+            raise ValueError(f"{t} is a reserved one-shot ticker — never a "
+                             f"rotation universe member")
         if t not in ROTATION_TIE_ORDER:
-            raise ValueError(f"{t} is not in the pre-registered universe "
+            raise ValueError(f"{t} is not in the rotation universe "
                              f"{ROTATION_TIE_ORDER}")
         if t not in regime_states:
             raise ValueError(f"universe member {t} has no regime_states — "
@@ -70,7 +77,7 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
     mult = cfg.contract_multiplier
 
     cash = cfg.starting_capital
-    pos = None   # {"ticker","short","shares","phase","basis","premium","last_spot"}
+    positions = []   # list of pos dicts, each one campaign; ordered by campaign id
     campaign = 0
     warnings, route_events, trades, equity = [], [], [], {}
     prev_d, days_flat, days_shares_uncovered = None, 0, 0
@@ -80,9 +87,9 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
             cash *= (1 + cfg.cash_yield / 365) ** (d - prev_d).days
         prev_d = d
 
-        # 1) manage the held position with the SOLO rules (TP -> expiry -> call)
-        closed_today = None
-        if pos is not None:
+        # 1) manage every held position with the SOLO rules (TP -> expiry -> call)
+        closed_today = set()
+        for pos in positions:
             tk = pos["ticker"]
             day_chain = by_date[tk].get(d)
             spot = float(und[tk][d]) if d in und[tk].index else pos["last_spot"]
@@ -98,7 +105,7 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
                     cash -= cost; pos["premium"] -= cost
                     trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
                                         c, n, mark.ask, cash, pos["campaign"]))
-                    pos["short"] = None; short = None; closed_today = c
+                    pos["short"] = None; short = None; closed_today.add(c)
                 if short is not None and d >= c.expiry:
                     settle_spot = spot
                     if d > c.expiry:
@@ -132,83 +139,92 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
                 c = select_contract(day_chain, d, "C", cfg.call_delta,
                                     cfg.target_dte, tk, min_strike=floor)
                 mark = option_mark(day_chain, d, c) if c is not None else None
-                if c is not None and c != closed_today and mark is not None:
+                if c is not None and c not in closed_today and mark is not None:
                     n = pos["shares"] // mult
                     proceeds = sell_proceeds(mark, n, cfg)
                     cash += proceeds; pos["premium"] += proceeds
                     pos["short"] = {"contract": c, "contracts": n,
                                     "credit": mark.bid, "last_mid": mark.mid}
                     trades.append(Trade(d, "SELL_CALL", c, n, mark.bid, cash, pos["campaign"]))
-            # campaign ends when flat cash again
-            if pos["short"] is None and pos["shares"] == 0 and pos["phase"] == "PUT":
-                pos = None
 
-        # 2) routing entry: flat -> best eligible ticker (selector decides
-        #    eligibility + how "best" is scored)
-        if pos is None:
+        # drop finished campaigns (flat: no short, no shares, back in PUT phase)
+        positions = [p for p in positions
+                     if not (p["short"] is None and p["shares"] == 0 and p["phase"] == "PUT")]
+
+        # 2) routing entry: fill empty slots with the best good-to-rent tickers
+        held_tickers = {p["ticker"] for p in positions}
+        while len(positions) < n_slots:
+            empty_slots = n_slots - len(positions)
+            # uncommitted cash = cash minus collateral reserved by open short puts
+            committed = sum(p["short"]["contract"].strike * mult * p["short"]["contracts"]
+                            for p in positions
+                            if p["short"] is not None and p["short"]["contract"].right == "P")
+            budget = (cash - committed) / empty_slots
             candidates = []
             for tk in universe:
+                if tk in held_tickers:
+                    continue
                 day_chain = by_date[tk].get(d)
                 if day_chain is None or d < clean_start.get(tk, d):
                     continue
                 row = _row_before(regime_states[tk], d)
                 if selector == "chop":
-                    # good-to-rent only: chop + not stressed; unknown excluded
                     if not is_good_renting_weather(row):
                         continue
-                else:  # vol_pctile: today's gate — skip only unpaid declines
+                else:
                     if row is not None and is_unpaid_decline(row["trend"], row["vol"]):
                         continue
                 c = select_contract(day_chain, d, "P", cfg.put_delta,
                                     cfg.target_dte, tk)
                 mark = option_mark(day_chain, d, c) if c is not None else None
-                if c is None or c == closed_today or mark is None:
+                if c is None or c in closed_today or mark is None:
                     continue
-                n = int(cash // (c.strike * mult))
+                n = int(budget // (c.strike * mult))
                 if n <= 0:
                     continue
                 if row is None:
-                    # vol_pctile only reaches here (chop excluded None above):
-                    # unknown state ranked below every known pctile (amendment 14a)
                     warnings.append((d, "route_state_unknown", tk))
                     pct = -1.0
                 else:
                     pct = float(row["vol_pctile"])
                 candidates.append((-pct, ROTATION_TIE_ORDER.index(tk), tk, c, mark, n))
-            if candidates:
-                candidates.sort()
-                _, _, tk, c, mark, n = candidates[0]
-                campaign += 1
-                proceeds = sell_proceeds(mark, n, cfg)
-                cash += proceeds
-                pos = {"ticker": tk, "shares": 0, "phase": "PUT", "basis": None,
-                       "premium": proceeds, "campaign": campaign,
-                       "last_spot": float(und[tk][d]),
-                       "short": {"contract": c, "contracts": n,
-                                 "credit": mark.bid, "last_mid": mark.mid}}
-                trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
-                route_events.append((d, [(t_[2], -t_[0]) for t_ in candidates], tk))
+            if not candidates:
+                break
+            candidates.sort()
+            _, _, tk, c, mark, n = candidates[0]
+            campaign += 1
+            proceeds = sell_proceeds(mark, n, cfg)
+            cash += proceeds
+            positions.append({"ticker": tk, "shares": 0, "phase": "PUT", "basis": None,
+                              "premium": proceeds, "campaign": campaign,
+                              "last_spot": float(und[tk][d]),
+                              "short": {"contract": c, "contracts": n,
+                                        "credit": mark.bid, "last_mid": mark.mid}})
+            trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
+            route_events.append((d, [(t_[2], -t_[0]) for t_ in candidates], tk))
+            held_tickers.add(tk)
 
-        # 3) flat/uncovered accounting + equity mark (same semantics as solo)
-        if pos is None:
+        # 3) flat/uncovered accounting + equity mark
+        if not positions:
             days_flat += 1
-        elif pos["short"] is None and pos["phase"] == "CALL" and pos["shares"] >= mult:
-            days_shares_uncovered += 1
+        for pos in positions:
+            if pos["short"] is None and pos["phase"] == "CALL" and pos["shares"] >= mult:
+                days_shares_uncovered += 1
         liab, shares_val = 0.0, 0.0
-        if pos is not None:
+        for pos in positions:
             if pos["short"] is not None:
                 day_chain = by_date[pos["ticker"]].get(d)
                 mk = option_mark(day_chain, d, pos["short"]["contract"]) \
                     if day_chain is not None else None
                 if mk is not None:
                     pos["short"]["last_mid"] = mk.mid
-                liab = pos["short"]["last_mid"] * mult * pos["short"]["contracts"]
-            shares_val = pos["shares"] * pos["last_spot"]
+                liab += pos["short"]["last_mid"] * mult * pos["short"]["contracts"]
+            shares_val += pos["shares"] * pos["last_spot"]
         equity[d] = cash + shares_val - liab
 
     residual_settled = False
     final_shares = {}
-    if pos is not None:
+    for pos in positions:
         if pos["short"] is not None:
             last = dates[-1]
             day_chain = by_date[pos["ticker"]].get(last)
@@ -218,9 +234,10 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
             cash -= mid * mult * pos["short"]["contracts"]
             residual_settled = True
         if pos["shares"]:
-            final_shares[pos["ticker"]] = pos["shares"]
+            final_shares[pos["ticker"]] = final_shares.get(pos["ticker"], 0) + pos["shares"]
     return PortfolioResult(pd.Series(equity), trades, cash, final_shares,
                            residual_settled, days_flat=days_flat,
                            warnings=warnings,
                            days_shares_uncovered=days_shares_uncovered,
-                           route_events=route_events)
+                           route_events=route_events,
+                           n_campaigns_opened=campaign)
