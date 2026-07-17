@@ -16,17 +16,18 @@ def _load():
     return chains, states
 
 
-def test_nslots_1_byte_identical_to_single_position():
-    # n_slots=1 must reproduce the pre-N single-position path exactly, both selectors.
+def test_nslots_1_vol_pctile_matches_solo_run_wheel():
+    # Real byte-identity teeth: a one-ticker universe at n_slots=1, selector
+    # vol_pctile, must reproduce the solo wheel on that ticker exactly.
+    from src.engine_v2.options.wheel import run_wheel
     chains, states = _load()
     cfg = WheelConfig(ticker="SPY", **BASE)
-    for sel in ("vol_pctile", "chop"):
-        one = run_portfolio_wheel(chains, cfg, states, selector=sel, n_slots=1)
-        # equity index + values identical to the default-n_slots call
-        default = run_portfolio_wheel(chains, cfg, states, selector=sel)
-        assert list(one.equity.index) == list(default.equity.index)
-        assert list(one.equity) == list(default.equity)
-        assert len(one.trades) == len(default.trades)
+    solo = run_wheel(chains["SPY"], cfg)
+    port = run_portfolio_wheel({"SPY": chains["SPY"]}, cfg, {"SPY": states["SPY"]},
+                               selector="vol_pctile", n_slots=1)
+    assert [(t.date, t.action, t.contracts, t.price_per_contract) for t in solo.trades] == \
+           [(t.date, t.action, t.contracts, t.price_per_contract) for t in port.trades]
+    assert solo.equity.equals(port.equity)
 
 
 def test_nslots_5_holds_multiple_and_never_two_per_ticker():

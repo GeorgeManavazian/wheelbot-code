@@ -10,7 +10,9 @@ def test_row_before_is_strictly_prior_day():
     probe = states.index[500]
     row = _row_before(states, probe)
     assert row is not None
-    assert states.index[states.index.get_loc(probe) - 1] <= probe
-    # the returned row's own date is strictly < probe
-    got_date = states.index[states.index.searchsorted(probe) - 1]
-    assert got_date < probe
+    # the returned row must BE the state at the strictly-prior index — not probe
+    expected_prior = states.index[499]
+    assert row.name == expected_prior
+    assert row.name < probe
+    # and a same-day lookup must never return the probe day's own row
+    assert _row_before(states, probe).name != probe
