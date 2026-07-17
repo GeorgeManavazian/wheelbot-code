@@ -74,7 +74,7 @@ def monthly_heatmap(equity: pd.Series) -> go.Figure:
     return theme.apply(fig)
 
 
-def candles_with_trades(bars: pd.DataFrame, overlay: pd.DataFrame) -> go.Figure:
+def candles_with_trades(bars: pd.DataFrame, overlay: pd.DataFrame, posture=None) -> go.Figure:
     """Daily candles with every position drawn as a horizontal segment at its
     strike, coloured by outcome group.
 
@@ -105,6 +105,15 @@ def candles_with_trades(bars: pd.DataFrame, overlay: pd.DataFrame) -> go.Figure:
             text=texts, hovertemplate="%{text}<extra></extra>",
             connectgaps=False,
         ))
+    if posture:
+        for start, end, name in posture:
+            fig.add_vrect(
+                x0=start, x1=end, layer="below", line_width=0,
+                fillcolor=theme.POSTURE_COLORS.get(name, theme.MUTED),
+                opacity=0.12,
+                annotation_text=name, annotation_position="top left",
+                annotation_font_size=10,
+            )
     fig.update_layout(height=460, xaxis_rangeslider_visible=False,
                       hovermode="closest", xaxis_title=None, yaxis_title=None)
     return theme.apply(fig)

@@ -21,6 +21,13 @@ GROUP_COLORS = {
     "Open": MUTED,
 }
 
+# Posture shading for the Chameleon chart (translucent bands behind candles).
+POSTURE_COLORS = {
+    "TREND": ACCENT,     # holding shares in an uptrend
+    "WHEEL": WARNING,    # running the wheel
+    "CASH": MUTED,       # sidelined
+}
+
 TEMPLATE_NAME = "quant_dark"
 
 
