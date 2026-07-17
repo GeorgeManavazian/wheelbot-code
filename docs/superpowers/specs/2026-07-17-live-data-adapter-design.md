@@ -23,7 +23,12 @@ New top-level package **`live/`**, run on the `.venv-live` (py3.12) environment.
 
 Files this sub-project ships:
 - `live/__init__.py`
-- `live/universe.py` — `UNIVERSE: list[str]`, ~150–200 curated liquid optionable tickers (mega/large-cap stocks + liquid ETFs), owner-editable. No reserved-ticker constraint (live forward data is inherently out-of-sample).
+- `live/universe.py` — `UNIVERSE: list[str]`, ~150–200 curated liquid optionable tickers, deliberately **price-diverse** so the bot is testable across **$5k–$500k** accounts. Selling one put ties up `strike × 100` collateral, so a small account can only trade cheap underlyings; the list must span the price range with a healthy low-priced cohort:
+  - **Low ($5–50):** the inventory a ~$5k account can actually trade (one put ≈ $500–5,000 collateral) — cheap liquid ETFs (GDX, SLV, XOP, EWZ, ...) and low-priced optionable stocks (F, SOFI, PLTR, NIO, RIG, ...).
+  - **Mid ($50–150):** GLD, XBI, large-cap ETFs, mid-priced stocks.
+  - **High ($150–700+):** SPY, QQQ, mega-cap stocks — the names only a larger account can afford.
+  Also varied across sectors (equity indices, metals, energy, biotech, tech, financials) so "variety" is real, not 200 flavors of tech. Owner-editable. No reserved-ticker constraint (live forward data is inherently out-of-sample).
+  Note: *filtering* the universe down to what a given account can afford (given its capital) is a decision-layer concern (sub-project B); A only supplies the diverse superset.
 - `live/data.py` — the adapter (two functions + a throttle helper).
 - `live/fixtures/price_history_gdx.json`, `live/fixtures/option_chain_gdx_puts.json` — real saved Schwab responses (already pulled) for offline mapping tests.
 
