@@ -426,3 +426,43 @@ def position_log(result, cfg) -> pd.DataFrame:
     cols = ["opened","closed","instrument","strike","expiry","qty","credit","outcome",
             "cost_to_close","realized_pnl","pct_of_credit","days_held","campaign_id"]
     return pd.DataFrame(rows, columns=cols)
+
+def portfolio_campaign_table(result, cfg, last_spots) -> pd.DataFrame:
+    """One row per campaign for a PortfolioResult. campaign_table can't be
+    reused: portfolio campaigns interleave across tickers by date (not
+    contiguous) and final_shares is a dict. Groups by campaign_id. pnl_realized
+    is exact cash flow; pnl_mtm marks any still-held shares at last_spots."""
+    mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
+    agg = {}
+    for t in result.trades:
+        cid = t.campaign_id
+        c = agg.get(cid)
+        if c is None:
+            c = agg[cid] = dict(campaign_id=cid, ticker=t.contract.root,
+                                opened=t.date, closed=t.date, n_trades=0,
+                                pnl_realized=0.0, shares_held=0, collateral=0.0)
+        c["n_trades"] += 1
+        c["closed"] = t.date
+        a, n, px = t.action, t.contracts, t.price_per_contract
+        if a in ("SELL_PUT", "SELL_CALL"):
+            c["pnl_realized"] += px * mult * n - comm * n
+            if a == "SELL_PUT" and c["collateral"] == 0.0:
+                c["collateral"] = t.contract.strike * mult * n
+        elif a in ("CLOSE_PUT", "CLOSE_CALL"):
+            c["pnl_realized"] -= px * mult * n + comm * n
+        elif a == "ASSIGNED":
+            c["pnl_realized"] -= t.contract.strike * mult * n
+            c["shares_held"] += mult * n
+        elif a == "CALLED_AWAY":
+            c["pnl_realized"] += t.contract.strike * mult * n
+            c["shares_held"] -= mult * n
+    rows = []
+    for c in agg.values():
+        held = c["shares_held"]
+        c["open_at_end"] = held > 0
+        c["pnl_mtm"] = c["pnl_realized"] + held * last_spots.get(c["ticker"], 0.0)
+        c["pct_return"] = c["pnl_realized"] / c["collateral"] if c["collateral"] else 0.0
+        rows.append(c)
+    return pd.DataFrame(rows, columns=["campaign_id", "ticker", "opened", "closed",
+        "n_trades", "pnl_realized", "shares_held", "collateral", "open_at_end",
+        "pnl_mtm", "pct_return"])
