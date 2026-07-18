@@ -19,8 +19,10 @@ if [ -f "$TOKEN" ]; then
   fi
 fi
 
-echo "=== $(date '+%Y-%m-%d %H:%M:%S %Z') run_daily (N/capital from config.json) ===" >> "$LOG"
-PYTHONPATH="$REPO" "$REPO/.venv-live/bin/python" "$REPO/live/run_daily.py" >> "$LOG" 2>&1
+echo "=== $(date '+%Y-%m-%d %H:%M:%S %Z') run_daily (25-account matrix) ===" >> "$LOG"
+# caffeinate -i holds the Mac awake for the run's duration (~5min, 547-name pull)
+# so a scheduled wake that fires can't doze back off mid-run.
+caffeinate -i env PYTHONPATH="$REPO" "$REPO/.venv-live/bin/python" "$REPO/live/run_daily.py" >> "$LOG" 2>&1
 RC=$?
 echo "exit: $RC" >> "$LOG"
 # on failure (e.g. lapsed token), nudge the desktop
