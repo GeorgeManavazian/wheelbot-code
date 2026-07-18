@@ -1,6 +1,6 @@
 """Money-math for the live dashboard: _rows_and_equity must reproduce the same
 short-put equity the engine records (cash minus the short-leg liability)."""
-from dashboard.live import _rows_and_equity
+from dashboard.monitor import _rows_and_equity
 
 
 def test_short_put_equity_matches_engine_convention():
