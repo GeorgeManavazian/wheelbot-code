@@ -44,3 +44,15 @@ def test_save_load_atomic_round_trip(tmp_path):
 
 def test_load_absent_is_none(tmp_path):
     assert load_state(str(tmp_path / "nope.json")) is None
+
+
+def test_save_keeps_prev_backup(tmp_path):
+    p = str(tmp_path / "state.json")
+    save_state(_state(), p)
+    import os
+    assert not os.path.exists(p + ".prev")   # first write: no prior
+    s2 = _state(); s2.cash = 1.0
+    save_state(s2, p)
+    assert os.path.exists(p + ".prev")        # second write backs up the first
+    assert load_state(p + ".prev").cash == 95_000.0   # prev holds the OLD value
+    assert load_state(p).cash == 1.0

@@ -58,12 +58,21 @@ def state_from_dict(d) -> PortfolioState:
 
 
 def save_state(state, path):
+    """Atomic + durable + one-level backup. temp-write -> fsync -> keep the
+    prior state.json as .prev (recovery from a valid-but-wrong write) ->
+    os.replace. A crash or power loss can't leave a half-written or truncated
+    state.json, and yesterday's state is always one file away."""
+    import shutil
     d = state_to_dict(state)
     dirn = os.path.dirname(path) or "."
     os.makedirs(dirn, exist_ok=True)
+    if os.path.exists(path):
+        shutil.copy2(path, path + ".prev")
     fd, tmp = tempfile.mkstemp(dir=dirn, suffix=".tmp")
     with os.fdopen(fd, "w") as f:
         json.dump(d, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())     # durable content before the atomic rename
     os.replace(tmp, path)
 
 

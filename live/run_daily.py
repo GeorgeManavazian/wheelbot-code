@@ -37,11 +37,15 @@ def paper_step(state, market, cfg, n_slots, trades_path, state_path,
                snapshot_path=None):
     day = market._obs
     result = step_one_day(state, market, day, cfg, selector="chop", n_slots=n_slots)
+    # State FIRST (the source of truth). If it saved, the log/snapshot appends
+    # that follow are secondary — a failure there leaves state correct + an
+    # incomplete log (recoverable), never a log claiming trades the reloaded
+    # state doesn't reflect (which could re-trade a position).
+    save_state(state, state_path)
     os.makedirs(os.path.dirname(trades_path) or ".", exist_ok=True)
     with open(trades_path, "a") as f:
         for t in result.trades:
             f.write(json.dumps(_trade_row(t)) + "\n")
-    save_state(state, state_path)
     if snapshot_path is not None:
         from live.snapshots import snapshot, append_snapshot
         append_snapshot(snapshot_path, snapshot(state, result.equity, day))
