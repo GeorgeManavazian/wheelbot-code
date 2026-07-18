@@ -17,6 +17,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from live.accounts import CAPITALS, NS, cap_label, account_paths
+from live.compare import account_metrics
 
 _CSS = """<style>
   .stApp { background:#0b0e11; color:#d1d4dc; }
@@ -205,6 +206,41 @@ def capital_page(capital):
     st.fragment(run_every=refresh)(board)(paths, capital, n, label, refresh)
 
 
+def _return_html(x):
+    """Signed % return, green/red, matching the board's P&L colouring."""
+    cls = "pos" if x >= 0 else "neg"
+    return f'<span class="{cls}">{x:+.2f}%</span>'
+
+
+def compare_page():
+    """One table across ALL 25 accounts (5 capitals x N 1-5) from the on-disk
+    stores -- equity, return, trades, open positions, drawdown, Sharpe, win rate.
+    Pure disk read (account_metrics); no network. Empty accounts show at baseline
+    (equity == capital) until data accumulates."""
+    st.markdown("### Compare · all 25 accounts")
+    st.caption("Capital x N grid. Equity/return from the last daily snapshot "
+               "(baseline = starting capital until snapshots accrue). Win rate = "
+               "closed put campaigns that avoided assignment (CLOSE_PUT + "
+               "PUT_EXPIRED) / all closed put campaigns.")
+
+    rows = account_metrics()
+    df = pd.DataFrame(rows)
+
+    disp = pd.DataFrame({
+        "Account": df["label"],
+        "Capital": df["capital"].map(lambda v: f"${v:,.0f}"),
+        "N": df["n"],
+        "Equity": df["equity"].map(lambda v: _fmt(v)),
+        "Return": df["total_return_pct"].map(_return_html),
+        "Trades": df["n_trades"],
+        "Open": df["open_positions"],
+        "Max DD": df["max_drawdown_pct"].map(lambda v: f"{v:.2f}%"),
+        "Sharpe": df["sharpe"].map(lambda v: "—" if v is None else f"{v:.2f}"),
+        "Win rate": df["win_rate"].map(lambda v: "—" if v is None else f"{v*100:.0f}%"),
+    })
+    st.markdown(disp.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+
 def main():
     """Streamlit entry -- MUST be called on every run (app.py calls it; a cached
     import would render once then blank). One page per capital level; each page's
@@ -222,6 +258,7 @@ def main():
 
     pages = [st.Page(_page_fn(cap), title=f"{cap_label(cap)} account",
                      url_path=f"acct_{cap_label(cap)}") for cap in CAPITALS]
+    pages.append(st.Page(compare_page, title="Compare", url_path="compare"))
     st.navigation(pages).run()
 
 
