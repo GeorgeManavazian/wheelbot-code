@@ -2,6 +2,7 @@
 plus thin client-fetch wrappers. Data-only; no order code. py3.12 (.venv-live)."""
 from __future__ import annotations
 import datetime as dt
+import time
 import pandas as pd
 
 _CHAIN_COLS = ["date", "expiry", "strike", "right", "dte",
@@ -75,3 +76,15 @@ def chain_frame(client, ticker: str, target_dte: int, strike_count: int = 12,
     if r.status_code != 200:
         raise RuntimeError(f"{ticker} option_chain -> HTTP {r.status_code}")
     return chain_from_json(r.json(), obs_date or today)
+
+
+def throttle(fn, *args, retries: int = 2, backoff: float = 1.0, **kwargs):
+    """Call fn(*args, **kwargs); on a transient 429/502 Response, sleep and retry
+    up to `retries` times. Returns the final Response (caller checks status)."""
+    r = fn(*args, **kwargs)
+    attempts = 0
+    while getattr(r, "status_code", None) in (429, 502) and attempts < retries:
+        time.sleep(backoff)
+        r = fn(*args, **kwargs)
+        attempts += 1
+    return r
