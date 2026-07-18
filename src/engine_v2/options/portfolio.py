@@ -225,7 +225,8 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
 def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
                         clean_start: dict | None = None,
                         selector: str = "vol_pctile",
-                        n_slots: int = 1) -> PortfolioResult:
+                        n_slots: int = 1,
+                        universe: list | None = None) -> PortfolioResult:
     if selector not in ("vol_pctile", "chop"):
         raise ValueError(f"selector must be 'vol_pctile' or 'chop', got {selector!r}")
     if n_slots < 1:
@@ -234,18 +235,30 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
             cfg.liquidate_assignment or cfg.any_regime_gate:
         raise ValueError("portfolio supports the plain+basis wheel only — "
                          "roll/stop/gates/liquidate are solo mechanics")
-    universe = sorted(chains, key=lambda t: ROTATION_TIE_ORDER.index(t)
-                      if t in ROTATION_TIE_ORDER else len(ROTATION_TIE_ORDER))
-    for t in universe:
-        if t in RESERVED_TICKERS:
-            raise ValueError(f"{t} is a reserved one-shot ticker — never a "
-                             f"rotation universe member")
-        if t not in ROTATION_TIE_ORDER:
-            raise ValueError(f"{t} is not in the rotation universe "
-                             f"{ROTATION_TIE_ORDER}")
-        if t not in regime_states:
-            raise ValueError(f"universe member {t} has no regime_states — "
-                             f"routing without state is a bug, not a run")
+    if universe is None:
+        # DEFAULT: the validated 9-ticker rotation. Sort by fixed tie order and
+        # enforce the rotation/reserved/state allow-list.
+        universe = sorted(chains, key=lambda t: ROTATION_TIE_ORDER.index(t)
+                          if t in ROTATION_TIE_ORDER else len(ROTATION_TIE_ORDER))
+        for t in universe:
+            if t in RESERVED_TICKERS:
+                raise ValueError(f"{t} is a reserved one-shot ticker — never a "
+                                 f"rotation universe member")
+            if t not in ROTATION_TIE_ORDER:
+                raise ValueError(f"{t} is not in the rotation universe "
+                                 f"{ROTATION_TIE_ORDER}")
+            if t not in regime_states:
+                raise ValueError(f"universe member {t} has no regime_states — "
+                                 f"routing without state is a bug, not a run")
+    else:
+        # EXPANDED-BACKTEST: the passed list is the ordering + allow-list. Filter
+        # to tickers present in `chains` (preserving passed order); drop the
+        # rotation/reserved restrictions but keep the regime_states requirement.
+        universe = [t for t in universe if t in chains]
+        for t in universe:
+            if t not in regime_states:
+                raise ValueError(f"universe member {t} has no regime_states — "
+                                 f"routing without state is a bug, not a run")
     clean_start = {**DEFAULT_CLEAN_START, **(clean_start or {})}
 
     market = BatchMarket(chains, regime_states, clean_start, universe)
