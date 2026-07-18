@@ -26,3 +26,52 @@ def daily_closes(client, ticker: str) -> pd.Series:
     if r.status_code != 200:
         raise RuntimeError(f"{ticker} price_history -> HTTP {r.status_code}")
     return closes_from_json(r.json())
+
+
+def _num(v):
+    """float or None. Handles Schwab's 'NaN' string and actual NaN."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f
+
+
+def chain_from_json(payload: dict, obs_date) -> pd.DataFrame:
+    """Bounded PUT option-chain JSON -> engine chain rows. One row per contract;
+    skips illiquid placeholders (missing/NaN delta, or bid<=0, or ask<=0)."""
+    obs = pd.Timestamp(obs_date).normalize()
+    und = _num(payload.get("underlyingPrice"))
+    rows = []
+    for exp_key, strikes in (payload.get("putExpDateMap") or {}).items():
+        expiry = pd.Timestamp(exp_key.split(":")[0]).normalize()
+        for _strike_key, contracts in strikes.items():
+            ct = contracts[0]
+            delta = _num(ct.get("delta"))
+            bid, ask = _num(ct.get("bid")), _num(ct.get("ask"))
+            if delta is None or bid is None or ask is None or bid <= 0 or ask <= 0:
+                continue
+            rows.append({
+                "date": obs, "expiry": expiry,
+                "strike": float(ct["strikePrice"]), "right": "P",
+                "dte": int(ct["daysToExpiration"]), "delta": delta,
+                "bid": bid, "ask": ask, "mid": _num(ct.get("mark")),
+                "underlying": und,
+            })
+    return pd.DataFrame(rows, columns=_CHAIN_COLS)
+
+
+def chain_frame(client, ticker: str, target_dte: int, strike_count: int = 12,
+                obs_date=None) -> pd.DataFrame:
+    from schwab.client import Client
+    today = dt.date.today()
+    r = client.get_option_chain(
+        ticker,
+        contract_type=Client.Options.ContractType.PUT,
+        strike_count=strike_count,
+        from_date=today,
+        to_date=today + dt.timedelta(days=target_dte + 20),
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"{ticker} option_chain -> HTTP {r.status_code}")
+    return chain_from_json(r.json(), obs_date or today)

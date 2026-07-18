@@ -1,0 +1,54 @@
+import json
+import pandas as pd
+from live.data import chain_from_json, _CHAIN_COLS
+
+FIX = "live/fixtures/option_chain_gdx_puts.json"
+OBS = pd.Timestamp("2026-07-17")
+
+
+def _payload():
+    return json.load(open(FIX))
+
+
+def test_chain_exact_columns_and_types():
+    df = chain_from_json(_payload(), OBS)
+    assert list(df.columns) == _CHAIN_COLS
+    assert (df["right"] == "P").all()
+    assert (df["date"] == OBS).all()
+    assert (df["underlying"] == 71.32).all()
+    assert (df["delta"] < 0).all()              # puts are negative
+    assert (df["bid"] <= df["ask"]).all()
+    assert (df["bid"] > 0).all() and (df["ask"] > 0).all()   # placeholders skipped
+
+
+def test_chain_skips_zero_bid_placeholder():
+    # fixture's first contract (strike 66.0) has bid 0.0 -> must be absent
+    df = chain_from_json(_payload(), OBS)
+    zero_bid_66 = df[(df["strike"] == 66.0) & (df["dte"] == 0)]
+    assert len(zero_bid_66) == 0
+
+
+def test_chain_spot_check_a_live_contract():
+    # find the first contract in the fixture with bid>0 and verify its row maps 1:1
+    payload = _payload()
+    exp_key, strikes = next(iter(payload["putExpDateMap"].items()))
+    picked = None
+    for strike_key, contracts in strikes.items():
+        ct = contracts[0]
+        if ct["bid"] > 0 and ct["ask"] > 0 and ct["delta"] == ct["delta"]:
+            picked = (exp_key, ct); break
+    assert picked is not None, "fixture should contain a positive-bid put"
+    exp_key, ct = picked
+    df = chain_from_json(payload, OBS)
+    row = df[(df["expiry"] == pd.Timestamp(exp_key.split(":")[0]))
+             & (df["strike"] == float(ct["strikePrice"]))].iloc[0]
+    assert row["bid"] == ct["bid"]
+    assert row["ask"] == ct["ask"]
+    assert row["mid"] == ct["mark"]
+    assert row["delta"] == ct["delta"]
+    assert row["dte"] == ct["daysToExpiration"]
+
+
+def test_chain_empty_map():
+    df = chain_from_json({"underlyingPrice": 10.0, "putExpDateMap": {}}, OBS)
+    assert list(df.columns) == _CHAIN_COLS and len(df) == 0
