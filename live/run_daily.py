@@ -106,13 +106,18 @@ def main():
     print(f"{'account':<10}{'trades':>7}{'open':>6}{'cash':>13}{'equity':>13}")
     for (cap, n) in accounts:
         state, paths = loaded[(cap, n)]
-        os.makedirs(paths["dir"], exist_ok=True)
-        acfg = WheelConfig(ticker="SPY", starting_capital=float(cap), **FROZEN)
-        r = paper_step(state, market, acfg, n, paths["trades"], paths["state"],
-                       paths["snapshots"])
         label = "_smoke" if args.smoke else account_label(cap, n)
-        print(f"{label:<10}{len(r.trades):>7}{len(state.positions):>6}"
-              f"{state.cash:>13,.0f}{r.equity:>13,.0f}")
+        # isolate each account: one account's failure (bad chain, edge case) must not
+        # abort the other 24 for the day (silent multi-account gap in an unattended run).
+        try:
+            os.makedirs(paths["dir"], exist_ok=True)
+            acfg = WheelConfig(ticker="SPY", starting_capital=float(cap), **FROZEN)
+            r = paper_step(state, market, acfg, n, paths["trades"], paths["state"],
+                           paths["snapshots"])
+            print(f"{label:<10}{len(r.trades):>7}{len(state.positions):>6}"
+                  f"{state.cash:>13,.0f}{r.equity:>13,.0f}")
+        except Exception as e:
+            print(f"{label:<10} ERROR: {type(e).__name__}: {e} — skipped, others continue")
 
 
 def _paths(capital, n, smoke=False):

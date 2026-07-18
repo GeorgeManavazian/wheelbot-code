@@ -45,23 +45,26 @@ def main():
 
     total = 0
     for cap, n in all_accounts():
-        paths = account_paths(cap, n)
-        state = load_state(paths["state"])
-        if state is None or not state.positions:
-            continue
-        quotes = contract_quotes(client, state.positions)
-        if not quotes:
-            continue
-        trades = manage_intraday(state, quotes, cfg, now)
-        if not trades:
-            continue
-        save_state(state, paths["state"])          # state FIRST (source of truth)
-        with open(paths["trades"], "a") as f:
-            for t in trades:
-                f.write(json.dumps(_trade_row(t)) + "\n")
-        total += len(trades)
-        print(f"{account_label(cap, n)}: closed {len(trades)} at TP "
-              f"({', '.join(t.contract.root for t in trades)})")
+        try:
+            paths = account_paths(cap, n)
+            state = load_state(paths["state"])
+            if state is None or not state.positions:
+                continue
+            quotes = contract_quotes(client, state.positions)
+            if not quotes:
+                continue
+            trades = manage_intraday(state, quotes, cfg, now)
+            if not trades:
+                continue
+            save_state(state, paths["state"])          # state FIRST (source of truth)
+            with open(paths["trades"], "a") as f:
+                for t in trades:
+                    f.write(json.dumps(_trade_row(t)) + "\n")
+            total += len(trades)
+            print(f"{account_label(cap, n)}: closed {len(trades)} at TP "
+                  f"({', '.join(t.contract.root for t in trades)})")
+        except Exception as e:
+            print(f"{account_label(cap, n)}: ERROR {type(e).__name__}: {e} — skipped")
     print(f"intraday {now_et:%H:%M %Z} — {total} TP close(s) across 25 accounts")
 
 
