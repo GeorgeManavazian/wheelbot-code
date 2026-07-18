@@ -52,6 +52,7 @@ class WheelConfig:
     regime_roll_gate: bool = False    # mid-life roll denied in unpaid decline
     regime_stop_gate: bool = False    # put stop suppressed while vol == "stressed"
     conviction_trim: bool = False     # half-size trend HOLD entries in stressed vol (router only)
+    chop_max_ma_spread: float | None = None  # chop scanner: reject if |50d/200d-1| > this (default off)
 
     @property
     def any_regime_gate(self) -> bool:
