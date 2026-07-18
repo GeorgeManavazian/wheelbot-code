@@ -11,7 +11,7 @@ are approximate reference prices — variety is the point, not exact levels."""
 _LOW = [
     "GDX", "GDXJ", "SLV", "XOP", "EWZ", "EEM", "FXI", "USO", "KRE", "XLF",
     "KVUE", "F", "SOFI", "NIO", "RIG", "SNAP", "T", "BAC", "WFC", "PFE",
-    "INTC", "CSCO", "VALE", "GOLD", "CCL", "MARA", "RIOT", "CLSK", "HOOD",
+    "INTC", "CSCO", "VALE", "NEM", "CCL", "MARA", "RIOT", "CLSK", "HOOD",
     "LYFT", "AAL", "UAL", "PBR", "KGC", "AGNC", "NOK", "SIRI", "CLF", "X",
     "UPST", "CHPT", "GPRO", "BITO", "KMI", "PLUG", "AG", "HL", "SCCO",
 ]
@@ -20,7 +20,7 @@ _MID = [
     "GLD", "XBI", "XLE", "XLK", "SMH", "IWM", "DIA", "EFA", "TLT", "HYG",
     "LQD", "VWO", "VEA", "AMD", "BABA", "PYPL", "UBER", "DIS", "KO", "PEP",
     "CVX", "XOM", "WMT", "SBUX", "NKE", "C", "GM", "SNOW", "SHOP", "MRNA",
-    "ROKU", "PLTR", "MU", "SQ", "PINS", "DKNG", "CVS", "MO", "DAL", "OXY",
+    "ROKU", "PLTR", "MU", "XYZ", "PINS", "DKNG", "CVS", "MO", "DAL", "OXY",
 ]
 # High ($150-700+): only larger accounts reach these.
 _HIGH = [
