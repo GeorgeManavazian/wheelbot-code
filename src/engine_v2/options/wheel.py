@@ -53,7 +53,8 @@ class WheelConfig:
     regime_stop_gate: bool = False    # put stop suppressed while vol == "stressed"
     conviction_trim: bool = False     # half-size trend HOLD entries in stressed vol (router only)
     chop_max_ma_spread: float | None = None    # chop scanner: reject if |50d/200d-1| > this (default off)
-    chop_max_fast_spread: float | None = None  # chop scanner: reject if |9d/20d-1| > this (default off)
+    chop_max_fast_spread: float | None = None  # chop scanner: reject if |9d/20d-1| > this, symmetric (default off)
+    chop_max_fast_fall: float | None = None    # chop scanner: reject if 9d/20d-1 < -this, down-only (default off)
 
     @property
     def any_regime_gate(self) -> bool:

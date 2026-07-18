@@ -78,3 +78,26 @@ def test_fast_spread_guard_rejects_short_leg():
 def test_fast_spread_guard_default_off_ignores_fast():
     # no fast threshold -> fast_spread never consulted (old behavior preserved)
     assert is_good_renting_weather(_row3("chop", "normal", 0.017, 0.50)) is True
+
+
+# --- down-only tactical gate (2026-07-18): a put seller only fears a FALL, so
+# reject a down-leg but KEEP an up-leg (which expires the put worthless) ---
+def test_fast_fall_gate_rejects_down_leg():
+    # AA/VALE-like: 9d 5% below 20d -> falling -> reject
+    assert is_good_renting_weather(_row3("chop", "normal", 0.0, -0.05),
+                                   max_fast_fall=0.01) is False
+
+
+def test_fast_fall_gate_keeps_up_leg():
+    # AGNC/WFC-like: 9d 5% ABOVE 20d -> rising -> KEEP (put-seller's friend)
+    assert is_good_renting_weather(_row3("chop", "normal", 0.0, 0.05),
+                                   max_fast_fall=0.01) is True
+
+
+def test_fast_fall_gate_keeps_flat():
+    assert is_good_renting_weather(_row3("chop", "normal", 0.0, -0.001),
+                                   max_fast_fall=0.01) is True
+
+
+def test_fast_fall_gate_default_off():
+    assert is_good_renting_weather(_row3("chop", "normal", 0.0, -0.90)) is True
