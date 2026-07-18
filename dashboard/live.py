@@ -59,11 +59,20 @@ def _client():
     return get_client()
 
 
-def _pull_marks(positions):
-    """{ticker: mark} from live Schwab quotes; {} if closed/unauth/failed."""
-    try:
+def _pull_marks(positions, timeout=8.0):
+    """{ticker: mark} from live Schwab quotes; {} if closed/unauth/failed. Runs
+    the network call in a worker thread with a hard timeout so a hung Schwab
+    request (token refresh, closed market) can NEVER block the render thread --
+    that hang was what blanked the page. Called only on an explicit button press,
+    never from the auto-refresh path."""
+    import concurrent.futures as _cf
+
+    def _work():
         from live.marks import live_marks
         return live_marks(_client(), positions)
+    try:
+        with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(_work).result(timeout=timeout)
     except Exception:
         return {}
 
@@ -118,7 +127,9 @@ def board(refresh="15s"):
     cfg = _load_json(CONFIG, {"n": 5, "capital": 100000})
     snaps = _load_jsonl(SNAPS)
     positions = state.get("positions", [])
-    marks = _pull_marks(positions) if positions else {}
+    # marks come from session_state (populated by the sidebar "Pull live quotes"
+    # button) -- the render path NEVER hits the network, so it can't hang/blank.
+    marks = st.session_state.get("live_marks", {})
     any_live = len(marks) > 0
 
     rows, equity, total_unreal = _rows_and_equity(state, marks)
@@ -127,8 +138,9 @@ def board(refresh="15s"):
     total_pnl = equity - baseline
     day_pnl = equity - prev_equity
 
-    tag = ('<span class="tag live">● LIVE QUOTES</span>' if any_live
-           else '<span class="tag stale">◌ MARKET CLOSED — last marks</span>')
+    at = st.session_state.get("marks_at")
+    tag = (f'<span class="tag live">● LIVE QUOTES · {at}</span>' if any_live
+           else '<span class="tag stale">◌ last recorded marks — press “Pull live quotes”</span>')
     st.markdown(f"### Wheel Bot — Live Paper &nbsp; {tag}", unsafe_allow_html=True)
     st.caption(f"N={cfg.get('n')} slots · start ${baseline:,.0f} · "
                f"{len(positions)} open · updates every {refresh}")
@@ -178,10 +190,21 @@ def board(refresh="15s"):
 
 
 def _render():
-    # refresh control -- redefines the fragment's interval when changed
-    opt = st.sidebar.selectbox("Refresh", ["5s", "15s", "30s", "60s"], index=1) or "15s"
+    # Live-quote pull is an explicit, timeout-guarded action -- the ONLY place
+    # that touches the network. The board/auto-refresh reads local files only.
+    if st.sidebar.button("⟳ Pull live quotes", use_container_width=True):
+        state = _load_json(STATE, {"positions": []})
+        with st.spinner("Pulling Schwab quotes…"):
+            marks = _pull_marks(state.get("positions", []))
+        st.session_state["live_marks"] = marks
+        st.session_state["marks_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
+        if not marks:
+            st.sidebar.warning("No quotes (market closed or token expired).")
     st.sidebar.caption("Quotes are live only during market hours (Mon–Fri 9:30–4 ET). "
-                       "Off-hours the P&L holds at the last recorded mark.")
+                       "The board auto-refreshes from disk; press the button to mark "
+                       "positions against live quotes.")
+    # auto-refresh interval (re-reads local files; never the network)
+    opt = st.sidebar.selectbox("Auto-refresh", ["5s", "15s", "30s", "60s"], index=1) or "15s"
     st.fragment(run_every=opt)(board)(refresh=opt)
 
 
