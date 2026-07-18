@@ -176,7 +176,7 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                 pct = -1.0
             else:
                 pct = float(row["vol_pctile"])
-            candidates.append((-pct, ROTATION_TIE_ORDER.index(tk), tk, c, mark, n))
+            candidates.append((-pct, market.universe.index(tk), tk, c, mark, n))
         if not candidates:
             break
         candidates.sort()
