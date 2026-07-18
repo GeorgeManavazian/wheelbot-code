@@ -40,7 +40,8 @@ def manage_intraday(state, quotes, cfg, now):
             state.cash -= cost
             pos["premium"] -= cost
             action = "CLOSE_PUT" if _contract_field(c, "right") == "P" else "CLOSE_CALL"
-            trades.append(Trade(today, action, c, n, mark.ask, state.cash, pos["campaign"]))
+            trades.append(Trade(pd.Timestamp(now), action, c, n, mark.ask,
+                                state.cash, pos["campaign"]))
             pos["short"] = None
     # drop positions emptied down to a bare PUT slot (same rule as step_one_day)
     state.positions[:] = [p for p in state.positions

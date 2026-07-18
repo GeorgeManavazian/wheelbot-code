@@ -45,7 +45,8 @@ def live_marks(client, positions) -> dict:
         if not short:
             continue
         c = short["contract"]
-        sym = occ_symbol(c["root"], c["expiry"], c["strike"], c["right"])
+        sym = occ_symbol(_contract_field(c, "root"), _contract_field(c, "expiry"),
+                         _contract_field(c, "strike"), _contract_field(c, "right"))
         legs[sym] = p["ticker"]
     if not legs:
         return {}
@@ -100,7 +101,10 @@ def contract_quotes(client, positions) -> dict:
             continue
         node = q.get("quote", q) if isinstance(q, dict) else {}
         bid, ask = node.get("bidPrice"), node.get("askPrice")
-        if bid is None or ask is None:
+        # require a real two-sided quote -- a 0/0 (halt, pre-open, thin option) would
+        # otherwise mark ask=0, and the intraday TP check (ask <= (1-TP)*credit) would
+        # fire and "close" the leg for free. Matches the EOD chain's bid>0 & ask>0 filter.
+        if bid is None or ask is None or bid <= 0 or ask <= 0:
             continue
         mk = node.get("mark")
         mid = float(mk) if mk else (float(bid) + float(ask)) / 2.0

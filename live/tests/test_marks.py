@@ -59,3 +59,17 @@ def test_contract_quotes_returns_bid_ask_mark():
     assert abs(m.mid - 0.39) < 1e-9          # midpoint when no exchange mark
     # missing bid/ask -> skipped
     assert contract_quotes(_FakeClient({"AGNC  260815P00011000": {"quote": {}}}), positions) == {}
+
+
+def test_contract_quotes_skips_zero_quote():
+    # C1 regression: a 0/0 two-sided quote (halt / pre-open / thin option) must be
+    # SKIPPED, not returned as Mark(0,0,0) — else the intraday TP check closes for free.
+    positions = [{"ticker": "AGNC", "short": {"contract": {"root": "AGNC",
+                 "expiry": "2026-08-15", "strike": 11.0, "right": "P"}}}]
+    sym = "AGNC  260815P00011000"
+    assert contract_quotes(_FakeClient({sym: {"quote": {"bidPrice": 0.0, "askPrice": 0.0}}}), positions) == {}
+    # one-sided zero (bid 0, ask 0.05) also skipped — matches EOD bid>0 & ask>0 filter
+    assert contract_quotes(_FakeClient({sym: {"quote": {"bidPrice": 0.0, "askPrice": 0.05}}}), positions) == {}
+    # a real two-sided quote still comes through
+    out = contract_quotes(_FakeClient({sym: {"quote": {"bidPrice": 0.10, "askPrice": 0.12}}}), positions)
+    assert out["AGNC"].ask == 0.12

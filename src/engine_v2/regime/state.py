@@ -25,7 +25,8 @@ def regime_series(closes: pd.Series) -> pd.DataFrame:
     c = closes.dropna().astype(float)
     if len(c) <= WARMUP:
         return pd.DataFrame(columns=["trend","vol","px_vs_200","px_vs_50",
-                                     "ma50_vs_200","drawdown","realized_vol","vol_pctile"])
+                                     "ma50_vs_200","fast_spread","drawdown",
+                                     "realized_vol","vol_pctile"])
     sma50, sma200 = c.rolling(50).mean(), c.rolling(200).mean()
     sma9, sma20 = c.rolling(9).mean(), c.rolling(20).mean()   # short-horizon (~2wk)
     logret = np.log(c / c.shift(1))
