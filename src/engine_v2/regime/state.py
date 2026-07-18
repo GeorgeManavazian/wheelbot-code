@@ -56,10 +56,21 @@ def describe(row) -> str:
             f"{row['vol']} vol ({row['vol_pctile']:.0%} pctile), "
             f"{abs(row['drawdown']):.1%} off 252d high.")
 
-def is_good_renting_weather(row) -> bool:
+def is_good_renting_weather(row, max_ma_spread=None) -> bool:
     """Good-to-rent weather for the chop scanner: range-bound (chop) and not
     violently volatile (not stressed). Uptrends (hold instead) and downtrends
-    (falling knife) are excluded; a None/unknown row is not good-to-rent."""
+    (falling knife) are excluded; a None/unknown row is not good-to-rent.
+
+    max_ma_spread (opt-in, default None = off so the backtest stays byte-
+    identical): also require |50d/200d - 1| <= max_ma_spread. The bare crossover
+    labels a fast move "chop" until the 50d catches through the 200d, so a
+    crashing or freshly-rallying name (MAs pulling apart, price on the far side)
+    slips through as chop. A tight MA spread means the trend structure is
+    genuinely flat; a wide one means a trend is forming -> not true chop."""
     if row is None:
         return False
-    return row["trend"] == "chop" and row["vol"] != "stressed"
+    if row["trend"] != "chop" or row["vol"] == "stressed":
+        return False
+    if max_ma_spread is not None and abs(row["ma50_vs_200"]) > max_ma_spread:
+        return False
+    return True

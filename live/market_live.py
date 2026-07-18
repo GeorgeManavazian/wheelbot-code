@@ -11,9 +11,11 @@ from src.engine_v2.options.market import _row_before
 
 
 class LiveMarket:
-    def __init__(self, universe, held_tickers, obs_date, *, closes_fn, chain_fn):
+    def __init__(self, universe, held_tickers, obs_date, *, closes_fn, chain_fn,
+                 chop_max_ma_spread=None):
         self._universe = list(universe)
         self._obs = pd.Timestamp(obs_date).normalize()
+        self._chop_max_ma_spread = chop_max_ma_spread
         self._closes = {}   # ticker -> close Series
         self._rows = {}     # ticker -> prior-day regime row (or None)
         self._chains = {}   # ticker -> chain df (only pulled ones)
@@ -29,7 +31,7 @@ class LiveMarket:
                 continue                                          # regime_series raise)
             self._closes[tk] = s
             self._rows[tk] = row
-            if is_good_renting_weather(row):
+            if is_good_renting_weather(row, self._chop_max_ma_spread):
                 good.add(tk)
 
         for tk in (set(held_tickers) | good) & set(self._closes):
