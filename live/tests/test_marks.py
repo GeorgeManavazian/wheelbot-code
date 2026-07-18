@@ -1,4 +1,4 @@
-from live.marks import occ_symbol, _mark_from_quote, live_marks
+from live.marks import occ_symbol, _mark_from_quote, live_marks, contract_quotes
 
 
 def test_occ_symbol_format():
@@ -47,3 +47,15 @@ def test_live_marks_empty_on_failure():
                  "expiry": "2026-08-15", "strike": 11.0, "right": "P"}}}]
     assert live_marks(Boom(), positions) == {}
     assert live_marks(_FakeClient({}), []) == {}
+
+
+def test_contract_quotes_returns_bid_ask_mark():
+    positions = [{"ticker": "AGNC", "short": {"contract": {"root": "AGNC",
+                 "expiry": "2026-08-15", "strike": 11.0, "right": "P"}}}]
+    quotes = {"AGNC  260815P00011000": {"quote": {"bidPrice": 0.38, "askPrice": 0.40}}}
+    out = contract_quotes(_FakeClient(quotes), positions)
+    m = out["AGNC"]
+    assert (m.bid, m.ask) == (0.38, 0.40)
+    assert abs(m.mid - 0.39) < 1e-9          # midpoint when no exchange mark
+    # missing bid/ask -> skipped
+    assert contract_quotes(_FakeClient({"AGNC  260815P00011000": {"quote": {}}}), positions) == {}
