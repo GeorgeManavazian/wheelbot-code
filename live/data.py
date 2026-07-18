@@ -23,7 +23,7 @@ def closes_from_json(payload: dict) -> pd.Series:
 
 
 def daily_closes(client, ticker: str) -> pd.Series:
-    r = client.get_price_history_every_day(ticker)
+    r = throttle(client.get_price_history_every_day, ticker)   # transient 429/502 retry
     if r.status_code != 200:
         raise RuntimeError(f"{ticker} price_history -> HTTP {r.status_code}")
     return closes_from_json(r.json())
@@ -43,36 +43,49 @@ def chain_from_json(payload: dict, obs_date) -> pd.DataFrame:
     skips illiquid placeholders (missing/NaN delta, or bid<=0, or ask<=0)."""
     obs = pd.Timestamp(obs_date).normalize()
     und = _num(payload.get("underlyingPrice"))
+    if und is None:
+        # Without a usable underlying price the whole chain is unmarkable; raise
+        # so the caller (LiveMarket) skips this ONE ticker instead of producing
+        # rows with underlying=None that crash step_one_day for the whole run.
+        raise ValueError("option chain payload has no usable underlyingPrice")
+    rows = (_rows_for(payload.get("putExpDateMap"), "P", obs, und)
+            + _rows_for(payload.get("callExpDateMap"), "C", obs, und))
+    return pd.DataFrame(rows, columns=_CHAIN_COLS)
+
+
+def _rows_for(exp_map, right, obs, und):
+    """Flatten one side (put or call) of Schwab's expDateMap to engine rows."""
     rows = []
-    for exp_key, strikes in (payload.get("putExpDateMap") or {}).items():
+    for exp_key, strikes in (exp_map or {}).items():
         expiry = pd.Timestamp(exp_key.split(":")[0]).normalize()
         for _strike_key, contracts in strikes.items():
             ct = contracts[0]
             delta = _num(ct.get("delta"))
-            bid, ask = _num(ct.get("bid")), _num(ct.get("ask"))
-            if delta is None or bid is None or ask is None or bid <= 0 or ask <= 0:
+            bid, ask, mid = _num(ct.get("bid")), _num(ct.get("ask")), _num(ct.get("mark"))
+            # skip illiquid/placeholder contracts (missing delta/mark or no market)
+            if delta is None or bid is None or ask is None or mid is None \
+                    or bid <= 0 or ask <= 0:
                 continue
             rows.append({
                 "date": obs, "expiry": expiry,
-                "strike": float(ct["strikePrice"]), "right": "P",
+                "strike": float(ct["strikePrice"]), "right": right,
                 "dte": int(ct["daysToExpiration"]), "delta": delta,
-                "bid": bid, "ask": ask, "mid": _num(ct.get("mark")),
-                "underlying": und,
+                "bid": bid, "ask": ask, "mid": mid, "underlying": und,
             })
-    return pd.DataFrame(rows, columns=_CHAIN_COLS)
+    return rows
 
 
 def chain_frame(client, ticker: str, target_dte: int, strike_count: int = 12,
                 obs_date=None) -> pd.DataFrame:
     from schwab.client import Client
     today = dt.date.today()
-    r = client.get_option_chain(
-        ticker,
-        contract_type=Client.Options.ContractType.PUT,
-        strike_count=strike_count,
-        from_date=today,
-        to_date=today + dt.timedelta(days=target_dte + 20),
-    )
+    # ALL: the wheel needs PUTS (entry) AND CALLS (covered-call leg after
+    # assignment). Bounded by strike_count + date window (the full chain 502s).
+    # Wrapped in throttle for transient 429/502 retry.
+    r = throttle(client.get_option_chain, ticker,
+                 contract_type=Client.Options.ContractType.ALL,
+                 strike_count=strike_count, from_date=today,
+                 to_date=today + dt.timedelta(days=target_dte + 20))
     if r.status_code != 200:
         raise RuntimeError(f"{ticker} option_chain -> HTTP {r.status_code}")
     return chain_from_json(r.json(), obs_date or today)

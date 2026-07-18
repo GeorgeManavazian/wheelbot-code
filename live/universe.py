@@ -12,7 +12,7 @@ _LOW = [
     "GDX", "GDXJ", "SLV", "XOP", "EWZ", "EEM", "FXI", "USO", "KRE", "XLF",
     "KVUE", "F", "SOFI", "NIO", "RIG", "SNAP", "T", "BAC", "WFC", "PFE",
     "INTC", "CSCO", "VALE", "NEM", "CCL", "MARA", "RIOT", "CLSK", "HOOD",
-    "LYFT", "AAL", "UAL", "PBR", "KGC", "AGNC", "NOK", "SIRI", "CLF", "X",
+    "LYFT", "AAL", "UAL", "PBR", "KGC", "AGNC", "NOK", "SIRI", "CLF", "AA",
     "UPST", "CHPT", "GPRO", "BITO", "KMI", "PLUG", "AG", "HL", "SCCO",
 ]
 # Mid ($50-150).
