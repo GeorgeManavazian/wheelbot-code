@@ -28,14 +28,23 @@ in_market_hours(){   # weekday 09:30-16:00 ET -> park (Theta throttles)
   [ "$dow" -le 5 ] && [ "$hm" -ge 930 ] && [ "$hm" -le 1600 ]
 }
 
+# never compete with the resilient pull for ThetaData's 4 slots (429 storm) --
+# yield the whole terminal to it and wait.
+yield_to_resilient(){
+  while pgrep -f "pull_resilient.sh|pull_supervisor.sh" >/dev/null 2>&1; do
+    log "resilient pull active — yielding, wait 5min"; sleep 300
+  done
+}
+
 log "=== EXPANSION PULL START (${#TICKERS[@]} tickers, start-year $SY) ==="
 for t in $TICKERS; do
   dest="data/options/${t:l}_greeks_eod_all.parquet"
   if [ -f "$dest" ]; then log "$t already concatted — skip"; continue; fi
+  yield_to_resilient
   while in_market_hours; do log "$t: market hours — parked 5min"; sleep 300; done
   log "$t: pulling…"
   PYTHONPATH="$REPO" .venv/bin/python -m scripts.pull_spy_all --symbol "$t" \
-    --out-dir "$OUT" --start-year $SY --strike-range $SR --window-days $WD --workers 4 \
+    --out-dir "$OUT" --start-year $SY --strike-range $SR --window-days $WD --workers 3 \
     >> "$LOG" 2>&1
   PYTHONPATH="$REPO" .venv/bin/python -m scripts.pull_spy_all --symbol "$t" \
     --out-dir "$OUT" --concat >> "$LOG" 2>&1 \
