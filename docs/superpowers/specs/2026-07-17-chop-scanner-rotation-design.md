@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-17
 **Project:** Chop-scanner rotation (new strategy) — `code/etf-bot`
-**Status:** design, pending implementation plan
+**Status:** BUILT + SHIPPED; **weather definition has since EVOLVED.** This spec's `is_good_renting_weather` is the *base* layer only (50/200 trend + vol). The live bot added a short-horizon **9/20 fast-spread gate** (down-only, `chop_max_fast_fall`) on top, 2026-07-18 — see vault `10 Live Paper Bot/How the weather works` and `docs/superpowers/AUDIT-live-bot-additions-2026-07-18.md`. Read those for the current rule; this doc is the original design.
 **Depends on / consumes:** the portfolio rotation engine (`src/engine_v2/options/portfolio.py`, `run_portfolio_wheel`), the regime state module (`src/engine_v2/regime/state.py`, `regime/data.py`), the plain+basis wheel mechanics (`wheel.py`, `select.py`), the rotation runner (`scripts/run_portfolio_rotation.py`).
 
 ## Problem
