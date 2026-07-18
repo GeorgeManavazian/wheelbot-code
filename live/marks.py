@@ -8,6 +8,8 @@ the entry credit + flags the quote stale. It NEVER guesses a price."""
 from __future__ import annotations
 import pandas as pd
 
+from src.engine_v2.options.chain import Mark
+
 
 def occ_symbol(root: str, expiry, strike: float, right: str) -> str:
     """Schwab/OCC option symbol: root left-justified to 6 chars, YYMMDD expiry,
@@ -62,4 +64,45 @@ def live_marks(client, positions) -> dict:
         m = _mark_from_quote(q)
         if m is not None:
             out[tk] = m
+    return out
+
+
+def _contract_field(c, name):
+    return getattr(c, name) if hasattr(c, name) else c[name]
+
+
+def contract_quotes(client, positions) -> dict:
+    """{ticker: Mark(bid,ask,mid)} live for each held short leg -- the full bid/ask
+    the intraday TP check + buy_cost need (live_marks returns only a single mark).
+    One batched quote pull; {} on any failure; skips a leg missing bid or ask."""
+    sym_to_tk = {}
+    for p in positions:
+        short = p.get("short")
+        if not short:
+            continue
+        c = short["contract"]
+        sym = occ_symbol(_contract_field(c, "root"), _contract_field(c, "expiry"),
+                         _contract_field(c, "strike"), _contract_field(c, "right"))
+        sym_to_tk[sym] = p["ticker"]
+    if not sym_to_tk:
+        return {}
+    try:
+        resp = client.get_quotes(list(sym_to_tk))
+        data = resp.json() if hasattr(resp, "json") else resp
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for sym, tk in sym_to_tk.items():
+        q = data.get(sym)
+        if not q:
+            continue
+        node = q.get("quote", q) if isinstance(q, dict) else {}
+        bid, ask = node.get("bidPrice"), node.get("askPrice")
+        if bid is None or ask is None:
+            continue
+        mk = node.get("mark")
+        mid = float(mk) if mk else (float(bid) + float(ask)) / 2.0
+        out[tk] = Mark(float(bid), float(ask), mid)
     return out
