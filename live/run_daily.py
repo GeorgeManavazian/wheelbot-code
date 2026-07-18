@@ -23,10 +23,12 @@ SNAPSHOTS_PATH = "data/live/snapshots.jsonl"
 
 FROZEN = dict(put_delta=0.30, call_delta=0.50, target_dte=11,
               take_profit_pct=0.60, call_min_strike="basis",
-              # rent only names flat on BOTH timescales (2026-07-18):
-              #   structural: |50d/200d-1| <= 3%  (no big trend / knife)
-              #   tactical:   |9d/20d-1|  <= 1%   (no live leg over our ~11d hold)
-              chop_max_ma_spread=0.03, chop_max_fast_spread=0.01)
+              # DOWN-ONLY tactical gate (A/B'd 2026-07-18): reject only a FALLING
+              # short-horizon leg (9d/20d < -1%). A put seller loses on a fall, not
+              # a rise, so keep up-legs (winners). The symmetric + structural gates
+              # backtested worse (symmetric -71% P&L, structural went negative) and
+              # were dropped. Guards the AA/VALE falling-knife names.
+              chop_max_fast_fall=0.01)
 
 
 def _trade_row(t):
@@ -58,7 +60,7 @@ def paper_step(state, market, cfg, n_slots, trades_path, state_path,
 
 
 def _live_market(universe, held, obs, client, target_dte, chop_max_ma_spread=None,
-                 chop_max_fast_spread=None):
+                 chop_max_fast_spread=None, chop_max_fast_fall=None):
     from live.data import daily_closes, chain_frame
     # pass obs into chain_frame so the chain's `date` column == the run's obs day
     # (else a midnight-crossing run stamps chains with a different date than the
@@ -67,7 +69,8 @@ def _live_market(universe, held, obs, client, target_dte, chop_max_ma_spread=Non
                       closes_fn=lambda tk: daily_closes(client, tk),
                       chain_fn=lambda tk: chain_frame(client, tk, target_dte, obs_date=obs),
                       chop_max_ma_spread=chop_max_ma_spread,
-                      chop_max_fast_spread=chop_max_fast_spread)
+                      chop_max_fast_spread=chop_max_fast_spread,
+                      chop_max_fast_fall=chop_max_fast_fall)
 
 
 def main():
@@ -93,7 +96,8 @@ def main():
     cfg = WheelConfig(ticker="SPY", starting_capital=capital, **FROZEN)
 
     market = _live_market(universe, held, obs, client, cfg.target_dte,
-                          cfg.chop_max_ma_spread, cfg.chop_max_fast_spread)
+                          cfg.chop_max_ma_spread, cfg.chop_max_fast_spread,
+                          cfg.chop_max_fast_fall)
     if market.skipped:
         print(f"skipped {len(market.skipped)} tickers (pull failures): "
               f"{[s[0] for s in market.skipped][:8]}")

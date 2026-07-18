@@ -58,19 +58,21 @@ def describe(row) -> str:
             f"{row['vol']} vol ({row['vol_pctile']:.0%} pctile), "
             f"{abs(row['drawdown']):.1%} off 252d high.")
 
-def is_good_renting_weather(row, max_ma_spread=None, max_fast_spread=None) -> bool:
+def is_good_renting_weather(row, max_ma_spread=None, max_fast_spread=None,
+                            max_fast_fall=None) -> bool:
     """Good-to-rent weather for the chop scanner: range-bound (chop) and not
     violently volatile (not stressed). Uptrends (hold instead) and downtrends
     (falling knife) are excluded; a None/unknown row is not good-to-rent.
 
-    Two opt-in guards (default None = off so the backtest stays byte-identical),
-    each on a different timescale -- a name must be flat on BOTH to rent:
+    Opt-in guards (default None = off so the backtest stays byte-identical):
       max_ma_spread  -- |50d/200d - 1| <= this. STRUCTURAL (months): the bare
         crossover labels a fast move "chop" until the 50d catches through the
         200d, so a knife mid-fall (MAs pulling apart) slips through. Tight = flat.
-      max_fast_spread -- |9d/20d - 1| <= this. TACTICAL (~2wk, matches the ~11d
-        hold): catches a live directional leg the 50/200 view calls flat (a name
-        that ranges over months but legs directionally over our window)."""
+      max_fast_spread -- |9d/20d - 1| <= this. TACTICAL, SYMMETRIC (~2wk): rejects
+        any short-horizon leg, up or down.
+      max_fast_fall  -- reject only if 9d/20d - 1 < -this. TACTICAL, DOWN-ONLY: a
+        put seller only loses on a FALL, so drop a down-leg but KEEP an up-leg
+        (which expires the put worthless). Prefer this over max_fast_spread."""
     if row is None:
         return False
     if row["trend"] != "chop" or row["vol"] == "stressed":
@@ -78,5 +80,7 @@ def is_good_renting_weather(row, max_ma_spread=None, max_fast_spread=None) -> bo
     if max_ma_spread is not None and abs(row["ma50_vs_200"]) > max_ma_spread:
         return False
     if max_fast_spread is not None and abs(row["fast_spread"]) > max_fast_spread:
+        return False
+    if max_fast_fall is not None and row["fast_spread"] < -max_fast_fall:
         return False
     return True
