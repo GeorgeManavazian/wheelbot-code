@@ -20,11 +20,7 @@ DATA = Path("data/live")
 STATE, TRADES, SNAPS, CONFIG = (DATA / "state.json", DATA / "trades.jsonl",
                                 DATA / "snapshots.jsonl", DATA / "config.json")
 
-st.set_page_config(page_title="Wheel Bot — Live", layout="wide",
-                   initial_sidebar_state="collapsed")
-
-# --- TOS-ish dark skin ---
-st.markdown("""<style>
+_CSS = """<style>
   .stApp { background:#0b0e11; color:#d1d4dc; }
   .block-container { padding-top:1.2rem; max-width:1500px; }
   h1,h2,h3 { color:#e6e9ef; font-weight:600; }
@@ -36,7 +32,7 @@ st.markdown("""<style>
      font-family:'SF Mono',Menlo,monospace; }
   .live { background:#0d3b2e; color:#26a69a; } .stale { background:#33261a; color:#e0a458; }
   table { font-family:'SF Mono',Menlo,monospace !important; font-size:.86rem; }
-</style>""", unsafe_allow_html=True)
+</style>"""
 
 
 def _load_json(p, default):
@@ -189,7 +185,14 @@ def board(refresh="15s"):
         st.caption("No trades yet.")
 
 
-def _render():
+def main():
+    """The render entry -- MUST be called from the Streamlit entry script on
+    every run. (app.py calls it; a cached `import` would render only once and
+    then blank, which is exactly the bug this replaced.) set_page_config +
+    CSS run here so they re-apply on every rerun, not just the first import."""
+    st.set_page_config(page_title="Wheel Bot — Live", layout="wide",
+                       initial_sidebar_state="collapsed")
+    st.markdown(_CSS, unsafe_allow_html=True)
     # Live-quote pull is an explicit, timeout-guarded action -- the ONLY place
     # that touches the network. The board/auto-refresh reads local files only.
     if st.sidebar.button("⟳ Pull live quotes", use_container_width=True):
@@ -208,12 +211,8 @@ def _render():
     st.fragment(run_every=opt)(board)(refresh=opt)
 
 
-# render under `streamlit run`; stay silent on a plain import (so the money-math
-# helpers above can be imported and unit-tested without a Streamlit runtime).
-try:
-    from streamlit.runtime import exists as _rt_exists
-    _in_runtime = _rt_exists()
-except Exception:
-    _in_runtime = False
-if _in_runtime:
-    _render()
+# Direct entry: `streamlit run dashboard/live.py`. When app.py is the entry it
+# imports and calls main() itself. A plain `import` (unit tests) does neither,
+# so the money-math helpers above import without a Streamlit runtime.
+if __name__ == "__main__":
+    main()

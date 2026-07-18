@@ -4,5 +4,8 @@
 
 The old backtest workbench (Run / Wheel / Chameleon / Regime / History) is
 retired; its view modules still sit in dashboard/views/ but are no longer wired
-in. Importing dashboard.live renders the live paper-trading monitor."""
-from dashboard import live  # noqa: F401  (renders on import)
+in. main() must be CALLED on every rerun -- a cached import would render only
+the first run and then blank."""
+from dashboard.live import main
+
+main()
