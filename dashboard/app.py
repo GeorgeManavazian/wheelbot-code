@@ -1,14 +1,8 @@
-"""Entry point:  .venv/bin/python -m streamlit run dashboard/app.py
-Run from the repo root."""
-import streamlit as st
-from dashboard.views import chameleon, regime, run, universal_wheel, wheel_history
+"""Wheel Bot live monitor -- entry point.
 
-st.set_page_config(page_title="ETF Bot Workbench", layout="wide")
-pg = st.navigation([
-    st.Page(run.render, title="Run", url_path="run", default=True),
-    st.Page(universal_wheel.render, title="Wheel", url_path="universal_wheel"),
-    st.Page(chameleon.render, title="Chameleon", url_path="chameleon"),
-    st.Page(regime.render, title="Regime", url_path="regime"),
-    st.Page(wheel_history.render, title="History", url_path="history"),
-])
-pg.run()
+  .venv-live/bin/python -m streamlit run dashboard/app.py
+
+The old backtest workbench (Run / Wheel / Chameleon / Regime / History) is
+retired; its view modules still sit in dashboard/views/ but are no longer wired
+in. Importing dashboard.live renders the live paper-trading monitor."""
+from dashboard import live  # noqa: F401  (renders on import)
