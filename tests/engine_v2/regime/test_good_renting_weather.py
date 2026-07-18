@@ -54,3 +54,27 @@ def test_ma_spread_guard_default_off_is_unchanged():
     # no threshold -> old behavior; ma50_vs_200 is never consulted (may be absent)
     assert is_good_renting_weather(_row2("chop", "normal", 0.50)) is True
     assert is_good_renting_weather({"trend": "chop", "vol": "normal"}) is True
+
+
+def _row3(trend, vol, ma50_vs_200, fast_spread):
+    return {"trend": trend, "vol": vol, "ma50_vs_200": ma50_vs_200,
+            "fast_spread": fast_spread}
+
+
+# --- fast (9/20) spread guard (2026-07-18): flat on the ~2-week horizon that
+# matches our ~11-day hold. Catches tactical legs the 50/200 view calls flat ---
+def test_fast_spread_guard_keeps_short_flat():
+    # BA-like: 9d/20d only -0.1% apart -> flat over our window -> keep
+    assert is_good_renting_weather(_row3("chop", "normal", 0.017, -0.001),
+                                   max_ma_spread=0.03, max_fast_spread=0.01) is True
+
+
+def test_fast_spread_guard_rejects_short_leg():
+    # AGNC-like: 50/200 flat (-0.3%) but 9/20 +2.1% -> a live up-leg -> reject
+    assert is_good_renting_weather(_row3("chop", "normal", -0.003, 0.021),
+                                   max_ma_spread=0.03, max_fast_spread=0.01) is False
+
+
+def test_fast_spread_guard_default_off_ignores_fast():
+    # no fast threshold -> fast_spread never consulted (old behavior preserved)
+    assert is_good_renting_weather(_row3("chop", "normal", 0.017, 0.50)) is True
