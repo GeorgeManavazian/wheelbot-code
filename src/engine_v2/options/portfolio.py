@@ -159,7 +159,8 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                 continue
             row = market.regime_row(tk, d)
             if selector == "chop":
-                if not is_good_renting_weather(row, cfg.chop_max_ma_spread):
+                if not is_good_renting_weather(row, cfg.chop_max_ma_spread,
+                                               cfg.chop_max_fast_spread):
                     continue
             else:
                 if row is not None and is_unpaid_decline(row["trend"], row["vol"]):

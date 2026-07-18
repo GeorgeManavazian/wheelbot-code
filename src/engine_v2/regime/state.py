@@ -27,6 +27,7 @@ def regime_series(closes: pd.Series) -> pd.DataFrame:
         return pd.DataFrame(columns=["trend","vol","px_vs_200","px_vs_50",
                                      "ma50_vs_200","drawdown","realized_vol","vol_pctile"])
     sma50, sma200 = c.rolling(50).mean(), c.rolling(200).mean()
+    sma9, sma20 = c.rolling(9).mean(), c.rolling(20).mean()   # short-horizon (~2wk)
     logret = np.log(c / c.shift(1))
     rv = logret.rolling(VOL_WINDOW).std() * np.sqrt(252)
     # percentile of today's realized vol within its own trailing window
@@ -36,6 +37,7 @@ def regime_series(closes: pd.Series) -> pd.DataFrame:
         "px_vs_200": c / sma200 - 1,
         "px_vs_50": c / sma50 - 1,
         "ma50_vs_200": sma50 / sma200 - 1,
+        "fast_spread": sma9 / sma20 - 1,   # 9d/20d gap: ~0 = flat over our hold
         "drawdown": c / high - 1,
         "realized_vol": rv,
         "vol_pctile": pct,
@@ -46,7 +48,7 @@ def regime_series(closes: pd.Series) -> pd.DataFrame:
     df["vol"] = np.where(df["vol_pctile"] < CALM, "calm",
                 np.where(df["vol_pctile"] > STRESSED, "stressed", "normal"))
     df = df.iloc[WARMUP:].dropna(subset=["px_vs_200", "vol_pctile"])
-    return df[["trend","vol","px_vs_200","px_vs_50","ma50_vs_200",
+    return df[["trend","vol","px_vs_200","px_vs_50","ma50_vs_200","fast_spread",
                "drawdown","realized_vol","vol_pctile"]]
 
 def describe(row) -> str:
@@ -56,21 +58,25 @@ def describe(row) -> str:
             f"{row['vol']} vol ({row['vol_pctile']:.0%} pctile), "
             f"{abs(row['drawdown']):.1%} off 252d high.")
 
-def is_good_renting_weather(row, max_ma_spread=None) -> bool:
+def is_good_renting_weather(row, max_ma_spread=None, max_fast_spread=None) -> bool:
     """Good-to-rent weather for the chop scanner: range-bound (chop) and not
     violently volatile (not stressed). Uptrends (hold instead) and downtrends
     (falling knife) are excluded; a None/unknown row is not good-to-rent.
 
-    max_ma_spread (opt-in, default None = off so the backtest stays byte-
-    identical): also require |50d/200d - 1| <= max_ma_spread. The bare crossover
-    labels a fast move "chop" until the 50d catches through the 200d, so a
-    crashing or freshly-rallying name (MAs pulling apart, price on the far side)
-    slips through as chop. A tight MA spread means the trend structure is
-    genuinely flat; a wide one means a trend is forming -> not true chop."""
+    Two opt-in guards (default None = off so the backtest stays byte-identical),
+    each on a different timescale -- a name must be flat on BOTH to rent:
+      max_ma_spread  -- |50d/200d - 1| <= this. STRUCTURAL (months): the bare
+        crossover labels a fast move "chop" until the 50d catches through the
+        200d, so a knife mid-fall (MAs pulling apart) slips through. Tight = flat.
+      max_fast_spread -- |9d/20d - 1| <= this. TACTICAL (~2wk, matches the ~11d
+        hold): catches a live directional leg the 50/200 view calls flat (a name
+        that ranges over months but legs directionally over our window)."""
     if row is None:
         return False
     if row["trend"] != "chop" or row["vol"] == "stressed":
         return False
     if max_ma_spread is not None and abs(row["ma50_vs_200"]) > max_ma_spread:
+        return False
+    if max_fast_spread is not None and abs(row["fast_spread"]) > max_fast_spread:
         return False
     return True
