@@ -18,6 +18,7 @@ from live.universe import UNIVERSE
 
 STATE_PATH = "data/live/state.json"
 TRADES_PATH = "data/live/trades.jsonl"
+SNAPSHOTS_PATH = "data/live/snapshots.jsonl"
 
 FROZEN = dict(put_delta=0.30, call_delta=0.50, target_dte=11,
               take_profit_pct=0.60, call_min_strike="basis")
@@ -32,7 +33,8 @@ def _trade_row(t):
             "campaign": t.campaign_id}
 
 
-def paper_step(state, market, cfg, n_slots, trades_path, state_path):
+def paper_step(state, market, cfg, n_slots, trades_path, state_path,
+               snapshot_path=None):
     day = market._obs
     result = step_one_day(state, market, day, cfg, selector="chop", n_slots=n_slots)
     os.makedirs(os.path.dirname(trades_path) or ".", exist_ok=True)
@@ -40,6 +42,9 @@ def paper_step(state, market, cfg, n_slots, trades_path, state_path):
         for t in result.trades:
             f.write(json.dumps(_trade_row(t)) + "\n")
     save_state(state, state_path)
+    if snapshot_path is not None:
+        from live.snapshots import snapshot, append_snapshot
+        append_snapshot(snapshot_path, snapshot(state, result.equity, day))
     return result
 
 
@@ -71,7 +76,7 @@ def main():
     if market.skipped:
         print(f"skipped {len(market.skipped)} tickers (pull failures): "
               f"{[s[0] for s in market.skipped][:8]}")
-    r = paper_step(state, market, cfg, args.n, TRADES_PATH, STATE_PATH)
+    r = paper_step(state, market, cfg, args.n, TRADES_PATH, STATE_PATH, SNAPSHOTS_PATH)
     print(f"\n=== paper day {obs.date()}  (N={args.n}, ${args.capital:,.0f}) ===")
     print(f"trades today: {len(r.trades)}  |  open campaigns: {len(state.positions)}  |  "
           f"cash ${state.cash:,.0f}  |  equity ${r.equity:,.0f}")
