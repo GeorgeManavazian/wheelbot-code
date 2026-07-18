@@ -23,11 +23,11 @@ class LiveMarket:
         for tk in self._universe:
             try:
                 s = closes_fn(tk)
+                row = _row_before(regime_series(s), self._obs)   # regime compute
             except Exception as e:   # one bad symbol must not stop the bot
-                self.skipped.append((tk, str(e)))
-                continue
+                self.skipped.append((tk, str(e)))                # (also catches a
+                continue                                          # regime_series raise)
             self._closes[tk] = s
-            row = _row_before(regime_series(s), self._obs)
             self._rows[tk] = row
             if is_good_renting_weather(row):
                 good.add(tk)
@@ -53,7 +53,14 @@ class LiveMarket:
         return float(s[d]) if d in s.index else fallback
 
     def settle_price(self, ticker, expiry):
-        return None   # live runs daily; step settles at today's spot
+        # last close on-or-before expiry (matches BatchMarket) so a MISSED-day /
+        # late-resolved expiry settles at the expiry-day close, not a later run's
+        # spot. Returns None only if no close exists on/before the expiry.
+        s = self._closes.get(ticker)
+        if s is None:
+            return None
+        pre = s[s.index <= pd.Timestamp(expiry)]
+        return float(pre.iloc[-1]) if len(pre) else None
 
     def regime_row(self, ticker, day):
         return self._rows.get(ticker)

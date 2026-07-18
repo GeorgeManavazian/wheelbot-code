@@ -34,9 +34,12 @@ def test_regime_row_is_prior_day():
     assert row is not None and "trend" in row
 
 
-def test_settle_price_none_and_eligible_true():
+def test_settle_price_on_or_before_expiry_and_eligible_true():
     m = _mkt()
-    assert m.settle_price("GDX", OBS) is None
+    # last close on-or-before OBS (the fixture's last date) is today's close 71.32
+    assert m.settle_price("GDX", OBS) == 71.32
+    # before any close exists -> None
+    assert m.settle_price("GDX", pd.Timestamp("2000-01-01")) is None
     assert m.eligible("GDX", OBS) is True
 
 

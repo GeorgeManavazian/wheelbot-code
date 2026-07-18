@@ -50,9 +50,12 @@ def paper_step(state, market, cfg, n_slots, trades_path, state_path,
 
 def _live_market(universe, held, obs, client, target_dte):
     from live.data import daily_closes, chain_frame
+    # pass obs into chain_frame so the chain's `date` column == the run's obs day
+    # (else a midnight-crossing run stamps chains with a different date than the
+    # engine filters on, silently reading every chain as empty).
     return LiveMarket(universe, held, obs,
                       closes_fn=lambda tk: daily_closes(client, tk),
-                      chain_fn=lambda tk: chain_frame(client, tk, target_dte))
+                      chain_fn=lambda tk: chain_frame(client, tk, target_dte, obs_date=obs))
 
 
 def main():
