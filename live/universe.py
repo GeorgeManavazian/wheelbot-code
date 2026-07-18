@@ -20,7 +20,7 @@ _MID = [
     "GLD", "XBI", "XLE", "XLK", "SMH", "IWM", "DIA", "EFA", "TLT", "HYG",
     "LQD", "VWO", "VEA", "AMD", "BABA", "PYPL", "UBER", "DIS", "KO", "PEP",
     "CVX", "XOM", "WMT", "SBUX", "NKE", "C", "GM", "SNOW", "SHOP", "MRNA",
-    "ROKU", "PLTR", "MU", "SQ", "PINS", "DKNG", "CVS", "WBA", "DAL", "OXY",
+    "ROKU", "PLTR", "MU", "SQ", "PINS", "DKNG", "CVS", "MO", "DAL", "OXY",
 ]
 # High ($150-700+): only larger accounts reach these.
 _HIGH = [
