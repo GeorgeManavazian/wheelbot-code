@@ -2,7 +2,7 @@ from live.universe import UNIVERSE
 
 
 def test_universe_is_clean_and_sized():
-    assert 120 <= len(UNIVERSE) <= 250
+    assert 400 <= len(UNIVERSE) <= 700
     assert all(isinstance(t, str) and t.isupper() and t.strip() == t for t in UNIVERSE)
     assert len(UNIVERSE) == len(set(UNIVERSE)), "no duplicate tickers"
 
