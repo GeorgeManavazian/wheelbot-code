@@ -5,8 +5,7 @@ the batch backtest's exact behavior — including the on-or-before-expiry histor
 reach in settle_price."""
 from __future__ import annotations
 import pandas as pd
-
-GATE_STALENESS_DAYS = 14   # mirrors wheel.GATE_STALENESS_DAYS / regime autopsy
+from .wheel import GATE_STALENESS_DAYS   # single source of truth (no silent drift)
 
 
 def _row_before(states: pd.DataFrame, d):
