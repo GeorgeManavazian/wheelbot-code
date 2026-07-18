@@ -2,7 +2,7 @@
 (state, trades, snapshots, config) and marks open positions against REAL Schwab
 option quotes on an auto-refresh, so unrealized P&L moves during market hours.
 
-  .venv-live/bin/python -m streamlit run dashboard/live.py
+  .venv-live/bin/python -m streamlit run dashboard/app.py
 
 Data-only: it pulls quotes to VALUE positions, never places an order. When the
 market is closed or a quote pull fails, it degrades to the last recorded mark
@@ -16,9 +16,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-DATA = Path("data/live")
-STATE, TRADES, SNAPS, CONFIG = (DATA / "state.json", DATA / "trades.jsonl",
-                                DATA / "snapshots.jsonl", DATA / "config.json")
+from live.accounts import CAPITALS, NS, cap_label, account_paths
 
 _CSS = """<style>
   .stApp { background:#0b0e11; color:#d1d4dc; }
@@ -118,27 +116,26 @@ def _pnl_html(x):
     return f'<span class="{cls}">{_fmt(x)}</span>'
 
 
-def board(refresh="15s"):
-    state = _load_json(STATE, {"cash": 0.0, "positions": []})
-    cfg = _load_json(CONFIG, {"n": 5, "capital": 100000})
-    snaps = _load_jsonl(SNAPS)
+def board(paths, capital, n, label, refresh="15s"):
+    state = _load_json(Path(paths["state"]), {"cash": float(capital), "positions": []})
+    snaps = _load_jsonl(Path(paths["snapshots"]))
     positions = state.get("positions", [])
-    # marks come from session_state (populated by the sidebar "Pull live quotes"
-    # button) -- the render path NEVER hits the network, so it can't hang/blank.
-    marks = st.session_state.get("live_marks", {})
+    # marks come from session_state, keyed per account (populated by this page's
+    # "Pull live quotes" button) -- the render path NEVER hits the network.
+    marks = st.session_state.get(f"marks_{label}", {})
     any_live = len(marks) > 0
 
     rows, equity, total_unreal = _rows_and_equity(state, marks)
-    baseline = float(cfg.get("capital", 100000))
+    baseline = float(capital)
     prev_equity = snaps[-1].get("equity", baseline) if snaps else baseline
     total_pnl = equity - baseline
     day_pnl = equity - prev_equity
 
-    at = st.session_state.get("marks_at")
+    at = st.session_state.get(f"marks_at_{label}")
     tag = (f'<span class="tag live">● LIVE QUOTES · {at}</span>' if any_live
-           else '<span class="tag stale">◌ last recorded marks — press “Pull live quotes”</span>')
-    st.markdown(f"### Wheel Bot — Live Paper &nbsp; {tag}", unsafe_allow_html=True)
-    st.caption(f"N={cfg.get('n')} slots · start ${baseline:,.0f} · "
+           else '<span class="tag stale">◌ last recorded marks — press "Pull live quotes"</span>')
+    st.markdown(f"### {cap_label(capital)} account · N={n} &nbsp; {tag}", unsafe_allow_html=True)
+    st.caption(f"${baseline:,.0f} capital · up to {n} positions · "
                f"{len(positions)} open · updates every {refresh}")
 
     c = st.columns(4)
@@ -175,7 +172,7 @@ def board(refresh="15s"):
         st.caption("Equity curve fills in one point per trading day.")
 
     st.markdown("#### Trades")
-    trades = _load_jsonl(TRADES)
+    trades = _load_jsonl(Path(paths["trades"]))
     if trades:
         td = pd.DataFrame(trades)
         td["date"] = pd.to_datetime(td["date"]).dt.strftime("%Y-%m-%d")
@@ -185,30 +182,47 @@ def board(refresh="15s"):
         st.caption("No trades yet.")
 
 
+def capital_page(capital):
+    """One dashboard page for a capital level: an N dropdown (1-5) picks which of
+    that capital's 5 accounts to show; the board renders it live."""
+    c = st.columns([1, 1, 1.4])
+    n = c[0].selectbox("N (positions at once)", NS, key=f"n_{capital}")
+    refresh = c[1].selectbox("Auto-refresh", ["5s", "15s", "30s", "60s"],
+                             index=1, key=f"r_{capital}") or "15s"
+    label = f"{cap_label(capital)}_N{n}"
+    paths = account_paths(capital, n)
+    with c[2]:
+        st.write("")  # align button with the dropdowns
+        # Live-quote pull: the ONLY network hit, timeout-guarded, on button press.
+        if st.button("⟳ Pull live quotes", key=f"pull_{label}", use_container_width=True):
+            state = _load_json(Path(paths["state"]), {"positions": []})
+            with st.spinner("Pulling Schwab quotes…"):
+                marks = _pull_marks(state.get("positions", []))
+            st.session_state[f"marks_{label}"] = marks
+            st.session_state[f"marks_at_{label}"] = pd.Timestamp.now().strftime("%H:%M:%S")
+            if not marks:
+                st.warning("No quotes (market closed or token expired).")
+    st.fragment(run_every=refresh)(board)(paths, capital, n, label, refresh)
+
+
 def main():
-    """The render entry -- MUST be called from the Streamlit entry script on
-    every run. (app.py calls it; a cached `import` would render only once and
-    then blank, which is exactly the bug this replaced.) set_page_config +
-    CSS run here so they re-apply on every rerun, not just the first import."""
-    st.set_page_config(page_title="Wheel Bot — Live", layout="wide",
-                       initial_sidebar_state="collapsed")
+    """Streamlit entry -- MUST be called on every run (app.py calls it; a cached
+    import would render once then blank). One page per capital level; each page's
+    N dropdown selects the account. set_page_config + CSS re-apply every rerun."""
+    st.set_page_config(page_title="Wheel Bot — Live", layout="wide")
     st.markdown(_CSS, unsafe_allow_html=True)
-    # Live-quote pull is an explicit, timeout-guarded action -- the ONLY place
-    # that touches the network. The board/auto-refresh reads local files only.
-    if st.sidebar.button("⟳ Pull live quotes", use_container_width=True):
-        state = _load_json(STATE, {"positions": []})
-        with st.spinner("Pulling Schwab quotes…"):
-            marks = _pull_marks(state.get("positions", []))
-        st.session_state["live_marks"] = marks
-        st.session_state["marks_at"] = pd.Timestamp.now().strftime("%H:%M:%S")
-        if not marks:
-            st.sidebar.warning("No quotes (market closed or token expired).")
-    st.sidebar.caption("Quotes are live only during market hours (Mon–Fri 9:30–4 ET). "
-                       "The board auto-refreshes from disk; press the button to mark "
-                       "positions against live quotes.")
-    # auto-refresh interval (re-reads local files; never the network)
-    opt = st.sidebar.selectbox("Auto-refresh", ["5s", "15s", "30s", "60s"], index=1) or "15s"
-    st.fragment(run_every=opt)(board)(refresh=opt)
+    st.sidebar.caption("25 paper accounts = 5 capitals x N 1-5. Quotes live only in "
+                       "market hours (Mon–Fri 9:30–4 ET); boards auto-refresh from disk.")
+
+    def _page_fn(cap):
+        def render():
+            capital_page(cap)
+        render.__name__ = f"acct_{cap_label(cap)}"
+        return render
+
+    pages = [st.Page(_page_fn(cap), title=f"{cap_label(cap)} account",
+                     url_path=f"acct_{cap_label(cap)}") for cap in CAPITALS]
+    st.navigation(pages).run()
 
 
 # Direct entry: `streamlit run dashboard/live.py`. When app.py is the entry it
