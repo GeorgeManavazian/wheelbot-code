@@ -15,6 +15,7 @@ from src.engine_v2.options.wheel import WheelConfig
 from live.state import load_state, save_state
 from live.market_live import LiveMarket
 from live.universe import UNIVERSE
+from live.config import load_run_config
 
 STATE_PATH = "data/live/state.json"
 TRADES_PATH = "data/live/trades.jsonl"
@@ -64,10 +65,15 @@ def _live_market(universe, held, obs, client, target_dte):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--n", type=int, default=5)
-    ap.add_argument("--capital", type=float, default=100_000.0)
+    # default None -> fall through to config.json; a flag still overrides it
+    ap.add_argument("--n", type=int, default=None)
+    ap.add_argument("--capital", type=float, default=None)
     ap.add_argument("--smoke", action="store_true")
     args = ap.parse_args()
+
+    run_cfg = load_run_config()
+    n = args.n if args.n is not None else run_cfg["n"]
+    capital = args.capital if args.capital is not None else run_cfg["capital"]
 
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "schwab"))
     from schwab_client import get_client
@@ -75,16 +81,16 @@ def main():
 
     universe = ["GDX", "SLV", "XOP"] if args.smoke else UNIVERSE
     obs = pd.Timestamp.today().normalize()
-    state = load_state(STATE_PATH) or PortfolioState(cash=args.capital, positions=[])
+    state = load_state(STATE_PATH) or PortfolioState(cash=capital, positions=[])
     held = {p["ticker"] for p in state.positions}
-    cfg = WheelConfig(ticker="SPY", starting_capital=args.capital, **FROZEN)
+    cfg = WheelConfig(ticker="SPY", starting_capital=capital, **FROZEN)
 
     market = _live_market(universe, held, obs, client, cfg.target_dte)
     if market.skipped:
         print(f"skipped {len(market.skipped)} tickers (pull failures): "
               f"{[s[0] for s in market.skipped][:8]}")
-    r = paper_step(state, market, cfg, args.n, TRADES_PATH, STATE_PATH, SNAPSHOTS_PATH)
-    print(f"\n=== paper day {obs.date()}  (N={args.n}, ${args.capital:,.0f}) ===")
+    r = paper_step(state, market, cfg, n, TRADES_PATH, STATE_PATH, SNAPSHOTS_PATH)
+    print(f"\n=== paper day {obs.date()}  (N={n}, ${capital:,.0f}) ===")
     print(f"trades today: {len(r.trades)}  |  open campaigns: {len(state.positions)}  |  "
           f"cash ${state.cash:,.0f}  |  equity ${r.equity:,.0f}")
     for t in r.trades:

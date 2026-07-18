@@ -8,10 +8,7 @@ LOGDIR="$REPO/data/live/logs"; mkdir -p "$LOGDIR"
 LOG="$LOGDIR/$(date +%Y-%m-%d).log"
 TOKEN="$HOME/.schwab/token.json"
 
-# --- adjustable knobs ---
-N=5
-CAPITAL=100000
-# ------------------------
+# Knobs (N, capital) live in data/live/config.json now -- run_daily.py reads it.
 
 # weekly-login reminder: warn if the Schwab token is >= 6 days old
 if [ -f "$TOKEN" ]; then
@@ -22,9 +19,8 @@ if [ -f "$TOKEN" ]; then
   fi
 fi
 
-echo "=== $(date '+%Y-%m-%d %H:%M:%S %Z') run_daily N=$N capital=$CAPITAL ===" >> "$LOG"
-PYTHONPATH="$REPO" "$REPO/.venv-live/bin/python" "$REPO/live/run_daily.py" \
-  --n "$N" --capital "$CAPITAL" >> "$LOG" 2>&1
+echo "=== $(date '+%Y-%m-%d %H:%M:%S %Z') run_daily (N/capital from config.json) ===" >> "$LOG"
+PYTHONPATH="$REPO" "$REPO/.venv-live/bin/python" "$REPO/live/run_daily.py" >> "$LOG" 2>&1
 RC=$?
 echo "exit: $RC" >> "$LOG"
 # on failure (e.g. lapsed token), nudge the desktop
