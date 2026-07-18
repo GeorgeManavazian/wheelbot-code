@@ -59,6 +59,11 @@ def select_roll_contract(chain, date, right, strike, current_expiry, target_dte,
     return Contract(root, best, float(strike), right)
 
 def option_mark(chain, date, contract):
+    # INVARIANT: `chain` is single-root. Both callers guarantee it — BatchMarket
+    # groups by ticker, LiveMarket pulls one ticker's chain_frame at a time — so
+    # matching on (date,expiry,strike,right) can't cross to another underlying's
+    # like-struck option. If a multi-root chain is ever passed here, add a root
+    # filter (needs a `root` column on the chain frame). See audit 2026-07-17 (I9).
     m = ((chain["date"] == date) & (chain["expiry"] == contract.expiry)
          & (chain["strike"] == contract.strike) & (chain["right"] == contract.right))
     r = chain[m]

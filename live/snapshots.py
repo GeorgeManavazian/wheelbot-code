@@ -18,7 +18,8 @@ def snapshot(state, equity: float, day) -> dict:
             "short": None if sh is None else {
                 "strike": sh["contract"].strike,
                 "expiry": pd.Timestamp(sh["contract"].expiry).isoformat(),
-                "right": sh["contract"].right, "contracts": sh["contracts"]},
+                "right": sh["contract"].right, "contracts": sh["contracts"],
+                "credit": sh["credit"], "last_mid": sh["last_mid"]},
         })
     return {
         "date": pd.Timestamp(day).normalize().isoformat(),
