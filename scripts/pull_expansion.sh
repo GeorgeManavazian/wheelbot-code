@@ -44,11 +44,33 @@ yield_to_resilient(){
   done
 }
 
+# ThetaTerminal DIES when the Mac sleeps (bootstrap can't self-restart). Health-
+# check it and relaunch directly via brew JDK21 if dead, so an overnight/trip
+# sleep doesn't permanently stall the pull. Called before every ticker.
+THETA_DIR="$HOME/ThetaTerminal"
+theta_up(){ curl -s -m 8 "http://127.0.0.1:25503/v3/option/list/expirations?symbol=SPY" 2>/dev/null | grep -q "symbol"; }
+ensure_theta(){
+  theta_up && return 0
+  for attempt in 1 2 3; do
+    log "ThetaTerminal down — restarting (try $attempt)"
+    pkill -9 -f "ThetaTerminal|/lib/[0-9]*\.jar" 2>/dev/null; sleep 3
+    local jar=$(ls -t "$THETA_DIR"/lib/*.jar 2>/dev/null | head -1)
+    (cd "$THETA_DIR" && nohup /opt/homebrew/opt/openjdk@21/bin/java \
+       -XX:+IgnoreUnrecognizedVMOptions -Dtd.logDir=/tmp \
+       --sun-misc-unsafe-memory-access=allow --enable-native-access=ALL-UNNAMED \
+       -jar "$jar" --config "$THETA_DIR/config.toml" --dotenv-dir "$THETA_DIR" \
+       > "$THETA_DIR/terminal_direct.log" 2>&1 &)
+    for i in $(seq 1 18); do sleep 10; theta_up && { log "Theta back up"; return 0; }; done
+  done
+  log "Theta restart FAILED after 3 tries — waiting 5min then retrying"; sleep 300; return 1
+}
+
 log "=== EXPANSION PULL START (${#TICKERS[@]} tickers, start-year $SY) ==="
 for t in $TICKERS; do
   dest="data/options/${t:l}_greeks_eod_all.parquet"
   if [ -f "$dest" ]; then log "$t already concatted — skip"; continue; fi
   yield_to_resilient
+  ensure_theta   # relaunch ThetaTerminal if a sleep killed it (else 500s poison the ticker)
   while in_market_hours; do log "$t: market hours — parked 5min"; sleep 300; done
   log "$t: pulling…"
   PYTHONPATH="$REPO" .venv/bin/python -m scripts.pull_spy_all --symbol "$t" \
