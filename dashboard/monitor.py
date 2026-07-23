@@ -168,6 +168,12 @@ def board(paths, capital, n, label, refresh="15s"):
             "": df["_live"].map(lambda b: "live" if b else "stale"),
             "Unreal P&L": df["Unreal P&L"].map(_pnl_html),
         })
+        # TOTAL footer row — premium + unrealized P&L summed (recomputes each render)
+        total_row = {c: "" for c in disp.columns}
+        total_row["Ticker"] = "<b>TOTAL</b>"
+        total_row["Premium"] = f"<b>{_fmt(total_premium)}</b>"
+        total_row["Unreal P&L"] = f"<b>{_pnl_html(total_unreal)}</b>"
+        disp = pd.concat([disp, pd.DataFrame([total_row])], ignore_index=True)
         st.markdown(disp.to_html(escape=False, index=False), unsafe_allow_html=True)
     else:
         st.info("No open positions. The bot opens them on the next 5pm run.")
