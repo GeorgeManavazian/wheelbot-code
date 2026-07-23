@@ -87,28 +87,33 @@ def _rows_and_equity(state, marks):
         short = p.get("short")
         live = tk in marks
         if short:
+            c_ = short["contract"]
+            strike, right = float(c_["strike"]), c_["right"]
             k = short["contracts"]
             credit = short["credit"]
             mark = marks.get(tk, short.get("last_mid", credit))
-            collected = credit * 100 * k
+            collected = credit * 100 * k              # premium collected on this leg
             liability = mark * 100 * k
             unreal = collected - liability            # sold at credit, buy back at mark
             equity_positions -= liability             # short leg is owed
-            detail = f"{short['contract']['strike']:g}{short['contract']['right']} x{k}"
-            markcol = mark
-        else:                                         # bare shares (rare in current state)
+            spot = p.get("last_spot", 0.0)
+            dte = (pd.Timestamp(c_["expiry"]).normalize() - pd.Timestamp.now().normalize()).days
+            # put: spot above strike = OTM cushion (>0 safe); below = ITM (assignment risk)
+            dist = (spot / strike - 1.0) if strike else 0.0
+            row = {"Ticker": tk, "Phase": phase, "Strike": f"{strike:g}", "Right": right,
+                   "Contracts": k, "_premium": collected, "DTE": dte, "_dist": dist,
+                   "_mark": mark, "Unreal P&L": unreal, "_live": live}
+        else:                                         # bare shares (post-assignment)
             sh = p.get("shares", 0)
             basis = p.get("basis", 0.0)
             spot = p.get("last_spot", basis)
             unreal = (spot - basis) * sh
             equity_positions += spot * sh
-            detail = f"{sh} sh @ {basis:g}"
-            markcol = spot
-            credit = 0.0
+            row = {"Ticker": tk, "Phase": phase, "Strike": f"{basis:g}", "Right": "shares",
+                   "Contracts": sh, "_premium": p.get("premium", 0.0), "DTE": "—",
+                   "_dist": None, "_mark": spot, "Unreal P&L": unreal, "_live": live}
         total_unreal += unreal
-        rows.append({"Ticker": tk, "Phase": phase, "Position": detail,
-                     "Mark": markcol, "Unreal P&L": unreal,
-                     "_live": live, "_credit": credit})
+        rows.append(row)
     return rows, cash + equity_positions, total_unreal
 
 
@@ -139,18 +144,27 @@ def board(paths, capital, n, label, refresh="15s"):
     st.caption(f"${baseline:,.0f} capital · up to {n} positions · "
                f"{len(positions)} open · updates every {refresh}")
 
-    c = st.columns(4)
+    total_premium = sum(r["_premium"] for r in rows)
+    c = st.columns(5)
     c[0].metric("Equity", _fmt(equity))
     c[1].metric("Total P&L", _fmt(total_pnl), delta=f"{total_pnl/baseline*100:+.2f}%")
-    c[2].metric("Open unrealized", _fmt(total_unreal))
-    c[3].metric("Cash", _fmt(state.get("cash", 0.0)))
+    c[2].metric("Premium collected", _fmt(total_premium))
+    c[3].metric("Open unrealized", _fmt(total_unreal))
+    c[4].metric("Cash", _fmt(state.get("cash", 0.0)))
 
     st.markdown("#### Positions")
     if rows:
         df = pd.DataFrame(rows)
+
+        def _dist(v):
+            return "—" if v is None else f'<span class="{"pos" if v >= 0 else "neg"}">{v:+.1%}</span>'
         disp = pd.DataFrame({
-            "Ticker": df["Ticker"], "Phase": df["Phase"], "Position": df["Position"],
-            "Mark": df["Mark"].map(lambda v: f"{v:.2f}"),
+            "Ticker": df["Ticker"], "Phase": df["Phase"],
+            "Strike": df["Strike"], "Right": df["Right"], "Contracts": df["Contracts"],
+            "Premium": df["_premium"].map(_fmt),
+            "DTE": df["DTE"],
+            "vs strike": df["_dist"].map(_dist),
+            "Mark": df["_mark"].map(lambda v: f"{v:.2f}"),
             "": df["_live"].map(lambda b: "live" if b else "stale"),
             "Unreal P&L": df["Unreal P&L"].map(_pnl_html),
         })
