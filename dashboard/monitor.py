@@ -196,7 +196,9 @@ def board(paths, capital, n, label, refresh="15s"):
     trades = _load_jsonl(Path(paths["trades"]))
     if trades:
         td = pd.DataFrame(trades)
-        td["date"] = pd.to_datetime(td["date"]).dt.strftime("%Y-%m-%d")
+        # EOD trades are midnight-normalized; intraday closes carry microseconds --
+        # ISO8601 parses both (a bare to_datetime infers one format and crashes on the other)
+        td["date"] = pd.to_datetime(td["date"], format="ISO8601").dt.strftime("%Y-%m-%d")
         show = td[["date", "action", "ticker", "strike", "right", "contracts", "price"]]
         st.dataframe(show.iloc[::-1], use_container_width=True, hide_index=True)
     else:
