@@ -1,0 +1,11 @@
+[Unit]
+Description=Wheel Bot tick (EOD run, intraday exits, health check)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/etf-bot
+ExecStart=/bin/bash /home/ubuntu/etf-bot/scripts/wheelbot_tick.sh
+TimeoutStartSec=900

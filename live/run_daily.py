@@ -16,6 +16,9 @@ from live.state import load_state, save_state
 from live.market_live import LiveMarket
 from live.universe import UNIVERSE
 from live.accounts import all_accounts, account_paths, account_label
+from live.alerts import send_alert
+from live.gaps import append_gap
+from live.config import load_run_config
 
 FROZEN = dict(put_delta=0.30, call_delta=0.50, target_dte=11,
               take_profit_pct=0.60, call_min_strike="basis",
@@ -25,6 +28,18 @@ FROZEN = dict(put_delta=0.30, call_delta=0.50, target_dte=11,
               # backtested worse (symmetric -71% P&L, structural went negative) and
               # were dropped. Guards the AA/VALE falling-knife names.
               chop_max_fast_fall=0.01)
+
+
+def zombie_check(skipped: int, universe_size: int, threshold: float) -> bool:
+    """True when this run pulled so little data that it is a FAILED run, not a
+    quiet one. 2026-07-24 is the case this exists for: all 547 tickers failed,
+    the run exited 0, booked no trades, and its wrapper wrote the 'done' marker
+    anyway -- so a totally dead day was permanently recorded as complete and
+    became unrecoverable. A zombie run must leave no marker so the next tick
+    retries it."""
+    if universe_size <= 0:
+        return True
+    return (skipped / universe_size) >= threshold
 
 
 def _trade_row(t):
@@ -102,6 +117,19 @@ def main():
         print(f"skipped {len(market.skipped)} tickers (pull failures): "
               f"{[s[0] for s in market.skipped][:8]}")
 
+    run_cfg = load_run_config()
+    if zombie_check(len(market.skipped), len(universe), run_cfg["zombie_threshold"]):
+        day = str(obs.date())
+        msg = (f"{day}: pull failed for {len(market.skipped)}/{len(universe)} "
+               f"tickers (threshold {run_cfg['zombie_threshold']:.0%}). No state "
+               f"was touched and no completion marker was written -- the next "
+               f"tick will retry. Likely a lapsed Schwab token or an outage.")
+        print(f"ZOMBIE RUN -- {msg}")
+        send_alert(f"daily run FAILED {day}", msg)
+        append_gap(day, "pull_failure",
+                   skipped=len(market.skipped), universe=len(universe))
+        return 1
+
     print(f"\n=== paper day {obs.date()} — {len(accounts)} account(s), down-only gate ===")
     print(f"{'account':<10}{'trades':>7}{'open':>6}{'cash':>13}{'equity':>13}")
     for (cap, n) in accounts:
@@ -118,6 +146,7 @@ def main():
                   f"{state.cash:>13,.0f}{r.equity:>13,.0f}")
         except Exception as e:
             print(f"{label:<10} ERROR: {type(e).__name__}: {e} — skipped, others continue")
+    return 0
 
 
 def _paths(capital, n, smoke=False):
@@ -130,4 +159,4 @@ def _paths(capital, n, smoke=False):
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
