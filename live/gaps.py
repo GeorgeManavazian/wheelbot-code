@@ -9,10 +9,12 @@ look-ahead bias. So we record and disclose instead.
 Any forward-test result read off this store must report its gap days alongside
 it, the same way the STATUS notes disclose contaminated runs."""
 from __future__ import annotations
+
+from live.paths import in_state
 import json
 import os
 
-GAPS_PATH = "data/live/gaps.jsonl"
+GAPS_PATH = in_state("gaps.jsonl")
 
 
 def recorded_dates(path: str = GAPS_PATH) -> set:

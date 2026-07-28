@@ -5,9 +5,11 @@ Precedence: CLI flag > config.json > built-in DEFAULTS. A missing config.json
 is fine (DEFAULTS apply). NOTE: capital only takes effect on a FRESH state --
 a running account keeps its saved cash, so reset state.json to change it."""
 from __future__ import annotations
+
+from live.paths import in_state
 import json
 
-CONFIG_PATH = "data/live/config.json"
+CONFIG_PATH = in_state("config.json")
 DEFAULTS = {"n": 5, "capital": 100_000.0, "zombie_threshold": 0.5}
 
 

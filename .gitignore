@@ -14,3 +14,6 @@ data/live/
 
 # Schwab live-data venv (py3.12, schwab-py) — not the 3.9 backtest venv
 .venv-live/
+
+# clone of the private wheelbot-state repo (bot state from the VPS)
+data/live-synced/

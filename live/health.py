@@ -6,9 +6,11 @@ all on a weekday and nothing anywhere noticed for weeks.
 Runs after the daily retry window closes (20:00 ET), so a day that merely
 retried late is not misreported as missed."""
 from __future__ import annotations
+
+from live.paths import in_state
 import os
 
-LOGS_DIR = "data/live/logs"
+LOGS_DIR = in_state("logs")
 CUTOFF_HHMM = 2015          # 20:15 ET -- after the 17:00-20:00 retry window
 
 

@@ -3,11 +3,13 @@ live paper accounts, all running the same strategy on the same days so capital
 AND N are tested in parallel (no sequential forward-testing). Each account has
 its own store under data/live/accounts/<label>/."""
 from __future__ import annotations
+
+from live.paths import in_state
 import os
 
 CAPITALS = [5_000, 50_000, 100_000, 250_000, 500_000]
 NS = [1, 2, 3, 4, 5]
-ACCOUNTS_ROOT = "data/live/accounts"
+ACCOUNTS_ROOT = in_state("accounts")
 
 
 def cap_label(capital: int) -> str:

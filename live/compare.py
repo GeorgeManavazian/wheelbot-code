@@ -12,6 +12,9 @@ never an exception.
 """
 from __future__ import annotations
 
+from live.paths import in_state
+from live.accounts import ACCOUNTS_ROOT
+
 import json
 import os
 
@@ -120,7 +123,7 @@ def _one_account(capital: int, n: int, accounts_root: str) -> dict:
     }
 
 
-def account_metrics(accounts_root: str = "data/live/accounts") -> list[dict]:
+def account_metrics(accounts_root: str = None) -> list[dict]:
     """One summary dict per account, all 25, in `all_accounts()` order.
 
     `accounts_root` locates the per-account stores; it is joined with each
@@ -131,5 +134,7 @@ def account_metrics(accounts_root: str = "data/live/accounts") -> list[dict]:
     open_positions, max_drawdown_pct, sharpe, win_rate. See `_win_rate` for the
     win-rate definition.
     """
+    if accounts_root is None:
+        accounts_root = ACCOUNTS_ROOT
     return [_one_account(capital, n, accounts_root)
             for capital, n in all_accounts()]

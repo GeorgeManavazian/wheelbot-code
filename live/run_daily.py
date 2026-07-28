@@ -4,6 +4,8 @@
   PYTHONPATH=. .venv-live/bin/python live/run_daily.py --smoke   # 3-ticker live test
 """
 from __future__ import annotations
+
+from live.paths import in_state
 import argparse
 import json
 import os
@@ -151,7 +153,7 @@ def main():
 
 def _paths(capital, n, smoke=False):
     if smoke:
-        d = os.path.join("data/live/accounts", "_smoke")
+        d = in_state("accounts", "_smoke")
         return {"dir": d, "state": os.path.join(d, "state.json"),
                 "trades": os.path.join(d, "trades.jsonl"),
                 "snapshots": os.path.join(d, "snapshots.jsonl")}
