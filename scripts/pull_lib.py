@@ -40,21 +40,25 @@ def _client():
     return ThetaClient(api_key=_api_key(), dataframe_type="pandas")
 
 
-def _greeks_with_retry(c, symbol, exp, start, strike_range, tries=4):
-    """Transient gRPC blips (RESOURCE_EXHAUSTED / RPC terminated) happen under
-    concurrency -- retry with backoff. Re-raise a real 'No data' as-is (caught upstream)."""
+def _greeks_with_retry(client_box, symbol, exp, start, strike_range, tries=5):
+    """Transient gRPC blips (RESOURCE_EXHAUSTED / RPC terminated / UNAUTHENTICATED)
+    happen under concurrency -- retry with backoff. UNAUTHENTICATED means the
+    worker's auth token went stale mid-ticker: recreate the client (client_box[0])
+    so the next try re-auths. Re-raise a real 'No data' as-is (caught upstream)."""
     import time
     last = None
     for a in range(tries):
         try:
-            return c.option_history_greeks_eod(symbol=symbol, expiration=exp,
-                                               start_date=start, end_date=exp,
-                                               strike_range=strike_range)
+            return client_box[0].option_history_greeks_eod(
+                symbol=symbol, expiration=exp, start_date=start, end_date=exp,
+                strike_range=strike_range)
         except Exception as ex:
             last = ex
             s = str(ex)
             if "No data found" in s:
                 raise
+            if "UNAUTHENTICATED" in s or "Unauthenticated" in s:
+                client_box[0] = _client()      # fresh token
             time.sleep(2 * (a + 1))
     raise last
 
@@ -66,10 +70,13 @@ def _exp_dir(symbol, out_dir):
 
 
 def pull(symbol, out_dir, start_year, strike_range, window_days, c=None):
-    c = c or _client()          # per-worker client for thread-safety
+    # client in a 1-elem box so _greeks_with_retry can swap in a fresh one when the
+    # auth token goes stale mid-ticker (UNAUTHENTICATED). Also refreshed every 30
+    # expirations to pre-empt the staleness.
+    box = [c or _client()]
     symbol = symbol.upper()
     today = dt.date.today()
-    exps = c.option_list_expirations(symbol=symbol)
+    exps = box[0].option_list_expirations(symbol=symbol)
     # DataFrame with an 'expiration' column (str/date); keep >= start_year, <= today
     col = "expiration" if "expiration" in exps.columns else exps.columns[0]
     dates = [pd.Timestamp(x).date() for x in exps[col].tolist()]
@@ -82,9 +89,11 @@ def pull(symbol, out_dir, start_year, strike_range, window_days, c=None):
         if f.exists() or e.exists():
             skip += 1
             continue
+        if i % 30 == 0:                 # pre-empt token staleness on long tickers
+            box[0] = _client()
         start = max(dt.date(start_year, 1, 1), exp - dt.timedelta(days=window_days))
         try:
-            raw = _greeks_with_retry(c, symbol, exp, start, strike_range)
+            raw = _greeks_with_retry(box, symbol, exp, start, strike_range)
             if raw is None or len(raw) == 0:
                 e.touch(); empty += 1
                 continue
