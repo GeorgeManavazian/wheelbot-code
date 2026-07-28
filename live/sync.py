@@ -64,17 +64,26 @@ def sync_state(state_dir: str, message: str, cfg_path: str = GIT_CFG) -> bool:
             _git(["reset"], state_dir)
             return False
 
-        if not _staged_paths(state_dir):
-            return True                       # nothing changed; not a failure
-
-        c = _git(["commit", "-m", message], state_dir)
-        if c.returncode != 0 and "nothing to commit" not in (c.stdout + c.stderr):
-            print(f"[sync commit failed] {c.stderr.strip()[:300]}")
-            return False
+        # Commit only when something is staged -- but ALWAYS push. A commit
+        # whose push failed would otherwise strand the repo permanently: every
+        # later sync sees an empty index, returns early, and never retries, so
+        # the mirror silently stops updating while still reporting success.
+        if _staged_paths(state_dir):
+            c = _git(["commit", "-m", message], state_dir)
+            if c.returncode != 0 and "nothing to commit" not in (c.stdout + c.stderr):
+                print(f"[sync commit failed] {c.stderr.strip()[:300]}")
+                return False
 
         url = (f"https://x-access-token:{cfg['token']}@github.com/"
                f"{cfg['repo']}.git")
-        p = _git(["push", url, "main"], state_dir)
+        # --force is correct here, not a workaround: this repo is a one-way
+        # MIRROR of VPS state. The VPS is the only writer by design (the Mac
+        # clones it read-only for the dashboard), so there is no remote work to
+        # preserve and no merge to resolve. Without it any divergence -- a
+        # re-init, a stray commit, a rebuilt state dir -- wedges sync forever,
+        # which is exactly the silent-degradation class this project exists to
+        # eliminate.
+        p = _git(["push", "--force", url, "main"], state_dir)
         if p.returncode != 0:
             # scrub the token out of any error text before it reaches a log
             err = p.stderr.replace(cfg["token"], "***")
