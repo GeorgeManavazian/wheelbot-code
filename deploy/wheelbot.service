@@ -8,4 +8,8 @@ Type=oneshot
 User=ubuntu
 WorkingDirectory=/home/ubuntu/etf-bot
 ExecStart=/bin/bash /home/ubuntu/etf-bot/scripts/wheelbot_tick.sh
-TimeoutStartSec=900
+# The EOD run pulls 547 price histories sequentially; the pull phase alone was
+# measured at 420s and the full run at ~7min. 900s was barely 2x margin, so a
+# slow Schwab day would SIGTERM the run mid-write. 45min is generous, and the
+# completion marker plus the retry window make a long run safe.
+TimeoutStartSec=2700
