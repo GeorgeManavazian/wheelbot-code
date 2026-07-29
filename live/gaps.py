@@ -50,3 +50,34 @@ def append_gap(date, reason: str, path: str = GAPS_PATH, **extra) -> bool:
     with open(path, "a") as f:
         f.write(json.dumps(rec) + "\n")
     return True
+
+
+def gap_summary(path: str = GAPS_PATH) -> dict:
+    """Human-facing summary of the ledger, for the dashboard.
+
+    This ledger was write-only until 2026-07-29: the bot recorded missed days
+    faithfully and NOTHING ever read them back, so every displayed return
+    silently overstated its coverage. Disclosure that never reaches the reader
+    is not disclosure."""
+    recs = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and "date" in r:
+                    recs.append(r)
+    except FileNotFoundError:
+        pass
+    recs.sort(key=lambda r: str(r["date"]))
+    return {
+        "count": len(recs),
+        "dates": [str(r["date"]) for r in recs],
+        "records": recs,
+        "reasons": sorted({str(r.get("reason", "?")) for r in recs}),
+    }

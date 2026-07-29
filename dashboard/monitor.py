@@ -122,6 +122,28 @@ def _pnl_html(x):
     return f'<span class="{cls}">{_fmt(x)}</span>'
 
 
+def gap_banner():
+    """Show missed trading days at the top of every page.
+
+    The bot records them in gaps.jsonl, but until this existed nothing read that
+    file -- so an equity curve with holes in it looked continuous and complete.
+    A number the owner cannot see the caveat on is worse than no number."""
+    from live.gaps import gap_summary
+    g = gap_summary()
+    if not g["count"]:
+        return
+    dates = ", ".join(g["dates"])
+    st.markdown(
+        f"<div style='background:#3a2a0e;border:1px solid #8a6d1f;border-radius:6px;"
+        f"padding:10px 14px;margin-bottom:14px;color:#f0d999;font-size:.86rem;'>"
+        f"<b>&#9888; {g['count']} missed trading day(s)</b> &mdash; {dates}"
+        f"<br><span style='color:#c9b184;'>These days were never traded and "
+        f"<b>cannot be backfilled</b> (Schwab has no historical option-chain "
+        f"endpoint). Returns and the equity curve below cover fewer sessions "
+        f"than the date range implies.</span></div>",
+        unsafe_allow_html=True)
+
+
 def board(paths, capital, n, label, refresh="15s"):
     state = _load_json(Path(paths["state"]), {"cash": float(capital), "positions": []})
     snaps = _load_jsonl(Path(paths["snapshots"]))
@@ -140,6 +162,7 @@ def board(paths, capital, n, label, refresh="15s"):
     at = st.session_state.get(f"marks_at_{label}")
     tag = (f'<span class="tag live">● LIVE QUOTES · {at}</span>' if any_live
            else '<span class="tag stale">◌ last recorded marks — press "Pull live quotes"</span>')
+    gap_banner()
     st.markdown(f"### {cap_label(capital)} account · N={n} &nbsp; {tag}", unsafe_allow_html=True)
     st.caption(f"${baseline:,.0f} capital · up to {n} positions · "
                f"{len(positions)} open · updates every {refresh}")
@@ -239,6 +262,7 @@ def compare_page():
     stores -- equity, return, trades, open positions, drawdown, Sharpe, win rate.
     Pure disk read (account_metrics); no network. Empty accounts show at baseline
     (equity == capital) until data accumulates."""
+    gap_banner()
     st.markdown("### Compare · all 25 accounts")
     st.caption("Capital x N grid. Equity/return from the last daily snapshot "
                "(baseline = starting capital until snapshots accrue). Win rate = "

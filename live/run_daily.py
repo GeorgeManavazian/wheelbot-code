@@ -7,9 +7,12 @@ from __future__ import annotations
 
 from live.paths import in_state
 import argparse
+import datetime as dt
 import json
 import os
 import sys
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 
 from src.engine_v2.options.portfolio import PortfolioState, step_one_day
@@ -22,6 +25,8 @@ from live.alerts import send_alert
 from live.gaps import append_gap
 from live.config import load_run_config
 
+ET = ZoneInfo("America/New_York")
+
 FROZEN = dict(put_delta=0.30, call_delta=0.50, target_dte=11,
               take_profit_pct=0.60, call_min_strike="basis",
               # DOWN-ONLY tactical gate (A/B'd 2026-07-18): reject only a FALLING
@@ -32,16 +37,75 @@ FROZEN = dict(put_delta=0.30, call_delta=0.50, target_dte=11,
               chop_max_fast_fall=0.01)
 
 
-def zombie_check(skipped: int, universe_size: int, threshold: float) -> bool:
+def zombie_check(skipped_closes: int, universe_size: int,
+                 chain_attempts: int, chains_ok: int, threshold: float) -> bool:
     """True when this run pulled so little data that it is a FAILED run, not a
-    quiet one. 2026-07-24 is the case this exists for: all 547 tickers failed,
-    the run exited 0, booked no trades, and its wrapper wrote the 'done' marker
-    anyway -- so a totally dead day was permanently recorded as complete and
-    became unrecoverable. A zombie run must leave no marker so the next tick
-    retries it."""
+    quiet one. A zombie run must leave no marker, so the next tick retries it.
+
+    2026-07-24 is why this exists: all 547 tickers failed, the run exited 0,
+    booked no trades, and its wrapper wrote the 'done' marker anyway -- a dead
+    day permanently recorded as complete, and unrecoverable.
+
+    The two feeds are judged SEPARATELY because they cover different-sized
+    populations. Price history is pulled for the whole universe; option chains
+    only for held + good-to-rent, measured live at ~5% of it. A single pooled
+    ratio (the pre-2026-07-29 version) therefore capped chain failures at ~7%
+    and could NEVER trip a 50% threshold -- so a total outage of the option-chain
+    endpoint, which live/data.py notes is the flaky one ('the full chain 502s'),
+    produced exactly the 2026-07-24 outcome through a door the guard could not
+    see. Pooling was also wrong in the other direction: 260 closes failures plus
+    15 chain failures summed to 50.3% and would discard a day on which 287
+    tickers had perfectly good data."""
     if universe_size <= 0:
         return True
-    return (skipped / universe_size) >= threshold
+    if (skipped_closes / universe_size) >= threshold:
+        return True
+    # No chain candidates at all is a legitimately quiet day: nothing held and
+    # nothing passed the chop gate, so there was nothing to pull.
+    if chain_attempts <= 0:
+        return False
+    # But if we DID try and got nothing usable, no account can enter, take
+    # profit, or write a covered call. That is a failed day, not a quiet one.
+    if chains_ok == 0:
+        return True
+    return ((chain_attempts - chains_ok) / chain_attempts) >= threshold
+
+
+def is_trading_day(market, obs, min_fraction: float = 0.5) -> bool:
+    """True when `obs` actually looks like a session, judged from the data itself.
+
+    There is no market-holiday calendar anywhere in this bot, so on Thanksgiving
+    or Good Friday the weekday gate opens, price history still returns (with the
+    PRIOR session's close as its last row), and the bot books a full paper day at
+    stale quotes -- fabricating a trading day that never happened and polluting
+    the equity series with a phantom row.
+
+    Rather than vendor a holiday calendar (which silently rots), ask the data:
+    on a real session the exchange publishes a bar dated `obs` for essentially
+    every liquid name. On a holiday it publishes none. A weekend is already
+    excluded upstream by the tick's DOW gate."""
+    day = pd.Timestamp(obs).normalize()
+    closes = getattr(market, "_closes", {}) or {}
+    if not closes:
+        return False
+    have = sum(1 for s in closes.values()
+               if s is not None and len(s) and day in s.index)
+    return (have / len(closes)) >= min_fraction
+
+
+def already_stepped(snapshot_path, obs) -> bool:
+    """True when this account already has a snapshot for `obs`. Guards the
+    5-minute retry window against double-stepping a day (which appends a second
+    snapshot row and re-books the day's trades)."""
+    from live.snapshots import load_snapshots
+    target = pd.Timestamp(obs).normalize()
+    try:
+        for snap in load_snapshots(snapshot_path):
+            if pd.Timestamp(snap["date"]).normalize() == target:
+                return True
+    except (ValueError, KeyError, OSError):
+        return False       # unreadable history -> let the step proceed
+    return False
 
 
 def _trade_row(t):
@@ -97,7 +161,11 @@ def main():
     client = get_client()
 
     universe = ["GDX", "SLV", "XOP"] if args.smoke else UNIVERSE
-    obs = pd.Timestamp.today().normalize()
+    # The trading date MUST come from Eastern, not the box clock. The VPS runs
+    # UTC and wheelbot_tick.sh gates in ET, so in winter (EST, UTC-5) any retry
+    # between 19:00 and 24:00 ET is already "tomorrow" in UTC -- the run would
+    # stamp the wrong trading date and settle expiries against the wrong close.
+    obs = pd.Timestamp(dt.datetime.now(ET).date())
     # strategy params are shared across accounts; capital/N vary per account
     cfg = WheelConfig(ticker="SPY", starting_capital=100_000.0, **FROZEN)
     accounts = [(100_000, 5)] if args.smoke else all_accounts()
@@ -120,20 +188,37 @@ def main():
               f"{[s[0] for s in market.skipped][:8]}")
 
     run_cfg = load_run_config()
-    if zombie_check(len(market.skipped), len(universe), run_cfg["zombie_threshold"]):
+    if zombie_check(len(market.skipped_closes), len(universe),
+                    market.chain_attempts, market.chains_ok,
+                    run_cfg["zombie_threshold"]):
         day = str(obs.date())
-        msg = (f"{day}: pull failed for {len(market.skipped)}/{len(universe)} "
-               f"tickers (threshold {run_cfg['zombie_threshold']:.0%}). No state "
-               f"was touched and no completion marker was written -- the next "
-               f"tick will retry. Likely a lapsed Schwab token or an outage.")
+        msg = (f"{day}: price history failed for {len(market.skipped_closes)}/"
+               f"{len(universe)} tickers; option chains {market.chains_ok}/"
+               f"{market.chain_attempts} usable (threshold "
+               f"{run_cfg['zombie_threshold']:.0%}). No state was touched and no "
+               f"completion marker was written -- the next tick will retry. "
+               f"Likely a lapsed Schwab token or a Schwab outage.")
         print(f"ZOMBIE RUN -- {msg}")
         send_alert(f"daily run FAILED {day}", msg)
         append_gap(day, "pull_failure",
-                   skipped=len(market.skipped), universe=len(universe))
+                   skipped_closes=len(market.skipped_closes),
+                   universe=len(universe),
+                   chain_attempts=market.chain_attempts,
+                   chains_ok=market.chains_ok)
         return 1
+
+    if not is_trading_day(market, obs):
+        # A holiday (or any weekday the exchange did not open). Nothing to do,
+        # and this is NOT a gap -- so we exit 0 and let the tick write the
+        # marker, which also stops the dead-man's switch reporting it as missed.
+        print(f"{obs.date()}: not a trading session (no bar dated today for the "
+              f"universe) — holiday or early close with no print. No paper day "
+              f"was stepped; this is not a gap.")
+        return 0
 
     print(f"\n=== paper day {obs.date()} — {len(accounts)} account(s), down-only gate ===")
     print(f"{'account':<10}{'trades':>7}{'open':>6}{'cash':>13}{'equity':>13}")
+    stepped, failed, already = 0, [], []
     for (cap, n) in accounts:
         state, paths = loaded[(cap, n)]
         label = "_smoke" if args.smoke else account_label(cap, n)
@@ -141,13 +226,51 @@ def main():
         # abort the other 24 for the day (silent multi-account gap in an unattended run).
         try:
             os.makedirs(paths["dir"], exist_ok=True)
+            # Re-running a day must not double-step it. The 17:00-ET retry window
+            # fires every 5 min until a run succeeds, and a partial failure means
+            # some accounts have already stepped -- without this guard the retry
+            # appends a second snapshot for the same date (every account still
+            # carries a duplicate 2026-07-24 row from before this guard existed).
+            if already_stepped(paths["snapshots"], obs):
+                already.append(label)
+                print(f"{label:<10}{'--':>7}{len(state.positions):>6}"
+                      f"{state.cash:>13,.0f}{'already':>13}")
+                continue
             acfg = WheelConfig(ticker="SPY", starting_capital=float(cap), **FROZEN)
             r = paper_step(state, market, acfg, n, paths["trades"], paths["state"],
                            paths["snapshots"])
+            stepped += 1
             print(f"{label:<10}{len(r.trades):>7}{len(state.positions):>6}"
                   f"{state.cash:>13,.0f}{r.equity:>13,.0f}")
         except Exception as e:
+            failed.append(label)
             print(f"{label:<10} ERROR: {type(e).__name__}: {e} — skipped, others continue")
+
+    day = str(obs.date())
+    # A run that stepped NOTHING is a failed run, whatever the pulls did. The old
+    # unconditional `return 0` meant 25 exceptions still exited 0, so the tick
+    # wrote .dailyran and the day was permanently recorded as traded.
+    if stepped == 0 and not already:
+        msg = (f"{day}: all {len(accounts)} accounts failed to step "
+               f"({', '.join(failed[:6])}{'...' if len(failed) > 6 else ''}). "
+               f"Market data pulled fine, so this is not a data outage -- check "
+               f"disk space, memory, and the run log. No completion marker was "
+               f"written; the next tick will retry.")
+        print(f"ALL ACCOUNTS FAILED -- {msg}")
+        send_alert(f"daily run FAILED {day}", msg)
+        append_gap(day, "all_accounts_failed", accounts=len(accounts))
+        return 1
+    if failed:
+        # Partial failure still completes the day for the other accounts, so we
+        # do NOT fail the run (that would re-step the healthy ones). But those
+        # accounts now have a hole, and silence is what this audit was about.
+        msg = (f"{day}: {len(failed)}/{len(accounts)} accounts failed to step: "
+               f"{', '.join(failed)}. The other {stepped} completed and the day "
+               f"is marked done. The failed accounts have a GAP for this date -- "
+               f"their equity curve will look continuous but is missing a day.")
+        print(f"PARTIAL FAILURE -- {msg}")
+        send_alert(f"daily run PARTIAL {day} ({len(failed)} accounts)", msg)
+        append_gap(f"{day}#accounts", "accounts_failed", accounts=failed, date=day)
     return 0
 
 

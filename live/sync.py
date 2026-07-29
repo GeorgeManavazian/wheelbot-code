@@ -9,6 +9,7 @@ the actual staged paths before every push and aborts on a match."""
 from __future__ import annotations
 import json
 import os
+import re
 import subprocess
 
 GIT_CFG = os.path.expanduser("~/.wheelbot/git.json")
@@ -18,9 +19,58 @@ _SECRET_MARKERS = (".schwab", ".wheelbot", "token.json", "oci_api_key",
                    ".pem", "id_rsa", "credentials")
 
 
-def secret_guard(paths) -> list:
-    """Every path that looks like a credential. Empty list == safe to push."""
-    return [p for p in paths if any(m in p for m in _SECRET_MARKERS)]
+# Credential shapes that must never appear in a pushed file's CONTENT. Checking
+# only the path was insufficient: the paths in _SECRET_MARKERS live outside the
+# synced tree and can never be staged, so the path check alone could not fire.
+# A secret embedded in a legitimately-named file (a state.json, a run log) is the
+# realistic leak, and that is what this catches.
+_SECRET_CONTENT = (
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}"),
+    re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----"),
+    re.compile(r"x-access-token:[^@\s*]{8,}@"),
+    re.compile(r'"refresh_token"\s*:\s*"[^"]{8,}"'),
+    re.compile(r'"(?:app_secret|client_secret)"\s*:\s*"[^"]{6,}"'),
+    re.compile(r'"password"\s*:\s*"[^"]{6,}"'),
+)
+
+_SCAN_MAX_BYTES = 2_000_000     # skip pathological files; state files are tiny
+
+
+def secret_guard(paths, state_dir: str = None) -> list:
+    """Every staged path that is, or CONTAINS, a credential. Empty == safe.
+
+    Two independent checks, because either alone is insufficient:
+      1. the path itself looks like a credential file, and
+      2. the file's bytes match a known credential shape.
+    """
+    bad = [p for p in paths if any(m in p for m in _SECRET_MARKERS)]
+    if state_dir is None:
+        return bad
+    for p in paths:
+        if p in bad:
+            continue
+        full = os.path.join(state_dir, p)
+        try:
+            if os.path.getsize(full) > _SCAN_MAX_BYTES:
+                continue
+            with open(full, "r", errors="ignore") as f:
+                body = f.read()
+        except OSError:
+            continue
+        if any(rx.search(body) for rx in _SECRET_CONTENT):
+            bad.append(p)
+    return bad
+
+
+def _scrub(text: str, cfg) -> str:
+    """Remove the PAT from anything bound for a log. The state logs are synced
+    to GitHub, so a leak here is a leak to the remote."""
+    tok = (cfg or {}).get("token")
+    out = str(text)
+    if tok:
+        out = out.replace(tok, "***")
+    return re.sub(r"x-access-token:[^@\s]+@", "x-access-token:***@", out)
 
 
 def _git(args, cwd) -> subprocess.CompletedProcess:
@@ -58,7 +108,7 @@ def sync_state(state_dir: str, message: str, cfg_path: str = GIT_CFG) -> bool:
 
         _git(["add", "-A"], state_dir)
 
-        offenders = secret_guard(_staged_paths(state_dir))
+        offenders = secret_guard(_staged_paths(state_dir), state_dir)
         if offenders:
             print(f"[sync ABORTED -- credential in staged paths: {offenders}]")
             _git(["reset"], state_dir)
@@ -85,11 +135,13 @@ def sync_state(state_dir: str, message: str, cfg_path: str = GIT_CFG) -> bool:
         # eliminate.
         p = _git(["push", "--force", url, "main"], state_dir)
         if p.returncode != 0:
-            # scrub the token out of any error text before it reaches a log
-            err = p.stderr.replace(cfg["token"], "***")
-            print(f"[sync push failed] {err.strip()[:300]}")
+            print(f"[sync push failed] {_scrub(p.stderr, cfg).strip()[:300]}")
             return False
         return True
     except Exception as e:                     # noqa: BLE001 -- deliberate
-        print(f"[sync FAILED {type(e).__name__}: {e}]")
+        # NEVER interpolate a raw exception here. subprocess.TimeoutExpired
+        # stringifies the FULL argv, and the push URL embeds the PAT -- a 120s
+        # push timeout would print the token into a log that lives inside
+        # data/live and is itself force-pushed to GitHub. (audit 2026-07-29)
+        print(f"[sync FAILED {type(e).__name__}: {_scrub(str(e), cfg)}]")
         return False
