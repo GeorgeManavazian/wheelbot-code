@@ -20,7 +20,7 @@ from __future__ import annotations
 import pandas as pd
 
 from live.data import _CHAIN_COLS
-from live.marks import occ_symbol, _contract_field
+from live.marks import occ_symbol, _contract_field, _num
 
 
 def held_contracts(position_lists) -> list:
@@ -135,9 +135,5 @@ def merge_held_legs(market, client, position_lists, obs) -> dict:
     return stats
 
 
-def _num(v):
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    return None if f != f else f
+# `_num` now lives in live.marks — one coercion shared with contract_quotes, so
+# the two quote-parsing paths cannot disagree about the same contract. (A6.)

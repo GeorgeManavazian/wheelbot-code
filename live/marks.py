@@ -22,6 +22,19 @@ def occ_symbol(root: str, expiry, strike: float, right: str) -> str:
     return f"{root:<6}{exp}{right}{strike_milli:08d}"
 
 
+def _num(v):
+    """Coerce one Schwab JSON field to a float, or None. Rejects NaN and anything
+    non-numeric. Lives here (not in `held_legs`) because `held_legs` imports from
+    this module and the reverse would be circular; it is the ONE coercion both
+    quote-parsing paths share, so they cannot silently disagree about the same
+    contract. (A6, audit 2026-07-31.)"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f
+
+
 def _mark_from_quote(q: dict):
     """Pull a usable mark out of one Schwab quote entry. Prefer the exchange
     'mark'; else midpoint of bid/ask; else last. None if nothing usable."""
@@ -73,10 +86,16 @@ def live_asks(client, positions) -> dict:
     book right now, which is what the dashboard displays and what the engine
     marks equity from (owner decision B, 2026-07-31).
 
-    Unlike `contract_quotes` this does not require a live bid: a deep-OTM leg
-    quoted 0.00 x 0.01 is worthless, and worthless is exactly the state the
-    display must be able to show. It does require a real ask, because an ask of
-    zero is a halted or empty book and would display the liability as nil."""
+    Does not require a live bid: a deep-OTM leg quoted 0.00 x 0.01 is worthless,
+    and worthless is exactly the state the display must be able to show. It does
+    require a real ask, because an ask of zero is a halted or empty book and
+    would display the liability as nil.
+
+    KNOWN DIVERGENCE from `contract_quotes`, which since A6 (2026-07-31) shares
+    the zero-bid rule but is stricter: this function still admits a MISSING and a
+    NEGATIVE bid, and does not reject NaN. So the dashboard can price a liability
+    the intraday manager will refuse to act on. Left alone deliberately — folding
+    the four admission rules into one is A18, not A6."""
     legs = {}
     for p in positions:
         short = p.get("short")
@@ -138,13 +157,31 @@ def contract_quotes(client, positions) -> dict:
         if not q:
             continue
         node = q.get("quote", q) if isinstance(q, dict) else {}
-        bid, ask = node.get("bidPrice"), node.get("askPrice")
-        # require a real two-sided quote -- a 0/0 (halt, pre-open, thin option) would
-        # otherwise mark ask=0, and the intraday TP check (ask <= (1-TP)*credit) would
-        # fire and "close" the leg for free. Matches the EOD chain's bid>0 & ask>0 filter.
-        if bid is None or ask is None or bid <= 0 or ask <= 0:
+        bid, ask = _num(node.get("bidPrice")), _num(node.get("askPrice"))
+        # Require a real ASK; a zero BID is a price, not an absence.
+        #
+        # This used to demand bid>0 too, which made the intraday manager blind to
+        # exactly the leg it exists to close: a fully-decayed put quoted
+        # 0.00 x 0.01 is worthless, and worthless is the winning outcome. 45% of
+        # this bot's own 0.30-delta/11-DTE picks reach ask <= $0.05 before expiry.
+        # The sibling EOD path (held_legs.rows_from_quotes) requires only a real
+        # ask, so the two functions disagreed about the same contract. (A6,
+        # audit 2026-07-31)
+        #
+        # ask<=0 is still refused, and that guard is load-bearing: an ask of zero
+        # satisfies `ask <= (1-TP)*credit` for ANY credit, so a halted or
+        # pre-open 0.00 x 0.00 book would "close" the leg for free and drop it
+        # (defect C1, audit 2026-07-18). A negative bid is not a price either.
+        #
+        # `_num` is what makes the clause order safe: with raw JSON, testing
+        # `ask <= 0` BEFORE `bid <= 0` meant a non-numeric ask (previously
+        # short-circuited away by the bid test) raised TypeError out of the whole
+        # per-account tick, suppressing take-profit on that account's other legs.
+        # It also rejects NaN, which the old `bid <= 0` clause caught only by
+        # accident. Same coercion as held_legs.rows_from_quotes.
+        if bid is None or ask is None or ask <= 0 or bid < 0:
             continue
-        mk = node.get("mark")
-        mid = float(mk) if mk else (float(bid) + float(ask)) / 2.0
-        out[tk] = Mark(float(bid), float(ask), mid)
+        mk = _num(node.get("mark"))
+        mid = mk if (mk is not None and mk > 0) else (bid + ask) / 2.0
+        out[tk] = Mark(bid, ask, mid)
     return out

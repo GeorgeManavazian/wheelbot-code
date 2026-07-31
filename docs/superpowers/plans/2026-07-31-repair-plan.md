@@ -1,7 +1,7 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** NOT STARTED · **Bot state:** PAUSED (timer stopped AND
-disabled on the VPS)
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 1 of 58 done (A6) · **Bot state:** PAUSED
+(timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
 batch review at group boundaries.
@@ -176,15 +176,16 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | ID | Fix | Sev | Status | Evidence |
 |---|---|---|---|---|
 | A16 | **Pull the chain during RTH, not at 17:00 after the close** | CRIT | TODO | |
-| A18 | One shared fill function across all four engines (seam only, no model choice) | HIGH | TODO | |
+| A18 | One shared fill function across all four engines (seam only, no model choice) | HIGH | TODO | **Also four ADMISSION rules, measured during A6** on identical payloads — `0.00 x 0.00`: `contract_quotes` skip / `live_asks` skip / `_mark_from_quote` None. bid `None`, ask `0.05`: skip / **admits 0.05** / None. bid `-0.01`, ask `0.05`: skip / **admits 0.05** / **0.02**. So the dashboard prices a liability the intraday manager refuses to act on. Also: `live_marks` and `_mark_from_quote` have **zero production callers** — dead code, tests only. And `_num` still exists twice (`live/marks.py:25`, `live/data.py:32`, byte-identical). |
 | A19 | Capture `openInterest`/`totalVolume`/`bidSize`/`askSize` from the Schwab response | MED | TODO | |
 | A17 | Represent partial fills / working-order state | HIGH | TODO | |
 | A1 | ~~Intraday fill realism~~ **DEFERRED — strategy decision, see owner decision above** | CRIT | DEFERRED (owner) | resting limit and next-poll both rejected on evidence; spread-fraction k≈0.5 is the supported candidate |
 | A2 | Liquidity gate (rel-spread/OI/volume) — **gate yes, cap parameter DEFERRED** | CRIT | TODO | grid-wide cap value is a strategy decision |
-| A3 | Minimum credit / maximum spread / unclosable-by-construction guard | HIGH | TODO | |
+| A3 | Minimum credit / maximum spread / unclosable-by-construction guard | HIGH | TODO | **Sized during A6** (skeptic, real trade log, 145 SELL_PUTs, `commission_per_contract=0.65`): on micro-credit names a leg that used to expire free is now bought back at the $0.01 tick, surrendering **RIG 70.2% / VALE 26.0% / AGNC 22.4%** of banked premium (RIG: $6.60 to close $9.40 banked). 144 of 145 entries have a TP trigger reachable at the minimum tick. This is the minimum-credit case in dollars. |
+| A20 | **TP=0.60 is out of sample on the population A6 admits** | HIGH | TODO | Found by the A6 skeptic. `src/engine_v2/options/chain.py:42` and `live/data.py:66-67` both filter `bid > 0`, so a `0.00 x 0.01` row is **unrepresentable in the backtest chain** — the frozen TP policy was never measured over it. Not created by A6 (`rows_from_quotes` opened it for EOD on 07-31), but A6 extends it to the path producing 100% of realized P&L. |
 | A4 | Covered-call window — reach the basis floor | HIGH | TODO | |
-| A5 | Same-day re-entry guard must see intraday closes | HIGH | TODO | |
-| A6 | Intraday must see a 0.00 bid (align with `rows_from_quotes`) | HIGH | TODO | |
+| A5 | Same-day re-entry guard must see intraday closes | HIGH | TODO | **A6 is an amplifier for this** — `portfolio.py:84` rebuilds `closed_today = set()` inside `step_one_day` and `manage_intraday` persists nothing, so every intraday close is invisible to the guard, and A6 exists to increase intraday closes. Bound: the newly-admitted population is deep-OTM/near-worthless, least likely to be re-selected at 0.30 delta, so the marginal exposure from A6 alone is probably small. |
+| A6 | Intraday must see a 0.00 bid (align with `rows_from_quotes`) | HIGH | **DONE** | see A6 evidence block below |
 | A7 | Intraday holiday + quote-freshness gate | MED | TODO | |
 | A8 | Early assignment modelling | MED | TODO | |
 | A9 | Defer the covered call one session after assignment | MED | TODO | |
@@ -264,6 +265,54 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 
 ---
 
+## A6 — evidence (completed 2026-07-31)
+
+**In plain language.** The bot sells a put and wants to buy it back cheap once it has decayed.
+When such a put becomes worthless the market quotes it *"nobody will pay anything for it, but you
+can buy it back for a penny"* — `0.00 x 0.01`. `contract_quotes` threw that quote away because the
+BID was zero, so the intraday manager was blind to exactly the leg it exists to close. The EOD
+sibling `held_legs.rows_from_quotes` had already been fixed for this, so the two functions
+disagreed about the same contract. A zero bid is a price; a zero ask is not, and refusing `ask <= 0`
+stays load-bearing — an ask of zero satisfies `ask <= (1-TP)*credit` for **any** credit and would
+close the leg for free (defect C1, 2026-07-18).
+
+**Started from an unfinished uncommitted change** left in the working tree by a prior session,
+with the live suite RED (`test_marks.py:72` still asserted the old rule). Owner ruled: finish A6
+first rather than start A16 on a red tree. The superseded assertion was replaced with a comment
+recording that it *was the defect, not the spec* — the new tests assert both directions.
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | `marks.py` reverted to HEAD, new tests kept → `AssertionError: a 0.00 x 0.01 market is worthless, not absent / assert 'RIG' in {}` at `test_marks.py:111`. `1 failed, 10 passed`. Real assertion, not an import error. The two guard-preservation tests correctly PASS on old code. |
+| 2 Minimal fix | `bid <= 0 or ask <= 0` → `ask <= 0 or bid < 0`, plus `_num` coercion on bid/ask/mark (see amendment below). |
+| 3 Suites | `484 passed` (backtest, 295s) + `151 passed` (live, 4.4s) = **635**, from a 630 baseline + 5 new tests. |
+| 4 Mutation | 4 mutants, all killed: old rule → 2 fail · no guard → 3 fail · drop `bid < 0` → 1 fail · drop `_num` → 2 fail. Restored → `151 passed`. |
+| 5 Line audit | Functional diff is one condition, one coercion, one `mid` expression, the `_num` move, two docstrings. **Declared delta:** a NEGATIVE exchange `mark` now falls back to the midpoint instead of being used as `mid`. `.mid` is dead on this path (proven, C1 below) and this matches `rows_from_quotes:72`. |
+| 6 Blast radius | One production caller, `run_intraday.py:53`. `_num` now shared with `held_legs`'s four call sites (byte-identical function). `live/data.py:32` keeps a third identical copy — recorded under A18, not touched. |
+| C1 Skeptic | Read-only agent, verdict **CORRECT-BUT-INCOMPLETE**. Could not break the central claim: replaced `Mark` with a tripwire whose `.bid`/`.mid` raise, drove `manage_intraday` under the real `FROZEN` config across TP-fires / no-fire / CALL-phase → *"attributes read during manage_intraday: NONE"*. `buy_cost` (`wheel.py:80`) reads only `mark.ask`. Also confirmed C1 never fired in production: across 114 real `CLOSE_PUT`s the minimum booked price is `$0.03`, zero closes at `$0.00`. |
+| C2 Dry run | Read-only, live Schwab, 15:31 ET 2026-07-31, all 4 held legs. HAL `0.28 x 0.30` and WBD `0.06 x 0.10` unaffected. **RIG `0.00 x 0.01` and TMO `0.00 x 4.80` were both invisible to the old rule** — the two legs the bot most needed to see. TMO quoted `0.00 x 4.80` is itself a live sighting of A16. |
+| C3 Dollars | **$0.00 today.** The $13.20 that would close RIG's 8 contracts does NOT apply: both newly-visible legs expire today and `intraday.py:33` skips expiry-day legs by design. Value is on future non-expiry days. Stated because the first draft of this number was $13.20 and that would have been wrong. |
+
+**Amendment forced by the skeptic — two regressions the original diff introduced:**
+1. Testing `ask <= 0` *before* `bid <= 0` removed the short-circuit that used to swallow a
+   non-numeric ask. A single malformed leg then raised `TypeError` out of `run_intraday.py:66`'s
+   per-account handler and **suppressed take-profit for every other position in that account for
+   that tick**. Demonstrated: `NEW rule -> RAISED TypeError` where `OLD rule -> DOW take-profit
+   DID fire`.
+2. A NaN ask was newly admitted (the old `bid <= 0` clause caught it by accident).
+Both fixed by routing bid/ask/mark through `_num` — the coercion `rows_from_quotes` already used,
+which is the parity A6 claimed but did not originally reach.
+
+**One test of mine was wrong and was corrected, not weakened (A3):** it asserted a numeric string
+`"0.05"` must be refused. `rows_from_quotes` coerces it to `(0.0, 0.05, 0.025)`, so coercing is the
+spec; the assertion mis-stated it. Refusal is still asserted for `""`, `None`, `"abc"`, NaN, `{}`,
+`[]`, `"None"`.
+
+**Not re-run after the amendment:** a second skeptic pass. The amendment is itself skeptic-derived
+and mutation-tested, but this is declared, not claimed as verified (A1/A5).
+
+---
+
 ## Phase F — before day 1
 
 | # | Gate | Status |
@@ -297,4 +346,5 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | Date | Entry |
 |---|---|
 | 2026-07-31 | Audit completed (9 domains). Bot paused: timer stopped and **disabled**. 8 fixes shipped as `4cffd72` + `7022ade`. Plan created; no repair work started. |
+| 2026-07-31 | **A6 DONE.** Found the tree dirty and the live suite RED with a prior session's unfinished A6 change; owner ruled finish-A6-before-A16. All 7 gates + C1/C2/C3 recorded above. Skeptic forced an amendment (two regressions the reorder introduced). New findings filed: **A20** (TP=0.60 out of sample on the admitted population), plus evidence added to A3, A5, A18. Suites 484+151=635. Nothing deployed — bot stays paused. |
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
