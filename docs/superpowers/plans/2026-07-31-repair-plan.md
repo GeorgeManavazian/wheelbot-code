@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 1 of 58 done (A6) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 2 of 60 done (A6, A16; A21/A22/E8 added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -175,9 +175,11 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 
 | ID | Fix | Sev | Status | Evidence |
 |---|---|---|---|---|
-| A16 | **Pull the chain during RTH, not at 17:00 after the close** | CRIT | TODO | |
+| A16 | **Pull the chain during RTH, not at 17:00 after the close** | CRIT | **DONE** | see A16 evidence block below. **Owner decisions 2026-07-31:** (1) snapshot missing on a trading day → **skip the day + gap record + alert**, never fall back to a post-close pull; (2) half days (~3/yr) → **accepted as-is**, no half-day calendar — those snapshots will be post-close, a disclosed bounded corruption; (3) held-leg quote pull stays post-close → filed as **A21**, not folded in. |
 | A18 | One shared fill function across all four engines (seam only, no model choice) | HIGH | TODO | **Also four ADMISSION rules, measured during A6** on identical payloads — `0.00 x 0.00`: `contract_quotes` skip / `live_asks` skip / `_mark_from_quote` None. bid `None`, ask `0.05`: skip / **admits 0.05** / None. bid `-0.01`, ask `0.05`: skip / **admits 0.05** / **0.02**. So the dashboard prices a liability the intraday manager refuses to act on. Also: `live_marks` and `_mark_from_quote` have **zero production callers** — dead code, tests only. And `_num` still exists twice (`live/marks.py:25`, `live/data.py:32`, byte-identical). |
 | A19 | Capture `openInterest`/`totalVolume`/`bidSize`/`askSize` from the Schwab response | MED | TODO | |
+| A21 | `merge_held_legs` quote pull happens at 17:00, post-close (`run_daily.py:192` → `held_legs.py:113`) — same staleness class as A16 but marks/dashboard only, not entries | MED | TODO | Split out of A16 by owner decision 2026-07-31. Affects held-leg marks, snapshot equity (`snapshots.py:26`), and the EOD TP branch (`portfolio.py:94-101`); the intraday TP already runs on RTH quotes. |
+| A22 | `chain_frame` stamps `from_date`/`to_date` from the **box (UTC) clock**, not ET (`live/data.py:81 dt.date.today()`) — on the UTC VPS any retry from 19:00-20:00 ET onward requests **tomorrow's** expiry window, shifting the DTE band the selector uses | MED | TODO | Found by the A16 analyst. `obs_date` is threaded correctly; only the request dates are wrong. Dormant on the new RTH snapshot path (UTC date == ET date at 15:xx ET) but live on `--smoke` and any manual post-19:00 pull. |
 | A17 | Represent partial fills / working-order state | HIGH | TODO | |
 | A1 | ~~Intraday fill realism~~ **DEFERRED — strategy decision, see owner decision above** | CRIT | DEFERRED (owner) | resting limit and next-poll both rejected on evidence; spread-fraction k≈0.5 is the supported candidate |
 | A2 | Liquidity gate (rel-spread/OI/volume) — **gate yes, cap parameter DEFERRED** | CRIT | TODO | grid-wide cap value is a strategy decision |
@@ -262,6 +264,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | E5 | Assert on behaviour, not fixtures, in the two flagged tests | TODO | |
 | E6 | Rewrite `test_all_modules_follow_the_override` so it stops proving the opposite | TODO | |
 | E7 | Re-run all nine surviving mutations; every one must now be killed | TODO | |
+| E8 | `run_chain_snapshot.main()` wiring tests (zombie wiring, partial-exit-1, save-recheck call site, `--force`) — predicates are tested, the wiring is executed only by the A16 skeptic's S1 run and the C2 dry run | TODO | filed from skeptic F6, 2026-07-31 |
 
 ---
 
@@ -313,6 +316,56 @@ and mutation-tested, but this is declared, not claimed as verified (A1/A5).
 
 ---
 
+## A16 — evidence (completed 2026-07-31)
+
+**In plain language.** The bot made its evening decisions by reading option prices at 5pm — an
+hour after the options market closed, when quotes are leftover chalkboard ghosts measured 3–4×
+wider than anything tradeable. Now a snapshot pass runs *during* market hours (15:20–15:50 ET),
+photographs the live price boards, and saves them; the 5pm decision run reads the photo instead
+of the dead board. Split, not moved, because the decision step genuinely needs the official 4pm
+close (expiry settlement, equity marks) and the candidate list is provably identical at both
+times (it depends only on prior-session data).
+
+**New pieces:** `live/chain_store.py` (JSON-per-day snapshot store, obs-keyed, atomic write,
+corrupt/stale → None), `live/run_chain_snapshot.py` (RTH runner, window + save-time clock gates),
+`_live_market` gains a REQUIRED `chains` arg naming the chain source out loud, `run_daily.main`
+gains missing/incomplete-snapshot gates, `wheelbot_tick.sh` gains the 15:20–15:55 window block
+(marker only on exit 0).
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | New test asserting the daily market never pulls chains live → `AssertionError: A16: run-time market pulled option chains live (post-close book) / assert ['GDX'] == []`. Real behavioral failure, not an import error. |
+| 2 Minimal fix | The five pieces above; nothing else rode along (A22, the UTC `from_date` bug the analyst found, deliberately NOT fixed here — filed as its own row). |
+| 3 Suites | `484 passed` (backtest, 286s) + `166 passed` (live, 4.6s) = **650**, from the 635 post-A6 baseline + 15 new tests. |
+| 4 Mutation | 8 mutants, all killed: ignore-snapshot → 2 fail · silent-empty-chain → 1 · holiday-judged-before-dead-feed → 1 · stale-obs served → 1 · window past close → 2 · row-validation dropped → 1 · incomplete-branch off → 1 · save-grace widened to 17:00 → 1. Restored → 166 green. |
+| 5 Line audit | run_daily +112 (seam + classifier + two gate branches), tick +16 (window block), 4 new files, tests +110/new. **Declared deltas:** (a) `--smoke` still pulls chains live by design (throwaway connectivity check); (b) a missing snapshot day exits 0 and writes the marker — deliberate, no retry can rebuild an RTH snapshot; (c) snapshot files land in `data/live/chains/` and sync with the state repo, ~130 KB/day measured. |
+| 6 Blast radius | `_live_market`: exactly 2 production callers (run_daily.main, snapshot runner), both explicit. `chain_frame`: reachable only via the gated seam + manual `smoke_pull.py` (carries A22, recorded). Gap reason strings are free-form — no consumer changes. Health check: skeptic proved no double-alert on gap days. |
+| C1 Skeptic | Verdict **CORRECT-BUT-INCOMPLETE**. Could not break the core: fresh vs saved+loaded chains through real `step_one_day` + FROZEN config are **byte-identical** (entry, covered-call basis floor, TP, held-leg splice with `held_only`/delta coercion); every staleness vector refused (wrong day, tampered obs, weekend `--force` leftover, midnight). Four demonstrated bad-day edges (F1–F4) **fixed as amendments, each with a test and a killed mutant** — see below. F5 (empty-frame dtype drift, proven inert) declared in the store docstring. F6 (runner-main wiring untested) filed as **E8**. |
+| C2 Dry run | Live Schwab, 2026-07-31: runner **refused at 17:08 ET, exit 1** (the very pull the old code did daily). `--force` into a scratch store: 547 closes → 11/11 candidate chains → 130 KB snapshot; loaded back, wrong-day load → None. |
+| C3 Dollars | **$0.00 today** — bot paused, no entries stepped. Retro-measurement impossible: Schwab has no historical chain endpoint. Prospective, measured from the C2 snapshot itself: the 17:15 book across 392 candidate put rows shows **median rel-spread 28.3%, p90 100%** vs the 7.4% intraday historical median — independently reproducing the audit's 29.8% figure. Every future entry credit and delta selection was being priced off that book. |
+
+**Amendments forced by the skeptic (all four demonstrated by execution, then fixed):**
+1. **F1** — a garbage-but-valid-JSON snapshot either crashed every 17:00 retry tick or served a
+   NaN-filled frame. Load now validates per-ticker rows (list of dicts carrying every engine
+   column) and returns None on anything else.
+2. **F2** — a candidate absent from a *present* snapshot tripped the zombie path: exit 1 retried
+   and alerted every 5 min until 23:30, diagnosed "lapsed token", and could never succeed (the
+   snapshot is immutable after close). Now classified like the missing-snapshot case:
+   holiday-aware, one alert, gap reason `chain_snapshot_incomplete`, exit 0.
+3. **F3** — a sub-threshold chain failure at 15:2x froze that ticker (and its held leg's TP) for
+   the day with ~30 min of window left. The runner now saves the partial snapshot but exits 1,
+   so every remaining in-window tick retries a cleaner pull that overwrites it.
+4. **F4** — nothing re-checked the clock after the pull started: a legal 15:55 start finishing
+   ~16:02+ blessed post-close quotes as RTH. Window close tightened 15:55 → 15:50 and the save
+   re-checks the clock (16:05 grace = the closing book seconds late, not the 17:00 ghost).
+
+**Declared, not verified (A1/A5):** intraday Schwab chain latency is assumed comparable to the
+measured post-close ~7 min — first real window will tell; delta drift RTH-vs-post-close was
+never measured (the audit measured spreads); `run_chain_snapshot.main()` wiring has no automated
+test (E8).
+
+---
+
 ## Phase F — before day 1
 
 | # | Gate | Status |
@@ -348,3 +401,4 @@ and mutation-tested, but this is declared, not claimed as verified (A1/A5).
 | 2026-07-31 | Audit completed (9 domains). Bot paused: timer stopped and **disabled**. 8 fixes shipped as `4cffd72` + `7022ade`. Plan created; no repair work started. |
 | 2026-07-31 | **A6 DONE.** Found the tree dirty and the live suite RED with a prior session's unfinished A6 change; owner ruled finish-A6-before-A16. All 7 gates + C1/C2/C3 recorded above. Skeptic forced an amendment (two regressions the reorder introduced). New findings filed: **A20** (TP=0.60 out of sample on the admitted population), plus evidence added to A3, A5, A18. Suites 484+151=635. Nothing deployed — bot stays paused. |
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
+| 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |

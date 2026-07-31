@@ -12,6 +12,116 @@ PH = json.load(open("live/fixtures/price_history_gdx.json"))
 OC = json.load(open("live/fixtures/option_chain_gdx_puts.json"))
 
 
+def test_daily_chains_come_from_snapshot_not_live_pull(monkeypatch):
+    """A16: the daily run executes at 17:00 ET, after the options close, where
+    the book is 3-4x wider than anything tradeable (median rel-spread 29.8% vs
+    7.4% intraday). The run-time market must therefore consume the RTH chain
+    snapshot and must NEVER pull an option chain live -- a live pull at run time
+    prices entries and selects strikes off a post-close ghost book."""
+    import live.data as data
+    from live import run_daily
+    pulled = []
+
+    def live_chain_pull(client, tk, target_dte, strike_count=12, obs_date=None):
+        pulled.append(tk)
+        return chain_from_json(OC, OBS)
+
+    monkeypatch.setattr(data, "daily_closes", lambda client, tk: closes_from_json(PH))
+    monkeypatch.setattr(data, "chain_frame", live_chain_pull)
+    snap_chain = chain_from_json(OC, OBS)
+    m = run_daily._live_market(["GDX"], {"GDX"}, OBS, object(), 11,
+                               {"GDX": snap_chain})
+    assert pulled == [], (
+        "A16: run-time market pulled option chains live (post-close book)")
+    # and the snapshot is actually what gets served
+    assert m.chain("GDX", OBS) is snap_chain
+
+
+def test_candidate_missing_from_snapshot_is_a_failed_pull(monkeypatch):
+    """A candidate absent from the snapshot must land in skipped_chains (an
+    honest failed pull the zombie gate can judge), not silently price off
+    nothing and not fall back to a live pull."""
+    import live.data as data
+    from live import run_daily
+    pulled = []
+    monkeypatch.setattr(data, "daily_closes", lambda client, tk: closes_from_json(PH))
+    monkeypatch.setattr(data, "chain_frame",
+                        lambda *a, **k: pulled.append(a) or chain_from_json(OC, OBS))
+    m = run_daily._live_market(["GDX"], {"GDX"}, OBS, object(), 11, {})
+    assert pulled == []
+    assert m.chain_attempts == 1 and m.chains_ok == 0
+    assert [tk for tk, _ in m.skipped_chains] == ["GDX"]
+
+
+def test_incomplete_snapshot_skips_day_instead_of_retry_spam(tmp_path, monkeypatch):
+    """Skeptic F2: a candidate absent from a PRESENT snapshot used to trip the
+    zombie path -- exit 1, retried and alerted every 5 minutes until 23:30,
+    diagnosed as a lapsed token -- even though no retry can rebuild a 15:2x
+    snapshot. It must instead skip the day once, truthfully labelled, exit 0.
+    Also pins A16 end-to-end: main() must never call the live chain endpoint."""
+    import datetime as dt
+    import sys
+    import types
+    from zoneinfo import ZoneInfo
+    import live.data as data
+    import live.market_live as ml
+    from live import run_daily
+    from live.chain_store import save_chain_snapshot
+
+    monkeypatch.setenv("WHEELBOT_STATE_DIR", str(tmp_path))
+    obs = pd.Timestamp(dt.datetime.now(ZoneInfo("America/New_York")).date())
+    s = closes_from_json(PH)
+    s = pd.concat([s, pd.Series([float(s.iloc[-1])], index=[obs])])
+
+    monkeypatch.setattr(run_daily, "UNIVERSE", ["GDX"])
+    monkeypatch.setattr(ml, "is_good_renting_weather", lambda *a, **k: True)
+    monkeypatch.setattr(data, "daily_closes", lambda c, tk: s)
+
+    def no_live_chains(*a, **k):
+        raise AssertionError("A16: main() pulled an option chain live")
+    monkeypatch.setattr(data, "chain_frame", no_live_chains)
+
+    save_chain_snapshot(obs, {}, pulled_at="t")   # present but missing GDX
+    alerts, gaps = [], []
+    monkeypatch.setattr(run_daily, "send_alert", lambda *a: alerts.append(a))
+    monkeypatch.setattr(run_daily, "append_gap",
+                        lambda date, reason, **kw: gaps.append((str(date), reason)))
+    fake = types.ModuleType("schwab_client")
+    fake.get_client = lambda: object()
+    monkeypatch.setitem(sys.modules, "schwab_client", fake)
+    monkeypatch.setattr(sys, "argv", ["run_daily.py"])
+
+    rc = run_daily.main()
+    assert rc == 0, "must exit 0 (marker written, no retry spam)"
+    assert gaps == [(str(obs.date()), "chain_snapshot_incomplete")]
+    assert len(alerts) == 1
+
+
+def _fixture_market(chains, closes_fn=None, obs=OBS):
+    return LiveMarket(["GDX"], {"GDX"}, obs,
+                      closes_fn=closes_fn or (lambda tk: closes_from_json(PH)),
+                      chain_fn=lambda tk: chains[tk])
+
+
+def test_snapshot_missing_outcomes():
+    """A16 owner decision: missing snapshot on a trading day -> gap; on a
+    holiday -> quiet exit; with the closes feed itself dead -> retry (a dead
+    feed must not be misread as a holiday by an empty market)."""
+    from live.run_daily import snapshot_missing_outcome
+    chain = {"GDX": chain_from_json(OC, OBS)}
+    # real trading day (fixture has a bar dated OBS) -> gap
+    m = _fixture_market(chain)
+    assert snapshot_missing_outcome(m, ["GDX"], OBS, 0.5) == "gap"
+    # holiday: closes exist but none dated obs -> holiday
+    m = _fixture_market(chain, obs=OBS + pd.Timedelta(days=1))
+    assert snapshot_missing_outcome(m, ["GDX"], OBS + pd.Timedelta(days=1), 0.5) == "holiday"
+    # closes feed dead -> retry, NOT holiday
+    def dead(tk):
+        raise RuntimeError("HTTP 401")
+    m = _fixture_market(chain, closes_fn=dead)
+    assert snapshot_missing_outcome(m, ["GDX"], OBS, 0.5) == "retry"
+
+
 def test_paper_step_persists_state_and_trades(tmp_path):
     m = LiveMarket(["GDX"], set(), OBS,
                    closes_fn=lambda tk: closes_from_json(PH),

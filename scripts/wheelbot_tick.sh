@@ -89,6 +89,22 @@ if [ "$DOW" -le 5 ] && [ "$HM" -ge 930 ] && [ "$HM" -le 1600 ]; then
   fi
 fi
 
+# --- RTH chain snapshot: weekdays 15:20-15:55 ET, once per day (A16) -------
+# The 17:00 daily run consumes THIS snapshot instead of pulling chains from
+# the post-close book (measured 3-4x wider than tradeable). Placed after the
+# intraday block so a time-sensitive take-profit is never queued behind a
+# ~7-minute pull. Marker only on exit 0 -- a failed pull retries on every
+# remaining tick in the window. If the whole window fails, run_daily records
+# the day as a gap (owner decision 2026-07-31): no post-close fallback, ever.
+SNAPMARKER="$LOGDIR/.chainsnap-$TODAY"
+if [ "$DOW" -le 5 ] && [ "$HM" -ge 1520 ] && [ "$HM" -le 1555 ] && [ ! -f "$SNAPMARKER" ]; then
+  log "chain snapshot start"
+  py live/run_chain_snapshot.py >> "$LOGDIR/$TODAY.log" 2>&1
+  RC=$?
+  log "chain snapshot exit $RC"
+  [ "$RC" -eq 0 ] && touch "$SNAPMARKER"
+fi
+
 # --- Health check (dead-man's switch): weekdays after 23:45 ET -------------
 # Deliberately AFTER the 23:30 EOD window close -- an earlier cutoff would
 # record a gap for a day that a later retry tick could still complete.

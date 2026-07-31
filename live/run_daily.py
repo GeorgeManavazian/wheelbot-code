@@ -137,18 +137,51 @@ def paper_step(state, market, cfg, n_slots, trades_path, state_path,
     return result
 
 
-def _live_market(universe, held, obs, client, target_dte, chop_max_ma_spread=None,
-                 chop_max_fast_spread=None, chop_max_fast_fall=None):
+def _live_market(universe, held, obs, client, target_dte, chains,
+                 chop_max_ma_spread=None, chop_max_fast_spread=None,
+                 chop_max_fast_fall=None):
+    """`chains` is REQUIRED and names the chain source out loud (A16):
+    a dict = the day's RTH snapshot (17:00 decision runs pass this; a candidate
+    absent from it is a failed pull, counted in skipped_chains); None = pull
+    live from Schwab, which after 16:00 ET is the post-close ghost book -- only
+    the RTH snapshot runner and --smoke may pass it."""
     from live.data import daily_closes, chain_frame
-    # pass obs into chain_frame so the chain's `date` column == the run's obs day
-    # (else a midnight-crossing run stamps chains with a different date than the
-    # engine filters on, silently reading every chain as empty).
+    if chains is None:
+        # pass obs into chain_frame so the chain's `date` column == the run's obs
+        # day (else a midnight-crossing run stamps chains with a different date
+        # than the engine filters on, silently reading every chain as empty).
+        chain_fn = lambda tk: chain_frame(client, tk, target_dte, obs_date=obs)
+    else:
+        def chain_fn(tk):
+            if tk not in chains:
+                raise KeyError(f"{tk} not in the RTH chain snapshot")
+            return chains[tk]
     return LiveMarket(universe, held, obs,
                       closes_fn=lambda tk: daily_closes(client, tk),
-                      chain_fn=lambda tk: chain_frame(client, tk, target_dte, obs_date=obs),
+                      chain_fn=chain_fn,
                       chop_max_ma_spread=chop_max_ma_spread,
                       chop_max_fast_spread=chop_max_fast_spread,
                       chop_max_fast_fall=chop_max_fast_fall)
+
+
+def snapshot_missing_outcome(market, universe, obs, threshold) -> str:
+    """A16: classify a decision run whose RTH chain snapshot is absent.
+
+    'retry'   -- the closes feed itself is dead. Judged FIRST because with an
+                 empty market is_trading_day() reads a token outage as a
+                 holiday; the caller falls through to the zombie path (exit 1)
+                 so the tick retries -- closes ARE still pullable later.
+    'holiday' -- no session today. There was never a snapshot to miss; the
+                 caller exits 0 quietly and records no gap.
+    'gap'     -- a real trading day with no snapshot. Owner decision
+                 2026-07-31: SKIP the day (gap + alert + marker), never fall
+                 back to a live post-close pull -- no later tick can recreate
+                 a 15:2x-15:5x snapshot, so retrying cannot help."""
+    if zombie_check(len(market.skipped_closes), len(universe), 0, 0, threshold):
+        return "retry"
+    if not is_trading_day(market, obs):
+        return "holiday"
+    return "gap"
 
 
 def main():
@@ -181,7 +214,15 @@ def main():
         loaded[(cap, n)] = (state, paths)
         held_all |= {p["ticker"] for p in state.positions}
 
+    # A16: the decision run consumes the RTH snapshot pulled at 15:2x-15:5x ET.
+    # Only --smoke (an explicit connectivity check on a throwaway store) may
+    # still pull chains live. `snap is None` is handled after the pulls, where
+    # holiday / outage / genuine gap can be told apart; passing {} meanwhile
+    # keeps every candidate an honest skipped_chains entry instead of a pull.
+    from live.chain_store import load_chain_snapshot
+    snap = None if args.smoke else load_chain_snapshot(obs)
     market = _live_market(universe, held_all, obs, client, cfg.target_dte,
+                          None if args.smoke else (snap if snap is not None else {}),
                           cfg.chop_max_ma_spread, cfg.chop_max_fast_spread,
                           cfg.chop_max_fast_fall)
     # Mark the legs the bounded chain cannot see. MUST run before any account
@@ -212,6 +253,65 @@ def main():
               f"{[s[0] for s in market.skipped][:8]}")
 
     run_cfg = load_run_config()
+
+    if not args.smoke and snap is None:
+        outcome = snapshot_missing_outcome(market, universe, obs,
+                                           run_cfg["zombie_threshold"])
+        if outcome == "holiday":
+            print(f"{obs.date()}: not a trading session and no RTH chain "
+                  f"snapshot — holiday. No paper day was stepped; this is "
+                  f"not a gap.")
+            return 0
+        if outcome == "gap":
+            day = str(obs.date())
+            msg = (f"{day}: no RTH chain snapshot for today -- the 15:2x-15:5x "
+                   f"ET snapshot pass never succeeded (VPS down or token lapsed "
+                   f"during the window). By owner decision (2026-07-31) the day "
+                   f"is SKIPPED: entries, covered calls and the EOD take-profit "
+                   f"cannot be priced off the post-close book. Expiries settle "
+                   f"on the next run via the late-expiry path. Marker written; "
+                   f"day recorded as a gap.")
+            print(f"NO CHAIN SNAPSHOT -- {msg}")
+            send_alert(f"daily run SKIPPED {day} (no chain snapshot)", msg)
+            append_gap(day, "chain_snapshot_missing")
+            return 0
+        # outcome == "retry": the closes feed itself is dead -- fall through to
+        # the zombie check below, which exits 1 so the tick retries.
+
+    if (not args.smoke and snap is not None
+            and zombie_check(len(market.skipped_closes), len(universe),
+                             market.chain_attempts, market.chains_ok,
+                             run_cfg["zombie_threshold"])):
+        # A16 skeptic F2: with a snapshot present, chain_fn never touches the
+        # network -- every skipped chain is a candidate ABSENT from the 15:2x
+        # snapshot, and no 17:00-23:30 retry can rebuild that snapshot. Letting
+        # this fall into the zombie path below would retry-and-alert ~78 times
+        # with a wrong diagnosis ("lapsed token"). Classify like the missing-
+        # snapshot case instead: dead closes still retry, a holiday stays
+        # quiet, and a real day is skipped once, truthfully labelled.
+        outcome = snapshot_missing_outcome(market, universe, obs,
+                                           run_cfg["zombie_threshold"])
+        if outcome == "holiday":
+            print(f"{obs.date()}: not a trading session — holiday. No paper "
+                  f"day was stepped; this is not a gap.")
+            return 0
+        if outcome == "gap":
+            day = str(obs.date())
+            missing = [tk for tk, _ in market.skipped_chains]
+            msg = (f"{day}: RTH chain snapshot is INCOMPLETE -- "
+                   f"{market.chains_ok}/{market.chain_attempts} of today's "
+                   f"candidates present (missing: {missing[:8]}). The snapshot "
+                   f"cannot be rebuilt after 16:00, so by the A16 owner "
+                   f"decision the day is SKIPPED, not retried. Marker written; "
+                   f"day recorded as a gap.")
+            print(f"SNAPSHOT INCOMPLETE -- {msg}")
+            send_alert(f"daily run SKIPPED {day} (snapshot incomplete)", msg)
+            append_gap(day, "chain_snapshot_incomplete", missing=missing,
+                       chains_ok=market.chains_ok,
+                       chain_attempts=market.chain_attempts)
+            return 0
+        # outcome == "retry": closes feed dead -- fall through, exit 1.
+
     if zombie_check(len(market.skipped_closes), len(universe),
                     market.chain_attempts, market.chains_ok,
                     run_cfg["zombie_threshold"]):
