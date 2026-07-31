@@ -93,6 +93,65 @@ Baseline at plan creation: **484 + 146 = 630 passing** at commit `7022ade`.
 
 ---
 
+## OWNER DECISION 2026-07-31 (post-analyst): PLUMBING FIRST
+
+Four analysts studied the fill model. Their findings **deferred the strategy question rather than
+answering it**, and the owner chose: *fix all the plumbing, prove the bot does what it claims,
+before deciding anything about the strategy.*
+
+**In scope now (plumbing):** Groups B, C, D, E and every Group A item that is unambiguous
+correctness. Plus two new items the analysts found (A16, A17 below).
+
+**Deferred (strategy) — do NOT decide these while repairing:**
+- Which fill model. Build the *seam* (A18: one shared fill function), not the choice.
+- The size-cap parameter. Capture the *data* (A2), not the cap.
+- Whether the 60% take-profit should exist at all.
+- Whether to re-run the sweep on the 341-ticker universe, and whether the reserved five are spent.
+
+### What the analysts established (evidence in their reports; summarised here so this file stands alone)
+
+- **Resting GTC limit: REJECTED.** It is a strict *superset* of the current rule, not a
+  restriction — 219 campaigns fill where the live rule does not, 0 the other way, over 3,159
+  campaigns. It was recommended on a false premise. It also forces the take-profit threshold onto
+  a $0.01 tick grid it does not fit on **65.6% of P&L** (WBD's threshold is $0.004, unenterable),
+  and its correctness depends on process uptime the bot does not have.
+- **Next-poll fill: REJECTED as a correction.** Measured three ways, the expected adverse move at
+  the 5-minute cadence is under $0.0001/share; p90 is at or below one tick. On the live book it is
+  **+0.1%**, bootstrap −8.5% to +8.4%. It adds noise and removes no bias.
+- **Spread-fraction (k≈0.5, $0.01 floor) is the supported correction** — costs −5.8%, band −3% to
+  −12%. Derived from real through-the-offer trades (k ∈ [0.13, 1.29], geometric mean 0.41) and the
+  tick grid (k=0.10 is inert on 62.5% of fills; k=0.50 on 8.7%). A flat tick rule is *wrong* —
+  +1 tick costs 27.0% of AGNC's P&L and 0.24% of AMZN's, a 113× severity range.
+- **Size is the dominant distortion, not price.** Grid-wide cap `n ≤ min(0.20×ADV20, bidSize)`
+  behind a gate of rel-spread ≤ 0.10, OI ≥ 250, volume ≥ 25. The gate alone blocks **114 of 145
+  entries and 90.4% of contracts**. DOW 28P requested 757 contracts against ~84/day ADV — **9×**.
+  Either the size was unattainable (cap it: 90%+ of P&L vanishes) or it was paid for (price it:
+  **−54%**). Per-account capping is insufficient — it still puts 258 contracts, 3.06× ADV, into one
+  strike in one instant.
+- **The 60% take-profit does not survive realistic fills.** Real production engine, 9-ticker
+  in-sample universe: with +$0.05 exit slippage, TP60 returns $115,540 against **$127,940 for
+  holding to expiry** (N=1); $32,945 vs $34,215 at N=5. The parameter surface is a sawtooth
+  (97/148/121/150/141/128k across TP 50/60/70/80/90/none) and the ranking *inverts* with the fill
+  model, so 60% was never identified independently of the assumption it was chosen under. TP beats
+  hold on 7.4% of campaigns and loses on 69.2%, with an identical worst case.
+  **Caveat: 9 tickers, and the same 9 the parameter was tuned on. 341 tickers of EOD data exist
+  and were not used for this sweep.**
+- **Benchmark caveat.** SPY buy-and-hold over the same window returned $192,674 on $100k, beating
+  every arm — but the wheel sits largely in cash, so this is not capital-matched or risk-adjusted.
+  Directionally right, overstated as presented.
+- **There is no distribution in the live results.** $81,608 is **13 exit decisions on 11 distinct
+  contracts**; two DOW legs are 55%; and **66.5% was booked on sessions where the intraday manager
+  observed under 60% of the trading day** (RTH coverage 70.2% overall; 07-22 26%, 07-31 37%).
+
+### New defects found by the analysts
+
+| ID | Sev | Defect |
+|---|---|---|
+| A16 | **CRITICAL** | The EOD chain is pulled at 17:00 ET, **after the options close**. Entries are sold at the bid of a post-close quote — measured **3.0–4.0× wider** than the same options during the session (live median rel-spread 29.8% vs 7.4% historical intraday). TMO 512.5P was quoted 8.00 × 15.30. This corrupts entry credits AND strike/delta selection, and every slippage figure in the audit is anchored on a spread nobody could cross. |
+| A17 | HIGH | `live/intraday.py:45` sets `pos["short"] = None` unconditionally and the state schema has no working-order/partial-fill representation. Any fill model that can partially fill is unrepresentable. In the hour the limit was first touched, 55.4% of hours traded fewer than 172 contracts — below the bot's largest real fill of 181. |
+| A18 | HIGH | Four engines, four inline fill expressions: `portfolio.py:96` (EOD ask), `live/intraday.py:38-43` (live ask), `wheel.py:171-176` and `regime_router.py:120-125` (hourly trade print, fill at the NEXT bar). The BATCH rule fires on 81.5% of campaigns and the LIVE rule on 76.7% — **159 campaigns (5.3%) the backtest takes profit on that live can never close**. Until one shared fill function exists, no A/B across engines is comparable and the 60% parameter has no provenance. Filed as a known divergence in `specs/2026-07-11-wheel-04-intraday-design.md:13`, never sized. |
+| A19 | MEDIUM | `live/data.py` discards `openInterest`, `totalVolume`, `bidSize`, `askSize` from every Schwab response. Capturing them is a prerequisite for any size-aware model and replaces the entire ADV proxy chain (currently ×3.6 typical error) with measurement. Cheap, and it should start immediately so data accrues. |
+
 ## Order of work, and why
 
 1. **Group A (trading behaviour)** — changes what the bot does with capital. Highest value,
@@ -116,8 +175,12 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 
 | ID | Fix | Sev | Status | Evidence |
 |---|---|---|---|---|
-| A1 | Intraday fill realism — fill at next poll, add slippage | CRIT | TODO | |
-| A2 | Liquidity: pull OI/volume/sizes, reject illiquid, cap size | CRIT | TODO | |
+| A16 | **Pull the chain during RTH, not at 17:00 after the close** | CRIT | TODO | |
+| A18 | One shared fill function across all four engines (seam only, no model choice) | HIGH | TODO | |
+| A19 | Capture `openInterest`/`totalVolume`/`bidSize`/`askSize` from the Schwab response | MED | TODO | |
+| A17 | Represent partial fills / working-order state | HIGH | TODO | |
+| A1 | ~~Intraday fill realism~~ **DEFERRED — strategy decision, see owner decision above** | CRIT | DEFERRED (owner) | resting limit and next-poll both rejected on evidence; spread-fraction k≈0.5 is the supported candidate |
+| A2 | Liquidity gate (rel-spread/OI/volume) — **gate yes, cap parameter DEFERRED** | CRIT | TODO | grid-wide cap value is a strategy decision |
 | A3 | Minimum credit / maximum spread / unclosable-by-construction guard | HIGH | TODO | |
 | A4 | Covered-call window — reach the basis floor | HIGH | TODO | |
 | A5 | Same-day re-entry guard must see intraday closes | HIGH | TODO | |
@@ -223,6 +286,9 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | Q2 | What slippage model for A1 — next-poll fill, fixed ticks, half-spread, or a combination? (Analyst agent to propose; owner decides.) | OPEN |
 | Q3 | Confirm `call_min_strike="basis"` is intended as *net* basis, so calls are legitimately written below the assignment strike once premium accrues. | OPEN |
 | Q4 | Keep 547 tickers / 25 accounts / a separate intraday engine, or shrink the surface? Rejected once (owner chose to fix everything) — revisit only if the repair proves impractical. | CLOSED — fix everything |
+| Q5 | Re-run the take-profit sweep on the **341-ticker** EOD universe (reserved five excluded) rather than the 9 in-sample tickers? The damning result stands on 9 tickers — the same 9 the parameter was tuned on. | OPEN — deferred with the strategy question |
+| Q6 | Are the reserved five (XBI, EEM, EWZ, TLT, ARKK) now spent? Two analysts included them — they were measuring microstructure (spreads, fill rates, volumes), not selecting a strategy, but per-model P&L was computed on campaigns containing them. Disclosed 2026-07-31; owner has not ruled. | OPEN |
+| Q7 | Does the intraday manager stay a separate engine at all? Its RTH coverage is 70.2%, it has died mid-session 4×, it has no dead-man's switch, and it produces 100% of realized P&L from 13 decisions clustered 09:35–12:00 — i.e. it is an overnight-gap harvester, not an intraday manager. | OPEN |
 
 ---
 
