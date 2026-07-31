@@ -64,6 +64,43 @@ def _row_before(states: pd.DataFrame, d: pd.Timestamp):
     return states.iloc[pos]
 
 
+def close_short_fill(pos, dec, cash, trades):
+    """Book a short close from a FillDecision -- THE one place that knows how
+    a (possibly partial) buy-back mutates a position (A17). Decrements the
+    live size by dec.filled_contracts; zero remaining normalizes `short` to
+    None, which is what every downstream `short is None` test (compaction,
+    covered-call gate, equity mark, settlement) keys on. Returns
+    (cash, fully_closed). Both current fill modes are instant-and-whole
+    (filled_contracts == contracts), so they decrement straight to zero --
+    byte-identical to the pre-A17 behavior; the capacity exists for a fill
+    model that is not. Shared with live/intraday.py -- one rule, two call
+    sites, same as the A18 seam."""
+    short = pos["short"]
+    c = short["contract"]
+    k = dec.filled_contracts
+    # A17 skeptic F4: a filled decision carrying zero (or negative) contracts
+    # would book a 0-lot ghost Trade, bleed dec.cost from cash, and leave the
+    # leg open. Unreachable from the current seam (both modes fill whole);
+    # refuse it loudly so a future fill model cannot emit it silently.
+    if k <= 0:
+        raise ValueError(f"filled decision with filled_contracts={k}")
+    if k < short["contracts"] and "opened_contracts" not in short:
+        # first partial on this leg: record the original size, or the stored
+        # "6 remain" reads as 6-of-6 when it was 6-of-10 (skeptic F5)
+        short["opened_contracts"] = short["contracts"]
+    cash -= dec.cost
+    pos["premium"] -= dec.cost
+    # held legs load as Contract dataclasses but old raw dicts must not crash
+    right = getattr(c, "right", None) if hasattr(c, "right") else c["right"]
+    trades.append(Trade(dec.stamp, "CLOSE_PUT" if right == "P" else "CLOSE_CALL",
+                        c, k, dec.price, cash, pos["campaign"]))
+    short["contracts"] -= k
+    fully = short["contracts"] <= 0
+    if fully:
+        pos["short"] = None
+    return cash, fully
+
+
 def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
     """One trading day: manage held positions, drop finished campaigns, fill
     empty slots, mark equity. Mutates `state`; returns today's outputs. The
@@ -95,11 +132,15 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
             dec = try_take_profit(mark=mark, credit=short["credit"], contracts=n,
                                   cfg=cfg, day=d, expiry=c.expiry)
             if dec.filled:
-                cash -= dec.cost; pos["premium"] -= dec.cost
-                trades.append(Trade(dec.stamp, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                    c, n, dec.price, cash, pos["campaign"]))
-                pos["short"] = None; short = None; closed_today.add(c)
+                cash, fully = close_short_fill(pos, dec, cash, trades)
+                short = pos["short"]
+                if fully:
+                    closed_today.add(c)
             if short is not None and d >= c.expiry:
+                # re-read the size: a partial TP fill above shrank the leg, and
+                # settling the stale pre-fill `n` would assign contracts that
+                # were already bought back (A17/I3)
+                n = short["contracts"]
                 # Settlement reads the EXPIRY DAY's own close and nothing else.
                 # It used to take `spot`, which degrades to the CARRIED
                 # pos["last_spot"] when the close is missing — so on a data

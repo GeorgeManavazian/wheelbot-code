@@ -114,12 +114,18 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                 cash -= dec.cost; campaign_premium -= dec.cost
                 trades.append(Trade(dec.stamp,
                                     "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                    c, n, dec.price, cash, campaign))
-                short = None; closed_today = c
+                                    c, dec.filled_contracts, dec.price, cash, campaign))
+                # A17: decrement the live size; both current modes fill whole,
+                # so this reaches zero exactly as the old `short = None` did
+                short["contracts"] -= dec.filled_contracts
+                if short["contracts"] <= 0:
+                    short = None; closed_today = c
                 if dec.via == "print":
                     intraday_tp_fills += 1
                 else:
                     eod_tp_fills += 1
+            if short is not None:
+                n = short["contracts"]   # re-read after a (possibly partial) TP fill (A17/I3)
             if short is not None and d >= c.expiry:
                 settle_spot = spot
                 if d > c.expiry:

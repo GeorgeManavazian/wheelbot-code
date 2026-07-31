@@ -118,3 +118,18 @@ def test_print_cost_keeps_numpy_scalar_dtype():
                           day=D, expiry=EXP, bars=bars)
     assert isinstance(dec.cost, np.floating)
     assert isinstance(dec.price, float) and not isinstance(dec.price, np.floating)
+
+
+def test_filled_contracts_is_full_size_on_both_paths():
+    """A17: both current modes are instant-and-whole -- the seam must say so
+    explicitly (filled_contracts == contracts), and refusals must leave the
+    default so FillDecision equality pins stay valid."""
+    quote = try_take_profit(mark=Mark(0.1, 0.2, 0.15), credit=1.00, contracts=7,
+                            cfg=_cfg(), day=D, expiry=EXP)
+    assert quote.filled and quote.filled_contracts == 7
+    printed = try_take_profit(mark=None, credit=1.00, contracts=7, cfg=_cfg(),
+                              day=D, expiry=EXP, bars=_bars([0.35, 1.10]))
+    assert printed.filled and printed.filled_contracts == 7
+    refused = try_take_profit(mark=None, credit=1.00, contracts=7, cfg=_cfg(),
+                              day=D, expiry=EXP)
+    assert not refused.filled and refused.filled_contracts == 0

@@ -162,8 +162,14 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                 cash -= dec.cost; campaign_premium -= dec.cost
                 trades.append(Trade(dec.stamp,
                                     "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                    c, n, dec.price, cash, campaign))
-                short = None; closed_today = c
+                                    c, dec.filled_contracts, dec.price, cash, campaign))
+                # A17: decrement the live size; both current modes fill whole,
+                # so this reaches zero exactly as the old `short = None` did
+                short["contracts"] -= dec.filled_contracts
+                if short["contracts"] <= 0:
+                    short = None; closed_today = c
+            if short is not None:
+                n = short["contracts"]   # re-read after a (possibly partial) TP fill (A17/I3)
             # mid-life roll of a tested put (repair spec 2026-07-13): fires while
             # extrinsic is alive, only ever for a net credit, at most
             # MAX_ROLLS_PER_CAMPAIGN times per campaign. Destination re-uses the

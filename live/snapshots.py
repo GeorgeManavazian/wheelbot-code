@@ -23,7 +23,11 @@ def snapshot(state, equity: float, day) -> dict:
                 # the price the day's equity was actually marked from -- without
                 # it a stored equity figure cannot be re-derived from the prices
                 # recorded next to it. Absent on legs opened before 2026-07-31.
-                **({"last_ask": sh["last_ask"]} if "last_ask" in sh else {})},
+                **({"last_ask": sh["last_ask"]} if "last_ask" in sh else {}),
+                # A17: original leg size, present only once a partial fill
+                # shrank the leg -- lets a stored row say "6 of 10 remain"
+                **({"opened_contracts": sh["opened_contracts"]}
+                   if "opened_contracts" in sh else {})},
         })
     return {
         "date": pd.Timestamp(day).normalize().isoformat(),

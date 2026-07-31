@@ -33,6 +33,13 @@ class FillDecision:
     cost: float = 0.0      # UNSIGNED cash out (buy_cost convention; caller does cash -=)
     stamp: object = None   # what goes on Trade.date (day, bar timestamp, or wall clock)
     via: str = ""          # filled: "print" | "quote"; not filled: the refusal reason
+    # A17: how many contracts actually filled. Both current modes are
+    # instant-and-whole, so they always set this to the full size; a future
+    # model that partially fills has somewhere to say so, and the close
+    # bookkeeping (portfolio.close_short_fill) already honors it. Trailing
+    # with a default so refusal-path equality and positional construction
+    # are unchanged (A18 test pins).
+    filled_contracts: int = 0
 
 
 def try_take_profit(*, mark, credit, contracts, cfg, day, expiry,
@@ -73,10 +80,11 @@ def try_take_profit(*, mark, credit, contracts, cfg, day, expiry,
                 cost = (fill["close"] * cfg.contract_multiplier * contracts
                         + cfg.commission_per_contract * contracts)
                 return FillDecision(True, float(fill["close"]), cost,
-                                    fill["timestamp"], "print")
+                                    fill["timestamp"], "print", contracts)
     if mark is not None and mark.ask <= thresh:
         cost = (mark.ask * cfg.contract_multiplier * contracts
                 + cfg.commission_per_contract * contracts)
         return FillDecision(True, mark.ask, cost,
-                            day if day_stamp is None else day_stamp, "quote")
+                            day if day_stamp is None else day_stamp, "quote",
+                            contracts)
     return FillDecision(False, via="no_fill")

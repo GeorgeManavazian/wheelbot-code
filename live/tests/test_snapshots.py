@@ -53,3 +53,24 @@ def test_snapshot_records_the_ask_the_equity_was_marked_from(tmp_path):
                     equity=100_000.0 - 130.0, day=pd.Timestamp("2026-07-31"))
     assert snap["positions"][0]["short"]["last_ask"] == 1.30
     assert snap["positions"][0]["short"]["last_mid"] == 1.10
+
+
+def test_snapshot_records_opened_contracts_only_when_present(tmp_path):
+    """A17: a partially closed leg must be readable from the stored row
+    ("6 of 10 remain"); a whole leg must not grow invented keys."""
+    from src.engine_v2.options.chain import Contract
+    from src.engine_v2.options.portfolio import PortfolioState
+    from live.snapshots import snapshot
+    put = Contract("GDX", pd.Timestamp("2026-08-21"), 30.0, "P")
+    partial = {"ticker": "GDX", "shares": 0, "phase": "PUT", "basis": None,
+               "premium": 90.0, "campaign": 1, "last_spot": 35.0,
+               "short": {"contract": put, "contracts": 6, "credit": 1.0,
+                         "last_mid": 1.10, "opened_contracts": 10}}
+    snap = snapshot(PortfolioState(cash=1.0, positions=[partial]), 1.0,
+                    pd.Timestamp("2026-07-21"))
+    assert snap["positions"][0]["short"]["opened_contracts"] == 10
+    whole = dict(partial, short={"contract": put, "contracts": 6,
+                                 "credit": 1.0, "last_mid": 1.10})
+    snap = snapshot(PortfolioState(cash=1.0, positions=[whole]), 1.0,
+                    pd.Timestamp("2026-07-21"))
+    assert "opened_contracts" not in snap["positions"][0]["short"]

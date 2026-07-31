@@ -95,3 +95,41 @@ def test_a_leg_saved_before_last_ask_existed_still_loads(tmp_path):
     back = load_state(p)
     assert "last_ask" not in back.positions[0]["short"]
     assert back.positions[0]["short"]["last_mid"] == 1.10
+
+
+def test_a17_partial_fill_fields_round_trip(tmp_path):
+    """A17 capacity: opened_contracts (original leg size after a partial fill)
+    and working_order (an order a fill model has working) must survive the
+    round trip -- the serializer whitelists keys, so an unnamed field is
+    silently dropped and the partial state would evaporate on the next run."""
+    from live.state import save_state, load_state
+    put = Contract("GDX", pd.Timestamp("2026-08-21"), 30.0, "P")
+    pos = {"ticker": "GDX", "shares": 0, "phase": "PUT", "basis": None,
+           "premium": 90.0, "campaign": 1, "last_spot": 35.0,
+           "working_order": {"side": "BTC", "contracts": 10, "filled": 4,
+                             "limit": 0.40, "placed_at": "2026-07-21T10:00:00"},
+           "short": {"contract": put, "contracts": 6, "credit": 1.0,
+                     "last_mid": 1.10, "opened_contracts": 10}}
+    p = str(tmp_path / "state.json")
+    save_state(PortfolioState(cash=100_000.0, positions=[pos]), p)
+    back = load_state(p)
+    assert back.positions[0]["short"]["opened_contracts"] == 10
+    assert back.positions[0]["short"]["contracts"] == 6
+    assert back.positions[0]["working_order"]["filled"] == 4
+
+
+def test_a17_fields_absent_stay_absent(tmp_path):
+    """Default instant-fill path: no partial ever happened, so the saved file
+    must be byte-compatible with the pre-A17 schema (no new keys invented)."""
+    import json
+    from live.state import save_state
+    put = Contract("GDX", pd.Timestamp("2026-08-21"), 30.0, "P")
+    pos = {"ticker": "GDX", "shares": 0, "phase": "PUT", "basis": None,
+           "premium": 90.0, "campaign": 1, "last_spot": 35.0,
+           "short": {"contract": put, "contracts": 1, "credit": 1.0,
+                     "last_mid": 1.10}}
+    p = str(tmp_path / "state.json")
+    save_state(PortfolioState(cash=100_000.0, positions=[pos]), p)
+    raw = json.load(open(p))
+    assert "working_order" not in raw["positions"][0]
+    assert "opened_contracts" not in raw["positions"][0]["short"]

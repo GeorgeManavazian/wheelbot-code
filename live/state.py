@@ -23,6 +23,11 @@ def _contract_from_dict(d):
 
 def _pos_to_dict(p):
     d = {k: p[k] for k in _POS_SCALARS}
+    # A17: an order a fill model has working (JSON-plain dict). Absent == none;
+    # written only when present so existing files and default-path saves are
+    # byte-identical to before the field existed.
+    if p.get("working_order") is not None:
+        d["working_order"] = p["working_order"]
     sh = p["short"]
     if sh is None:
         d["short"] = None
@@ -36,12 +41,19 @@ def _pos_to_dict(p):
     # stale mid and silently restore the defect.
     if "last_ask" in sh:
         out["last_ask"] = sh["last_ask"]
+    # A17: partial-fill capacity, optional for the same reason as last_ask --
+    # every existing state file lacks it and must keep loading. Original leg
+    # size; absent == equals `contracts`.
+    if "opened_contracts" in sh:
+        out["opened_contracts"] = sh["opened_contracts"]
     d["short"] = out
     return d
 
 
 def _pos_from_dict(d):
     p = {k: d[k] for k in _POS_SCALARS}
+    if d.get("working_order") is not None:
+        p["working_order"] = d["working_order"]
     sh = d["short"]
     if sh is None:
         p["short"] = None
@@ -51,6 +63,8 @@ def _pos_from_dict(d):
            "last_mid": sh["last_mid"]}
     if "last_ask" in sh:
         out["last_ask"] = sh["last_ask"]
+    if "opened_contracts" in sh:
+        out["opened_contracts"] = sh["opened_contracts"]
     p["short"] = out
     return p
 

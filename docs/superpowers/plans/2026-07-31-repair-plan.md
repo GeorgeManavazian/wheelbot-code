@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 4 of 62 done (A6, A16, A18, A19; A21/A22/E8/A18b/A18c added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 5 of 63 done (A6, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -180,7 +180,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A19 | Capture `openInterest`/`totalVolume`/`bidSize`/`askSize` from the Schwab response | MED | **DONE** | see A19 evidence block below |
 | A21 | `merge_held_legs` quote pull happens at 17:00, post-close (`run_daily.py:192` → `held_legs.py:113`) — same staleness class as A16 but marks/dashboard only, not entries | MED | TODO | Split out of A16 by owner decision 2026-07-31. Affects held-leg marks, snapshot equity (`snapshots.py:26`), and the EOD TP branch (`portfolio.py:94-101`); the intraday TP already runs on RTH quotes. |
 | A22 | `chain_frame` stamps `from_date`/`to_date` from the **box (UTC) clock**, not ET (`live/data.py:81 dt.date.today()`) — on the UTC VPS any retry from 19:00-20:00 ET onward requests **tomorrow's** expiry window, shifting the DTE band the selector uses | MED | TODO | Found by the A16 analyst. `obs_date` is threaded correctly; only the request dates are wrong. Dormant on the new RTH snapshot path (UTC date == ET date at 15:xx ET) but live on `--smoke` and any manual post-19:00 pull. |
-| A17 | Represent partial fills / working-order state | HIGH | TODO | |
+| A17 | Represent partial fills / working-order state | HIGH | **DONE** | see A17 evidence block below. Follow-up filed: **A17b** — `run_intraday.py` saves state only `if trades`; a working order placed without an immediate fill would not persist. Inert until a fill model creates working orders; must land with that model. |
 | A1 | ~~Intraday fill realism~~ **DEFERRED — strategy decision, see owner decision above** | CRIT | DEFERRED (owner) | resting limit and next-poll both rejected on evidence; spread-fraction k≈0.5 is the supported candidate |
 | A2 | Liquidity gate (rel-spread/OI/volume) — **gate yes, cap parameter DEFERRED** | CRIT | TODO | grid-wide cap value is a strategy decision |
 | A3 | Minimum credit / maximum spread / unclosable-by-construction guard | HIGH | TODO | **Sized during A6** (skeptic, real trade log, 145 SELL_PUTs, `commission_per_contract=0.65`): on micro-credit names a leg that used to expire free is now bought back at the $0.01 tick, surrendering **RIG 70.2% / VALE 26.0% / AGNC 22.4%** of banked premium (RIG: $6.60 to close $9.40 banked). 144 of 145 entries have a TP trigger reachable at the minimum tick. This is the minimum-credit case in dollars. |
@@ -313,6 +313,39 @@ spec; the assertion mis-stated it. Refusal is still asserted for `""`, `None`, `
 
 **Not re-run after the amendment:** a second skeptic pass. The amendment is itself skeptic-derived
 and mutation-tested, but this is declared, not claimed as verified (A1/A5).
+
+---
+
+## A17 — evidence (completed 2026-07-31)
+
+**In plain language.** The state schema had two words for a sold option — "have it" or "gone" —
+and no way to write "bought back 4 of the 10, 6 still short". Since 55.4% of hours traded fewer
+contracts than the bot's largest instant fill (181), any honest fill model constantly needs that
+sentence. This gives the schema the grammar without choosing the model (owner ruling): the seam
+reports `filled_contracts`; one shared bookkeeping function (`portfolio.close_short_fill`, used
+by the EOD engine and the live intraday manager) decrements the leg and normalizes zero to
+`short = None`; the two solo backtest engines decrement inline; expiry re-reads the size so a
+same-day partial + expiry settles the remaining contracts, not the pre-fill count (I3);
+`opened_contracts` / `working_order` round-trip as optional state fields (the `last_ask`
+precedent — **all 25 account files load untouched, zero migration**). The instant-fill default
+reduces exactly to the old path.
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | Duck-typed partial `FillDecision` injected via monkeypatch → `AssertionError: A17: a 4-of-10 fill must book 4 contracts, not the whole leg` and the same-day-expiry sibling; instant-fill guard test correctly PASSED on old code. |
+| 2 Minimal fix | `FillDecision.filled_contracts` (trailing default; A18 equality/positional pins safe) · `close_short_fill` helper + 2 call sites · inline decrement + `n` re-read in wheel/router · optional state/snapshot round-trip. Fill model untouched; `run_intraday` save-condition deferred (A17b). |
+| 3 Suites | `501` backtest + `170` live = **671** (662 + 9 new tests). |
+| 4 Mutation | 4 mutants killed: helper always-fully-closes → 2 fail · stale-`n` re-read removed → 1 · `opened_contracts` dropped on save → 1 · seam reports 0 filled → 1. |
+| 5 Line audit | Every change is capacity or the I3 re-read; the re-read is unreachable-today (a full fill nulls `short` before the expiry block) — proven inert by fingerprints. Declared delta: `closed_today` now gains the contract only on a FULL close (identical under instant fill; correct under partials — the contract is still held). |
+| 6 Blast radius | `close_short_fill`: 2 callers. `filled_contracts` readers: helper + 2 inline engine sites. State keys: written only when present; `secret_guard`, `sync`, dashboard `monitor` all proven to swallow them (skeptic). |
+| C1 Skeptic | **COULD-NOT-BREAK** (behavior). Independent old-tree reproduction: 4-engine fingerprints identical; roll+stop+gates+hourly real-chain runs → identical SHA over 2,916 trades; intraday helper parity incl. dict-shaped contracts + wall-clock stamps to the second; forced 4-of-10 partial → assign 6 → covered-call on 600 shares with correct basis floor → equity to the penny; residual finalizer buys back remaining size; live surface (old files, new keys, dashboard, secret_guard) all clean; `git diff -- tests/` = 74 insertions, 0 deletions. Two capacity notes → **both amended**: F4 ghost-fill (`filled_contracts<=0` now raises; test + suites green) and F5 no-writer (`close_short_fill` stamps `opened_contracts` on the first partial; test). Fingerprints re-verified identical post-amendment. |
+| C2 Dry run | Not applicable as a market pull — the capacity is unreachable from live data by design; the skeptic's forced-partial probes on the real engine stack are the execution evidence. |
+| C3 Dollars | **$0.00 by construction** — fingerprints byte-identical pre/post (including trade timestamps). Value: the fill-model decision (deferred) is now unblocked on representation. |
+
+**Declared (A1/A5):** close bookkeeping exists in three copies (helper + two solo-engine inline
+decrements, whose `campaign_premium` locals don't fit the pos-dict helper) — a future fill-model
+change must touch all three; noted here so it cannot be missed. `working_order` has no writer
+and no lifecycle — it is a reserved, round-tripped slot only.
 
 ---
 
@@ -476,4 +509,5 @@ test (E8).
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
 | 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |
+| 2026-07-31 | **A17 DONE.** Analyst spec (schema map, 9 invariants, migration story) → capacity landed: `filled_contracts` on the seam, shared `close_short_fill`, I3 stale-size re-read, optional `opened_contracts`/`working_order` round-trip — zero migration, fingerprints byte-identical pre/post. Skeptic **COULD-NOT-BREAK**; its two capacity notes (ghost-fill guard, opened_contracts writer) amended + tested same session. Follow-up **A17b** filed. Suites 501+170=**671**. |
 | 2026-07-31 | **A19 DONE.** Red test → capture in chain + held-leg rows → skeptic **COULD-NOT-BREAK** (capture-only proven by execution three ways) → F5 amendment (quote-path value assertions + key-rename mutant). Live C2: GDX 109/109 rows populate. **Phase F note added: F4 deploy-timing** — deploy only while paused or a same-day pre-A19 snapshot gaps the day (declared). Suites 495+167=**662**. |

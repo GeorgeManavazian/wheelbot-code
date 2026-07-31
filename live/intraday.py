@@ -7,7 +7,7 @@ from __future__ import annotations
 import pandas as pd
 
 from src.engine_v2.options.fills import try_take_profit
-from src.engine_v2.options.wheel import Trade
+from src.engine_v2.options.portfolio import close_short_fill
 
 
 def _contract_field(c, name):
@@ -42,12 +42,9 @@ def manage_intraday(state, quotes, cfg, now):
                               expiry=pd.Timestamp(_contract_field(c, "expiry")),
                               day_stamp=pd.Timestamp(now))
         if dec.filled:
-            state.cash -= dec.cost
-            pos["premium"] -= dec.cost
-            action = "CLOSE_PUT" if _contract_field(c, "right") == "P" else "CLOSE_CALL"
-            trades.append(Trade(dec.stamp, action, c, n, dec.price,
-                                state.cash, pos["campaign"]))
-            pos["short"] = None
+            # shared close bookkeeping (A17): books the Trade, decrements the
+            # live size, normalizes an emptied leg to short=None
+            state.cash, _fully = close_short_fill(pos, dec, state.cash, trades)
     # drop positions emptied down to a bare PUT slot (same rule as step_one_day)
     state.positions[:] = [p for p in state.positions
                           if not (p["short"] is None and p.get("shares", 0) == 0
