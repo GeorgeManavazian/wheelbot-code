@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import pandas as pd
 from .select import select_contract, select_roll_contract, option_mark
+from .fills import try_take_profit
 
 MAX_ROLLS_PER_CAMPAIGN = 2   # then the normal expiry path (assignment) applies
 
@@ -148,40 +149,21 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
         if short is not None:
             c = short["contract"]; n = short["contracts"]
             mark = option_mark(day_chain, d, c)
-            tp_fired = False
-            # >= 1.0 means hold to expiry (never take profit)
-            if cfg.take_profit_pct is not None and cfg.take_profit_pct < 1.0 and d < c.expiry:
-                thresh = (1 - cfg.take_profit_pct) * short["credit"]
-                key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
-                if intraday is not None and key in intraday:
-                    bars = intraday[key]
-                    # close > 0 only: hourly bars are trade prints, and hours
-                    # with no trade arrive as close=0 — not a price. Treating a
-                    # 0 as a price lets any losing put "TP" at a phantom fill
-                    # (XOP 2020: +2,582% fantasy). Trigger and fill both use
-                    # valid prints only; "next bar" means next VALID bar.
-                    day = (bars[(bars["timestamp"].dt.normalize() == d)
-                                & (bars["close"] > 0)]
-                           .sort_values("timestamp").reset_index(drop=True))
-                    # decide on bar i, fill at bar i+1's close (no same-bar fills).
-                    # A cross on the day's LAST bar has no next bar -> no intraday
-                    # fill; the EOD ask check below decides instead.
-                    for i in range(len(day) - 1):
-                        if day.iloc[i]["close"] <= thresh:
-                            fill = day.iloc[i + 1]
-                            cost = fill["close"] * mult * n + cfg.commission_per_contract * n
-                            cash -= cost; campaign_premium -= cost
-                            trades.append(Trade(fill["timestamp"],
-                                "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                c, n, float(fill["close"]), cash, campaign))
-                            short = None; closed_today = c; tp_fired = True
-                            break
-                if not tp_fired and short is not None and mark is not None and mark.ask <= thresh:
-                    cost = buy_cost(mark, n, cfg)
-                    cash -= cost; campaign_premium -= cost
-                    trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                        c, n, mark.ask, cash, campaign))
-                    short = None; closed_today = c
+            # take-profit: the shared fill seam (fills.py). Print-next-bar mode
+            # when this contract has hourly bars, else the EOD quote at the ask.
+            # All the rules (close>0 prints only, fill at bar i+1, last-bar
+            # cross falls through to the quote, >=1.0 = hold to expiry) live in
+            # try_take_profit -- one copy for all four engines (A18).
+            key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
+            dec = try_take_profit(mark=mark, credit=short["credit"], contracts=n,
+                                  cfg=cfg, day=d, expiry=c.expiry,
+                                  bars=intraday.get(key) if intraday is not None else None)
+            if dec.filled:
+                cash -= dec.cost; campaign_premium -= dec.cost
+                trades.append(Trade(dec.stamp,
+                                    "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
+                                    c, n, dec.price, cash, campaign))
+                short = None; closed_today = c
             # mid-life roll of a tested put (repair spec 2026-07-13): fires while
             # extrinsic is alive, only ever for a net credit, at most
             # MAX_ROLLS_PER_CAMPAIGN times per campaign. Destination re-uses the

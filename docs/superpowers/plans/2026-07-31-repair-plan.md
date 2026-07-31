@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 2 of 60 done (A6, A16; A21/A22/E8 added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 3 of 62 done (A6, A16, A18; A21/A22/E8/A18b/A18c added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -176,7 +176,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | ID | Fix | Sev | Status | Evidence |
 |---|---|---|---|---|
 | A16 | **Pull the chain during RTH, not at 17:00 after the close** | CRIT | **DONE** | see A16 evidence block below. **Owner decisions 2026-07-31:** (1) snapshot missing on a trading day → **skip the day + gap record + alert**, never fall back to a post-close pull; (2) half days (~3/yr) → **accepted as-is**, no half-day calendar — those snapshots will be post-close, a disclosed bounded corruption; (3) held-leg quote pull stays post-close → filed as **A21**, not folded in. |
-| A18 | One shared fill function across all four engines (seam only, no model choice) | HIGH | TODO | **Also four ADMISSION rules, measured during A6** on identical payloads — `0.00 x 0.00`: `contract_quotes` skip / `live_asks` skip / `_mark_from_quote` None. bid `None`, ask `0.05`: skip / **admits 0.05** / None. bid `-0.01`, ask `0.05`: skip / **admits 0.05** / **0.02**. So the dashboard prices a liability the intraday manager refuses to act on. Also: `live_marks` and `_mark_from_quote` have **zero production callers** — dead code, tests only. And `_num` still exists twice (`live/marks.py:25`, `live/data.py:32`, byte-identical). |
+| A18 | One shared fill function across all four engines (seam only, no model choice) | HIGH | **DONE** | see A18 evidence block below. Follow-ups filed: **A18b** (dedupe `_num`, delete dead `live_marks`/`_mark_from_quote`, align `live_asks`' admission or document it), **A18c** (migrate or retire the fifth copy in `scripts/audit_defense_execution.py` — currently kept as an independent referee and it verified the seam with 0 mismatches on 384 intraday + 13 EOD fills). Original note preserved: **Also four ADMISSION rules, measured during A6** on identical payloads — `0.00 x 0.00`: `contract_quotes` skip / `live_asks` skip / `_mark_from_quote` None. bid `None`, ask `0.05`: skip / **admits 0.05** / None. bid `-0.01`, ask `0.05`: skip / **admits 0.05** / **0.02**. So the dashboard prices a liability the intraday manager refuses to act on. Also: `live_marks` and `_mark_from_quote` have **zero production callers** — dead code, tests only. And `_num` still exists twice (`live/marks.py:25`, `live/data.py:32`, byte-identical). |
 | A19 | Capture `openInterest`/`totalVolume`/`bidSize`/`askSize` from the Schwab response | MED | TODO | |
 | A21 | `merge_held_legs` quote pull happens at 17:00, post-close (`run_daily.py:192` → `held_legs.py:113`) — same staleness class as A16 but marks/dashboard only, not entries | MED | TODO | Split out of A16 by owner decision 2026-07-31. Affects held-leg marks, snapshot equity (`snapshots.py:26`), and the EOD TP branch (`portfolio.py:94-101`); the intraday TP already runs on RTH quotes. |
 | A22 | `chain_frame` stamps `from_date`/`to_date` from the **box (UTC) clock**, not ET (`live/data.py:81 dt.date.today()`) — on the UTC VPS any retry from 19:00-20:00 ET onward requests **tomorrow's** expiry window, shifting the DTE band the selector uses | MED | TODO | Found by the A16 analyst. `obs_date` is threaded correctly; only the request dates are wrong. Dormant on the new RTH snapshot path (UTC date == ET date at 15:xx ET) but live on `--smoke` and any manual post-19:00 pull. |
@@ -316,6 +316,44 @@ and mutation-tested, but this is declared, not claimed as verified (A1/A5).
 
 ---
 
+## A18 — evidence (completed 2026-07-31)
+
+**In plain language.** Four engines each carried a hand-written copy of the take-profit rule
+("when do we buy the sold option back cheap"), and the copies disagreed — the backtest's rule
+fires on 81.5% of campaigns, the live rule on 76.7%, so 159 campaigns (5.3%) the backtest wins
+are physically unclosable live. Now one shared card, `src/engine_v2/options/fills.py
+try_take_profit`, and all four cashiers read from it. Seam only: each engine's exact old rule is
+preserved behind a named mode (`quote` = at the ask; `print` = hourly trade print, decide bar i,
+fill bar i+1). Which rule is *right* stays the deferred strategy question — but the divergence
+now has a name in code and a test that documents it, instead of being four accidents.
+
+**Gate-1 adaptation, declared:** for a zero-behavior-change refactor the "failing test" gate is
+replaced by *manufactured fingerprints* — both engines without a surviving byte-anchor (engine 1's
+was deliberately broken by the audit; engine 2 never had one) were digested over deterministic
+grids + real chains BEFORE the change and re-digested after. That is a stronger reproduce for
+this defect class: the defect is the absence of a seam, and the risk is behavior change.
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce (adapted) | Pre-seam SHA256 fingerprints: engine 1 (step_one_day TP grid, 40 cases — identical hash under py3.9 AND py3.12), engine 2 (manage_intraday, 720-case quote grid), engines 3+4 (real SPY/GDX chains, EOD + synthetic hourly bars). Harness in session scratchpad (`a18_digest.py`). |
+| 2 Minimal fix | New `fills.py` + the four TP call-sites swapped + dead `buy_cost` import dropped from the router. Entries, roll, stop, expiry, equity-mark basis, admission rules: all untouched by design. |
+| 3 Suites | `495 passed` (backtest, 282s; includes both frozen SHA goldens) + `166 passed` (live) = **661**, from 650 + 11 new seam tests. |
+| 4 Mutation | 5 seam mutants, all killed — ask→bid (4 backtest + 1 live failures), `<=`→`<` (both suites), same-bar fill (4), phantom-0.00 bars admitted (3), expiry-guard dropped (1; the live engine's own redundant guard held, as designed). Skeptic independently ran 5 more mutants of its own — all killed. |
+| 5 Line audit | Engines: −80/+53 (four copies deleted, one call each). Declared deltas: `tp_fired` local removed (zero remaining references, grepped); `key` now computed on every held-short day even when TP disabled (dead work, proven behavior-neutral); router counters now keyed off `dec.via`. |
+| 6 Blast radius | `try_take_profit`: exactly 4 production callers. `buy_cost` remains for roll/stop/residual paths (unmigrated by design) + `test_wheel_parts` pin. Fifth copy in `scripts/audit_defense_execution.py` knowingly unmigrated → A18c. `fills.py` imports nothing from the package except stdlib — no cycle; all entry points import-clean under both interpreters. |
+| C1 Skeptic | Verdict **COULD-NOT-BREAK**. Old-tree-vs-new-tree differential (git archive of HEAD): 21 adversarial backtest scenarios (NaN/negative/exact-threshold quotes and bars, unsorted/multi-day/wrong-key/expiry-day bars, tp=0/1/None) → `BACKTEST_IDENTICAL`; 8 live cases incl. dict-shaped contracts with string expiries from old state files → `LIVE_IDENTICAL`; real-chain roll+stop+gates+hourly runs → identical SHA over 2,916 trades incl. gate_events; router counter placement proven identical; tests not weakened (`git diff HEAD -- tests/` empty except the new file). |
+| C2 Dry run | The unmigrated fifth copy run as an independent referee against the migrated engines on real GDX data: `audit_defense_execution` exit 0 — 138 rolls + 39 stops + 318 gate events, 0 mismatches; `--hourly`: **384 intraday TPs + 13 EOD TPs verified, 0 mismatches**. |
+| C3 Dollars | **$0.00 by construction** — byte-identical fingerprints mean not one fill, price, or timestamp changed. The dollar value is optionality: every future fill-model A/B now changes ONE function, and the 159-campaign divergence is measurable at a single seam. |
+
+**Declared (A1/A5):** `fills.py` duplicates `buy_cost`'s arithmetic (cycle avoidance); the pin is
+`test_quote_fill_matches_buy_cost_exactly`, not shared code. The seam computes `thresh` before
+the mark-presence check — order differs from one old call site; unreachable difference today
+(credit is always a float), flagged by the skeptic as opinion. numpy-scalar cash contamination on
+the print path is pre-existing and now *pinned* by `test_print_cost_keeps_numpy_scalar_dtype`
+rather than accidental.
+
+---
+
 ## A16 — evidence (completed 2026-07-31)
 
 **In plain language.** The bot made its evening decisions by reading option prices at 5pm — an
@@ -402,3 +440,4 @@ test (E8).
 | 2026-07-31 | **A6 DONE.** Found the tree dirty and the live suite RED with a prior session's unfinished A6 change; owner ruled finish-A6-before-A16. All 7 gates + C1/C2/C3 recorded above. Skeptic forced an amendment (two regressions the reorder introduced). New findings filed: **A20** (TP=0.60 out of sample on the admitted population), plus evidence added to A3, A5, A18. Suites 484+151=635. Nothing deployed — bot stays paused. |
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
+| 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |

@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import pandas as pd
 from .select import select_contract, option_mark
+from .fills import try_take_profit
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, sell_proceeds,
                     buy_cost, GATE_STALENESS_DAYS)
 from ..regime.state import is_good_renting_weather
@@ -91,13 +92,12 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
         if short is not None:
             c, n = short["contract"], short["contracts"]
             mark = option_mark(day_chain, d, c) if day_chain is not None else None
-            if (cfg.take_profit_pct is not None and cfg.take_profit_pct < 1.0
-                    and d < c.expiry and mark is not None
-                    and mark.ask <= (1 - cfg.take_profit_pct) * short["credit"]):
-                cost = buy_cost(mark, n, cfg)
-                cash -= cost; pos["premium"] -= cost
-                trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                    c, n, mark.ask, cash, pos["campaign"]))
+            dec = try_take_profit(mark=mark, credit=short["credit"], contracts=n,
+                                  cfg=cfg, day=d, expiry=c.expiry)
+            if dec.filled:
+                cash -= dec.cost; pos["premium"] -= dec.cost
+                trades.append(Trade(dec.stamp, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
+                                    c, n, dec.price, cash, pos["campaign"]))
                 pos["short"] = None; short = None; closed_today.add(c)
             if short is not None and d >= c.expiry:
                 # Settlement reads the EXPIRY DAY's own close and nothing else.

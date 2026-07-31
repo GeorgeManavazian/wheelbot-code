@@ -11,8 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import pandas as pd
 from .select import select_contract, option_mark
+from .fills import try_take_profit
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, _state_before,
-                    sell_proceeds, buy_cost)
+                    sell_proceeds)
 
 TRIM_FRACTION = 0.5   # conviction trim (spec 2026-07-15): stressed-vol trend
                       # HOLDs are bought at half size — tail control only. Round
@@ -101,37 +102,23 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
         if short is not None:
             c, n = short["contract"], short["contracts"]
             mark = option_mark(day_chain, d, c)
-            if cfg.take_profit_pct is not None and cfg.take_profit_pct < 1.0 and d < c.expiry:
-                thresh = (1 - cfg.take_profit_pct) * short["credit"]
-                tp_fired = False
-                key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
-                if intraday is not None and key in intraday:
-                    bars = intraday[key]
-                    # close > 0 only: a bar with no trade arrives as close=0 and
-                    # is not a price. Trigger and fill both use valid prints;
-                    # "next bar" means next VALID bar (mirrors wheel.py:153-174).
-                    day = (bars[(bars["timestamp"].dt.normalize() == d)
-                                & (bars["close"] > 0)]
-                           .sort_values("timestamp").reset_index(drop=True))
-                    # decide on bar i, fill at bar i+1's close. A cross on the
-                    # day's LAST bar has no next bar -> EOD check decides instead.
-                    for bi in range(len(day) - 1):
-                        if day.iloc[bi]["close"] <= thresh:
-                            fill = day.iloc[bi + 1]
-                            cost = fill["close"] * mult * n + cfg.commission_per_contract * n
-                            cash -= cost; campaign_premium -= cost
-                            trades.append(Trade(fill["timestamp"],
-                                "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                c, n, float(fill["close"]), cash, campaign))
-                            short = None; closed_today = c; tp_fired = True
-                            intraday_tp_fills += 1
-                            break
-                if not tp_fired and short is not None and mark is not None and mark.ask <= thresh:
-                    cost = buy_cost(mark, n, cfg)
-                    cash -= cost; campaign_premium -= cost
-                    trades.append(Trade(d, "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
-                                        c, n, mark.ask, cash, campaign))
-                    short = None; closed_today = c
+            # take-profit via the shared fill seam (fills.py, A18) -- print-
+            # next-bar mode when bars exist for this contract, else the EOD
+            # quote at the ask. Rules (close>0 prints only, fill at bar i+1,
+            # last-bar cross falls through) live in try_take_profit.
+            key = (pd.Timestamp(c.expiry), float(c.strike), c.right)
+            dec = try_take_profit(mark=mark, credit=short["credit"], contracts=n,
+                                  cfg=cfg, day=d, expiry=c.expiry,
+                                  bars=intraday.get(key) if intraday is not None else None)
+            if dec.filled:
+                cash -= dec.cost; campaign_premium -= dec.cost
+                trades.append(Trade(dec.stamp,
+                                    "CLOSE_PUT" if c.right == "P" else "CLOSE_CALL",
+                                    c, n, dec.price, cash, campaign))
+                short = None; closed_today = c
+                if dec.via == "print":
+                    intraday_tp_fills += 1
+                else:
                     eod_tp_fills += 1
             if short is not None and d >= c.expiry:
                 settle_spot = spot
