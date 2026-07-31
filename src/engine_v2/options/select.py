@@ -17,6 +17,16 @@ def select_contract(chain, date, right, target_delta, target_dte, root, min_stri
     when no in-band expiry qualifies -> None. Deterministic; None -> sit in cash."""
     lo, hi = derived_band(target_dte)
     cand = chain[(chain["date"] == date) & (chain["right"] == right)]
+    # Mark-only rows are not tradeable. live/held_legs.py splices in the legs the
+    # bounded chain cannot see so the take-profit can still act on them; those
+    # rows were pulled by OCC symbol for a position already held, and are not
+    # part of the chain the bot actually surveyed. Selecting one enters a
+    # contract the bot never saw — and because run_daily builds ONE market for
+    # all 25 accounts, the leg one account holds would otherwise appear in every
+    # other account's candidate set. Column absent on every pre-2026-07-31 chain,
+    # where absence correctly means "tradeable".
+    if "held_only" in cand.columns:
+        cand = cand[~cand["held_only"].fillna(False).astype(bool)]
     if cand.empty:
         return None
     dtes = cand.groupby("expiry")["dte"].first()

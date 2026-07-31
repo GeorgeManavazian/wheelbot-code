@@ -194,6 +194,13 @@ def main():
         print(f"held-leg quotes: {merged['merged']} spliced into chains "
               f"({merged['requested']} distinct legs held"
               f"{', ' + str(len(merged['unquoted'])) + ' unquoted' if merged['unquoted'] else ''})")
+    if merged["no_chain"]:
+        # An unmarked held leg has its take-profit suspended for the day. This is
+        # the same failure the merge exists to prevent, so it must never be
+        # silent — merged==0 alone is indistinguishable from a healthy run.
+        print(f"HELD LEG UNMARKED -- no chain for {len(merged['no_chain'])} leg(s): "
+              f"{merged['no_chain']}. Their take-profit cannot fire today and "
+              f"their equity mark is carried from the last successful mark.")
     if merged["error"]:
         # Not fatal: this is the pre-2026-07-31 behaviour, i.e. legs outside the
         # window stay unmarked. But it silently suspends the take-profit on them,

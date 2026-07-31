@@ -52,7 +52,9 @@ def test_row_built_for_a_leg_outside_the_chain_window():
                             contracts, OBS)
     assert list(rows) == ["TMO"]
     r = rows["TMO"][0]
-    assert set(r) == set(_CHAIN_COLS)
+    # every chain column, plus the mark-only flag that keeps it out of selection
+    assert set(r) == set(_CHAIN_COLS) | {"held_only"}
+    assert r["held_only"] is True
     assert r["date"] == OBS and r["expiry"] == EXP
     assert (r["strike"], r["right"]) == (512.5, "P")
     assert (r["bid"], r["ask"], r["mid"]) == (0.40, 0.44, 0.42)
@@ -168,3 +170,122 @@ def test_take_profit_fires_on_a_leg_outside_the_chain_window():
     assert r1.trades[0].price_per_contract == 0.44                 # bought at the ask
     assert with_merge.positions == []                              # campaign closed
     assert r1.equity > r0.equity
+
+
+def _regime_row():
+    return pd.Series({"trend": "chop", "vol": "normal", "vol_pctile": 0.9,
+                      "ma50_vs_200": 0.0, "fast_spread": 0.0})
+
+
+class _EntryMarket(LiveMarket):
+    """LiveMarket whose regime always says good-to-rent, so the routing loop
+    actually reaches select_contract."""
+    def regime_row(self, ticker, day):
+        return _regime_row()
+
+
+def test_a_leg_one_account_holds_is_not_tradeable_by_another_account():
+    """The defect this splice introduced, and the reason `held_only` exists.
+
+    run_daily builds ONE LiveMarket and steps all 25 accounts through it, and
+    merge_held_legs splices the union of every account's held legs into it
+    BEFORE any account steps. The account that owns a leg is protected by the
+    `if tk in held_tickers: continue` guard in the routing loop -- the other 24
+    are not. Audit 2026-07-31 reproduced this live: account B sold a DOW 99.5P
+    that was in its candidate set only because account A held it."""
+    chain = _chain([99.0], obs=OBS, expiry=EXP)
+    chain["delta"] = -0.24                       # a poor match for a 0.30 target
+    closes = pd.Series([103.0] * 300, index=pd.bdate_range(end=OBS, periods=300))
+    market = _EntryMarket(["DOW"], {"DOW"}, OBS,
+                          closes_fn=lambda tk: closes,
+                          chain_fn=lambda tk: chain)
+
+    # account A holds the 99.5P -- outside the pulled window, delta 0.30
+    a_positions = [_position(ticker="DOW", strike=99.5, credit=1.30)]
+    client = _FakeClient({"DOW   260807P00099500":
+                          _quote(1.30, 1.50, mark=1.40, delta=-0.30, und=103.0)})
+    stats = merge_held_legs(market, client, [a_positions], OBS)
+    assert stats["merged"] == 1
+
+    # account B holds nothing and steps through the SAME market
+    cfg = WheelConfig(ticker="DOW", put_delta=0.30, call_delta=0.50,
+                      target_dte=(EXP - OBS).days, take_profit_pct=0.60,
+                      starting_capital=100_000.0, call_min_strike="basis")
+    b = PortfolioState(cash=100_000.0, positions=[])
+    r = step_one_day(b, market, OBS, cfg, selector="chop", n_slots=1)
+
+    assert [t.action for t in r.trades] == ["SELL_PUT"]
+    assert r.trades[0].contract.strike == 99.0, \
+        "account B traded a strike that exists only because account A holds it"
+
+
+def test_the_mark_only_row_is_still_markable():
+    """Unselectable must not mean invisible -- marking it is the whole point."""
+    market = _market(_chain([560.0, 570.0]))
+    client = _FakeClient({"TMO   260807P00512500": _quote(0.40, 0.44, mark=0.42)})
+    merge_held_legs(market, client, [[_position()]], OBS)
+    mk = option_mark(market.chain("TMO", OBS), OBS, Contract("TMO", EXP, 512.5, "P"))
+    assert mk is not None and mk.ask == 0.44
+
+
+def test_an_empty_chain_is_not_given_a_synthetic_one_row_chain():
+    """`chain_from_json` returns an EMPTY DataFrame, not None, when every
+    contract is filtered out (routine for a thin name: bid<=0, ask<=0, or a
+    missing delta). Empty is not None, so the "never hand a ticker a chain
+    holding only the leg we already hold" guard missed it -- and select_contract
+    would then pick that single row by default, selling a strike the bot never
+    surveyed, at whatever credit the quote happened to carry."""
+    empty = _chain([])
+    assert empty is not None and len(empty) == 0
+    market = _market(empty)
+    client = _FakeClient({"TMO   260807P00512500": _quote(0.0, 0.02, mark=0.01)})
+    stats = merge_held_legs(market, client, [[_position()]], OBS)
+    assert stats["merged"] == 0
+    assert len(market.chain("TMO", OBS)) == 0
+
+
+def test_a_spliced_row_with_no_delta_keeps_the_column_numeric():
+    """Schwab can omit delta (live/data.py documents its "NaN" string), and
+    _num turns that into None. Concatenating a None into the chain flips the
+    whole delta column to object dtype, and select_contract's `e["delta"].abs()`
+    then raises TypeError -- taking down every account routing that ticker for
+    the day, silently, via run_daily's per-account except."""
+    import numpy as np
+    market = _market(_chain([560.0, 570.0]))
+    client = _FakeClient({"TMO   260807P00512500":
+                          {"quote": {"bidPrice": 0.40, "askPrice": 0.44,
+                                     "underlyingPrice": 576.77},
+                           "reference": {"daysToExpiration": 7}}})   # no delta
+    assert merge_held_legs(market, client, [[_position()]], OBS)["merged"] == 1
+    chain = market.chain("TMO", OBS)
+    assert chain["delta"].dtype.kind == "f", "delta column went non-numeric"
+    assert np.isnan(chain.loc[chain["strike"] == 512.5, "delta"]).all()
+    # and the row is still markable
+    assert option_mark(chain, OBS, Contract("TMO", EXP, 512.5, "P")).ask == 0.44
+
+
+def test_a_leg_whose_ticker_chain_failed_is_reported_not_counted_as_fine():
+    """`merged: 0` is also what a perfectly healthy run reports (leg already
+    inside the window), so the two were indistinguishable. A leg with no chain
+    to splice into is NOT marked -- its take-profit is suspended for the day --
+    and that is the whole failure this module exists to prevent, reached through
+    a second door. It must be counted separately and said out loud."""
+    def boom(tk):
+        raise RuntimeError("chain pull 502")
+    closes = pd.Series([576.77] * 300, index=pd.bdate_range(end=OBS, periods=300))
+    market = LiveMarket(["TMO"], {"TMO"}, OBS, closes_fn=lambda tk: closes,
+                        chain_fn=boom)
+    assert market.chain("TMO", OBS) is None
+
+    client = _FakeClient({"TMO   260807P00512500": _quote(0.40, 0.44, mark=0.42)})
+    stats = merge_held_legs(market, client, [[_position()]], OBS)
+    assert stats["merged"] == 0
+    assert stats["no_chain"] == ["TMO   260807P00512500"]
+
+
+def test_a_healthy_already_in_window_leg_is_not_reported_as_a_failure():
+    market = _market(_chain([512.5, 570.0]))
+    client = _FakeClient({"TMO   260807P00512500": _quote(0.40, 0.44, mark=0.42)})
+    stats = merge_held_legs(market, client, [[_position()]], OBS)
+    assert stats["merged"] == 0
+    assert stats["no_chain"] == [] and stats["unquoted"] == []

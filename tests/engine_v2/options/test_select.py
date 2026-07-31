@@ -167,3 +167,58 @@ def test_roll_destination_none_when_nothing_beyond():
     ch = _rows_chain(rows)
     assert select_roll_contract(ch, pd.Timestamp("2024-01-04"), "P", 460.0,
                                 pd.Timestamp("2024-01-09"), 7, "SPY") is None
+
+
+def test_select_contract_ignores_mark_only_rows():
+    """A row spliced in purely to MARK a held leg must never become tradeable.
+
+    live/held_legs.py adds the legs the bounded chain cannot see, so the
+    take-profit can act on them. Those rows are pulled by OCC symbol for a
+    position we already hold -- they are not part of the chain the bot
+    surveyed, and selecting one means entering a contract the bot never saw.
+    Audit 2026-07-31 proved this live across accounts: account B sold a DOW
+    99.5P that existed in its candidate set only because account A held it."""
+    import pandas as pd
+    from src.engine_v2.options.select import select_contract
+    d, exp = pd.Timestamp("2026-07-31"), pd.Timestamp("2026-08-21")
+    cols = ["date", "expiry", "strike", "right", "dte", "delta",
+            "bid", "ask", "mid", "underlying", "held_only"]
+    rows = [
+        {"date": d, "expiry": exp, "strike": 99.0, "right": "P", "dte": 21,
+         "delta": -0.24, "bid": 1.0, "ask": 1.2, "mid": 1.1, "underlying": 103.0,
+         "held_only": False},
+        # the spliced leg: a far better delta match to a 0.30 target
+        {"date": d, "expiry": exp, "strike": 99.5, "right": "P", "dte": 21,
+         "delta": -0.30, "bid": 1.3, "ask": 1.5, "mid": 1.4, "underlying": 103.0,
+         "held_only": True},
+    ]
+    chain = pd.DataFrame(rows, columns=cols)
+    c = select_contract(chain, d, "P", 0.30, 21, "DOW")
+    assert c is not None
+    assert c.strike == 99.0, "selected a mark-only row"
+
+
+def test_select_contract_still_works_without_the_held_only_column():
+    """Every batch chain on disk predates the column; absence means 'tradeable'."""
+    import pandas as pd
+    from src.engine_v2.options.select import select_contract
+    d, exp = pd.Timestamp("2026-07-31"), pd.Timestamp("2026-08-21")
+    cols = ["date", "expiry", "strike", "right", "dte", "delta",
+            "bid", "ask", "mid", "underlying"]
+    chain = pd.DataFrame([{"date": d, "expiry": exp, "strike": 99.0, "right": "P",
+                           "dte": 21, "delta": -0.30, "bid": 1.0, "ask": 1.2,
+                           "mid": 1.1, "underlying": 103.0}], columns=cols)
+    assert select_contract(chain, d, "P", 0.30, 21, "DOW").strike == 99.0
+
+
+def test_option_mark_still_finds_a_mark_only_row():
+    """The whole point: unselectable, but markable."""
+    import pandas as pd
+    from src.engine_v2.options.select import option_mark
+    from src.engine_v2.options.chain import Contract
+    d, exp = pd.Timestamp("2026-07-31"), pd.Timestamp("2026-08-21")
+    chain = pd.DataFrame([{"date": d, "expiry": exp, "strike": 99.5, "right": "P",
+                           "dte": 21, "delta": -0.30, "bid": 1.3, "ask": 1.5,
+                           "mid": 1.4, "underlying": 103.0, "held_only": True}])
+    mk = option_mark(chain, d, Contract("DOW", exp, 99.5, "P"))
+    assert mk is not None and mk.ask == 1.5

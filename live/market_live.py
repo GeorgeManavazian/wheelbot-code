@@ -83,15 +83,36 @@ class LiveMarket:
         covered-call branch, and a chain holding only the leg we already hold
         would be a misleading thing to hand it."""
         existing = self._chains.get(ticker)
-        if existing is None or not rows:
+        # `len(existing) == 0` matters as much as `is None`: chain_from_json
+        # returns an EMPTY frame, not None, when every contract is filtered out
+        # (bid<=0 / ask<=0 / missing delta — routine for a thin name). Splicing
+        # into that frame would hand the engine a chain whose ONLY row is the leg
+        # already held, which select_contract then picks by default: a strike the
+        # bot never surveyed, at whatever credit the quote carried — including
+        # $0.00, which makes the resulting leg permanently unclosable, because
+        # the take-profit test becomes `ask <= 0`. (audit 2026-07-31)
+        if existing is None or len(existing) == 0 or not rows:
             return 0
         have = set(zip(existing["expiry"], existing["strike"], existing["right"]))
         fresh = [r for r in rows if (r["expiry"], r["strike"], r["right"]) not in have]
         if not fresh:
             return 0
-        self._chains[ticker] = pd.concat(
-            [existing, pd.DataFrame(fresh, columns=existing.columns)],
-            ignore_index=True)
+        add = pd.DataFrame(fresh)
+        # Union of columns, NOT `columns=existing.columns` — that silently drops
+        # any column the pulled chain lacks, which would have thrown away the
+        # `held_only` flag that keeps a mark-only row out of select_contract.
+        merged = pd.concat([existing, add], ignore_index=True)
+        if "held_only" in merged.columns:
+            # existing rows predate the flag; absent means tradeable
+            merged["held_only"] = merged["held_only"].fillna(False).astype(bool)
+        # Schwab may omit delta (live/data.py documents its "NaN" string), and
+        # _num turns that into None. A None in the column flips the whole thing
+        # to object dtype, and select_contract's `e["delta"].abs()` then raises
+        # TypeError — which run_daily catches PER ACCOUNT, silently gapping every
+        # account that routes this ticker. Coerce so the column stays numeric and
+        # a missing delta is NaN, which sorts out of contention on its own.
+        merged["delta"] = pd.to_numeric(merged["delta"], errors="coerce")
+        self._chains[ticker] = merged
         return len(fresh)
 
     def spot(self, ticker, day, fallback):

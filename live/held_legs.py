@@ -79,6 +79,12 @@ def rows_from_quotes(quotes: dict, contracts, obs) -> dict:
             "right": c["right"], "dte": int(dte),
             "delta": _num(node.get("delta")), "bid": bid, "ask": ask, "mid": mid,
             "underlying": und,
+            # MARK ONLY -- select_contract must never return this row. It was
+            # pulled by OCC symbol because we already hold it, not because the
+            # bot surveyed it, and run_daily shares one market across all 25
+            # accounts, so without this flag the leg one account holds becomes a
+            # candidate entry for the other 24. (audit 2026-07-31)
+            "held_only": True,
         })
     return out
 
@@ -92,7 +98,15 @@ def merge_held_legs(market, client, position_lists, obs) -> dict:
     was before this fix existed (legs unmarked), which is worse but not wrong,
     and must not take the daily run down with it."""
     contracts = held_contracts(position_lists)
-    stats = {"requested": len(contracts), "merged": 0, "unquoted": [], "error": None}
+    # `no_chain` is separate from `unquoted` on purpose. A leg whose ticker's
+    # chain pull failed quotes perfectly well, so it never looks unquoted — but
+    # there is nothing to splice it into, so it goes unmarked and its take-profit
+    # is suspended for the day. That is this module's own failure mode arriving
+    # through a second door, and `merged: 0` is ALSO what a healthy run reports
+    # when the leg is already inside the window. Without this the two are
+    # indistinguishable and the run prints a success line either way.
+    stats = {"requested": len(contracts), "merged": 0, "unquoted": [],
+             "no_chain": [], "error": None}
     if not contracts:
         return stats
     try:
@@ -113,7 +127,11 @@ def merge_held_legs(market, client, position_lists, obs) -> dict:
                          if (c["ticker"], c["expiry"], c["strike"], c["right"])
                          not in quoted]
     for ticker, rows in rows_by_ticker.items():
-        stats["merged"] += market.add_chain_rows(ticker, rows)
+        added = market.add_chain_rows(ticker, rows)
+        stats["merged"] += added
+        if added == 0 and market.chain(ticker, obs) is None:
+            stats["no_chain"] += [c["symbol"] for c in contracts
+                                  if c["ticker"] == ticker]
     return stats
 
 

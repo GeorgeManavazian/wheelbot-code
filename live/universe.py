@@ -84,4 +84,16 @@ _SP_NZ = [
 
 # First-seen dedup across the groups; order is stable (ETFs, then cheap, then S&P).
 _ALL = _ETFS + _CHEAP + _SP_AM + _SP_NZ
-UNIVERSE = list(dict.fromkeys(_ALL))
+
+# ...then subtract the reserved one-shot tickers. These are held back as a
+# genuinely unseen final read, and trading one spends that read permanently.
+# The engine's own refusal (portfolio.RESERVED_TICKERS) guards ONLY the 9-ticker
+# default path; the live bot hands LiveMarket an explicit 547-name universe, so
+# until 2026-07-31 nothing stopped them at all. They were not hypothetically at
+# risk: on 2026-07-20 the bot traded RIG at rank #20 with ARKK at #19, and on
+# 2026-07-31 EWZ ranked #7 of 12 gate passers at a price every account can
+# afford. Subtract here rather than delete from the lists above, so the lists
+# stay a faithful record of the source indices and the exclusion states itself.
+from src.engine_v2.options.portfolio import RESERVED_TICKERS
+
+UNIVERSE = [t for t in dict.fromkeys(_ALL) if t not in RESERVED_TICKERS]

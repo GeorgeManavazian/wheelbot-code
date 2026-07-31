@@ -100,12 +100,24 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                                     c, n, mark.ask, cash, pos["campaign"]))
                 pos["short"] = None; short = None; closed_today.add(c)
             if short is not None and d >= c.expiry:
-                settle_spot = spot
+                # Settlement reads the EXPIRY DAY's own close and nothing else.
+                # It used to take `spot`, which degrades to the CARRIED
+                # pos["last_spot"] when the close is missing — so on a data
+                # outage a deep-ITM put was booked PUT_EXPIRED (worthless) with
+                # no warning and no gap record. Measured on the real TMO leg:
+                # identical market reality, two ledgers, $153,750 apart, and the
+                # wrong one silent. zombie_check cannot catch it (it fires at 50%
+                # of the universe; one ticker is 0.18%). settle_price() is not
+                # the answer either — it returns the last close ON OR BEFORE the
+                # expiry, i.e. a different day's price. Refuse instead: leave the
+                # leg open and warn, so a later run with restored history settles
+                # it correctly. (audit 2026-07-31)
+                settle_spot = market.spot(tk, c.expiry, None)
+                if settle_spot is None:
+                    warnings.append((d, "expiry_unsettleable", c))
+                    continue
                 if d > c.expiry:
                     warnings.append((d, "expiry_resolved_late", c))
-                    sp = market.settle_price(tk, c.expiry)
-                    if sp is not None:
-                        settle_spot = sp
                 if c.right == "P":
                     if settle_spot < c.strike:
                         cash -= c.strike * mult * n
