@@ -21,9 +21,14 @@ OBS = pd.Timestamp("2026-07-31")
 EXP = pd.Timestamp("2026-08-07")
 
 
-def _quote(bid, ask, mark=None, delta=-0.05, dte=7, und=576.77):
+def _quote(bid, ask, mark=None, delta=-0.05, dte=7, und=576.77,
+           oi=317, vol=12, bsz=5, asz=9):
+    # liquidity fields sit at the QUOTE node in Schwab's QuoteResponse (A19);
+    # carrying them here lets the value assertions below catch a renamed or
+    # relocated key, which would otherwise record None forever with green tests
     q = {"quote": {"bidPrice": bid, "askPrice": ask, "delta": delta,
-                   "underlyingPrice": und},
+                   "underlyingPrice": und, "openInterest": oi,
+                   "totalVolume": vol, "bidSize": bsz, "askSize": asz},
          "reference": {"daysToExpiration": dte}}
     if mark is not None:
         q["quote"]["mark"] = mark
@@ -58,6 +63,10 @@ def test_row_built_for_a_leg_outside_the_chain_window():
     assert r["date"] == OBS and r["expiry"] == EXP
     assert (r["strike"], r["right"]) == (512.5, "P")
     assert (r["bid"], r["ask"], r["mid"]) == (0.40, 0.44, 0.42)
+    # A19 skeptic F5: values, not just column presence -- a wrong/moved key
+    # in rows_from_quotes would record None forever while presence stays green
+    assert (r["open_interest"], r["volume"]) == (317.0, 12.0)
+    assert (r["bid_size"], r["ask_size"]) == (5.0, 9.0)
     assert r["underlying"] == 576.77 and r["dte"] == 7
 
 

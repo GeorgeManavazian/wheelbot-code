@@ -21,6 +21,33 @@ def test_chain_exact_columns_and_types():
     assert (df["bid"] > 0).all() and (df["ask"] > 0).all()   # placeholders skipped
 
 
+def test_chain_captures_liquidity_fields():
+    """A19: openInterest/totalVolume/bidSize/askSize must be captured, not
+    discarded -- they are the prerequisite for any size-aware fill model (A2)
+    and replace the ADV proxy chain (x3.6 typical error) with measurement.
+    Schwab has no historical chain endpoint, so every day they are dropped is
+    data lost forever."""
+    payload = _payload()
+    df = chain_from_json(payload, OBS)
+    for col in ("open_interest", "volume", "bid_size", "ask_size"):
+        assert col in df.columns, f"A19: {col} discarded from the chain"
+    # values must come from the payload, not be invented: cross-check one
+    # admitted contract against its raw source record
+    row = df.iloc[0]
+    raw = None
+    for exp_key, strikes in payload["putExpDateMap"].items():
+        for _sk, cts in strikes.items():
+            ct = cts[0]
+            if (float(ct["strikePrice"]) == row["strike"]
+                    and int(ct["daysToExpiration"]) == row["dte"]):
+                raw = ct
+    assert raw is not None
+    assert row["open_interest"] == float(raw["openInterest"])
+    assert row["volume"] == float(raw["totalVolume"])
+    assert row["bid_size"] == float(raw["bidSize"])
+    assert row["ask_size"] == float(raw["askSize"])
+
+
 def test_chain_skips_zero_bid_placeholder():
     # fixture's first contract (strike 66.0) has bid 0.0 -> must be absent
     df = chain_from_json(_payload(), OBS)

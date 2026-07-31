@@ -6,7 +6,12 @@ import time
 import pandas as pd
 
 _CHAIN_COLS = ["date", "expiry", "strike", "right", "dte",
-               "delta", "bid", "ask", "mid", "underlying"]
+               "delta", "bid", "ask", "mid", "underlying",
+               # A19: liquidity fields, captured not consumed -- no gate reads
+               # them yet (that is A2, a deferred owner decision). They accrue
+               # from the day this ships because Schwab has no historical chain
+               # endpoint: a day not captured is unmeasurable forever.
+               "open_interest", "volume", "bid_size", "ask_size"]
 
 
 def closes_from_json(payload: dict) -> pd.Series:
@@ -71,6 +76,12 @@ def _rows_for(exp_map, right, obs, und):
                 "strike": float(ct["strikePrice"]), "right": right,
                 "dte": int(ct["daysToExpiration"]), "delta": delta,
                 "bid": bid, "ask": ask, "mid": mid, "underlying": und,
+                # A19: _num-coerced so a missing/"NaN" field lands as None/NaN,
+                # never a string that flips the column dtype
+                "open_interest": _num(ct.get("openInterest")),
+                "volume": _num(ct.get("totalVolume")),
+                "bid_size": _num(ct.get("bidSize")),
+                "ask_size": _num(ct.get("askSize")),
             })
     return rows
 

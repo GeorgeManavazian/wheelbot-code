@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 3 of 62 done (A6, A16, A18; A21/A22/E8/A18b/A18c added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 4 of 62 done (A6, A16, A18, A19; A21/A22/E8/A18b/A18c added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -177,7 +177,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 |---|---|---|---|---|
 | A16 | **Pull the chain during RTH, not at 17:00 after the close** | CRIT | **DONE** | see A16 evidence block below. **Owner decisions 2026-07-31:** (1) snapshot missing on a trading day → **skip the day + gap record + alert**, never fall back to a post-close pull; (2) half days (~3/yr) → **accepted as-is**, no half-day calendar — those snapshots will be post-close, a disclosed bounded corruption; (3) held-leg quote pull stays post-close → filed as **A21**, not folded in. |
 | A18 | One shared fill function across all four engines (seam only, no model choice) | HIGH | **DONE** | see A18 evidence block below. Follow-ups filed: **A18b** (dedupe `_num`, delete dead `live_marks`/`_mark_from_quote`, align `live_asks`' admission or document it), **A18c** (migrate or retire the fifth copy in `scripts/audit_defense_execution.py` — currently kept as an independent referee and it verified the seam with 0 mismatches on 384 intraday + 13 EOD fills). Original note preserved: **Also four ADMISSION rules, measured during A6** on identical payloads — `0.00 x 0.00`: `contract_quotes` skip / `live_asks` skip / `_mark_from_quote` None. bid `None`, ask `0.05`: skip / **admits 0.05** / None. bid `-0.01`, ask `0.05`: skip / **admits 0.05** / **0.02**. So the dashboard prices a liability the intraday manager refuses to act on. Also: `live_marks` and `_mark_from_quote` have **zero production callers** — dead code, tests only. And `_num` still exists twice (`live/marks.py:25`, `live/data.py:32`, byte-identical). |
-| A19 | Capture `openInterest`/`totalVolume`/`bidSize`/`askSize` from the Schwab response | MED | TODO | |
+| A19 | Capture `openInterest`/`totalVolume`/`bidSize`/`askSize` from the Schwab response | MED | **DONE** | see A19 evidence block below |
 | A21 | `merge_held_legs` quote pull happens at 17:00, post-close (`run_daily.py:192` → `held_legs.py:113`) — same staleness class as A16 but marks/dashboard only, not entries | MED | TODO | Split out of A16 by owner decision 2026-07-31. Affects held-leg marks, snapshot equity (`snapshots.py:26`), and the EOD TP branch (`portfolio.py:94-101`); the intraday TP already runs on RTH quotes. |
 | A22 | `chain_frame` stamps `from_date`/`to_date` from the **box (UTC) clock**, not ET (`live/data.py:81 dt.date.today()`) — on the UTC VPS any retry from 19:00-20:00 ET onward requests **tomorrow's** expiry window, shifting the DTE band the selector uses | MED | TODO | Found by the A16 analyst. `obs_date` is threaded correctly; only the request dates are wrong. Dormant on the new RTH snapshot path (UTC date == ET date at 15:xx ET) but live on `--smoke` and any manual post-19:00 pull. |
 | A17 | Represent partial fills / working-order state | HIGH | TODO | |
@@ -316,6 +316,41 @@ and mutation-tested, but this is declared, not claimed as verified (A1/A5).
 
 ---
 
+## A19 — evidence (completed 2026-07-31)
+
+**In plain language.** Schwab's daily option report includes how many contracts exist
+(openInterest), how many traded today (totalVolume), and how big the waiting orders are
+(bidSize/askSize). The bot threw all four in the trash and later guessed crowd size with an ADV
+proxy carrying ~3.6× typical error. Now the four numbers are written down — chain rows and
+spliced held-leg rows both — and nothing reads them yet on purpose: the liquidity gate that will
+consume them is A2, a deferred owner decision. They accrue from deploy day; Schwab keeps no chain
+history, so every uncaptured day is unmeasurable forever.
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | New value-asserting test → `AssertionError: A19: open_interest discarded from the chain`. Real assertion. |
+| 2 Minimal fix | 4 columns appended to `_CHAIN_COLS` + `_num`-coerced capture in `data._rows_for` and `held_legs.rows_from_quotes`. Nothing reads them (proven, C1). |
+| 3 Suites | `495` backtest + `167` live = **662** (662 = 661 + 1 new test; backtest imports nothing from `live/`). |
+| 4 Mutation | 3 mutants killed: chain field dropped → 1 fail · held-leg capture stripped → 1 fail · quote key renamed (`totalVolume`→`volumeTotal`) → 1 fail (the skeptic-F5 amendment test). |
+| 5 Line audit | +46/−1 across `data.py`, `held_legs.py`, tests. All capture + comments; no admission rule, price, or condition touched. |
+| 6 Blast radius | `_CHAIN_COLS` consumers: `chain_from_json` (source), `chain_store` validation (new snapshots carry the cols), held-leg column-contract test, `add_chain_rows` (union-of-columns, unaffected). Engines ignore unknown columns — proven by execution, not assumed. |
+| C1 Skeptic | **COULD-NOT-BREAK.** Capture-only proven: `step_one_day` byte-identical with columns present / hand-stripped / all-None (trades, cash, equity, positions). Dtype-poison (all-missing, `"NaN"` strings → object columns) harmless through select/mark/splice/step. Snapshot round-trip exact incl. dtypes for float64 / object / mixed-NaN variants. |
+| C2 Dry run | Live Schwab GDX chain: **109/109 rows populate all four fields** with real values (e.g. 75P: OI 2,970, vol 2,317, 1,203×43). |
+| C3 Dollars | $0.00 — capture-only by construction (C1). Value accrues as data for A2's gate, which the analysts sized as blocking 114/145 entries and 90.4% of contracts once built. |
+
+**Skeptic findings, disposition:** F4 (MED, operational) — a pre-A19 snapshot read by post-A19
+code fails validation and gaps the day *declared, not silent*; risk exists only if deployed
+mid-afternoon between a snapshot pass and its 17:00 run → **Phase F note: deploy while paused
+(as decided anyway), risk zero**. F5 (LOW) — quote-path values were untested → **fixed as an
+amendment**: the test payload now carries the four fields at the quote node and asserts values;
+key-rename mutant killed. Schwab's real quote-node placement remains unverifiable offline
+(declared; chain path IS value-verified live, and held rows are mark-only, bounding the risk).
+F6 (LOW, declared) — mixed-liquidity snapshots serialize `NaN` tokens (non-RFC JSON); the whole
+pipeline is Python (`json.load` accepts), but a strict-JSON tool touching the state repo would
+choke — recorded, not fixed.
+
+---
+
 ## A18 — evidence (completed 2026-07-31)
 
 **In plain language.** Four engines each carried a hand-written copy of the take-profit rule
@@ -441,3 +476,4 @@ test (E8).
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
 | 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |
+| 2026-07-31 | **A19 DONE.** Red test → capture in chain + held-leg rows → skeptic **COULD-NOT-BREAK** (capture-only proven by execution three ways) → F5 amendment (quote-path value assertions + key-rename mutant). Live C2: GDX 109/109 rows populate. **Phase F note added: F4 deploy-timing** — deploy only while paused or a same-day pre-A19 snapshot gaps the day (declared). Suites 495+167=**662**. |

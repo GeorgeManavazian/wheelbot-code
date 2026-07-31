@@ -79,6 +79,13 @@ def rows_from_quotes(quotes: dict, contracts, obs) -> dict:
             "right": c["right"], "dte": int(dte),
             "delta": _num(node.get("delta")), "bid": bid, "ask": ask, "mid": mid,
             "underlying": und,
+            # A19: same liquidity capture as the chain rows; the quote payload
+            # names them at the top of its quote node. Absent -> None, never
+            # invented.
+            "open_interest": _num(node.get("openInterest")),
+            "volume": _num(node.get("totalVolume")),
+            "bid_size": _num(node.get("bidSize")),
+            "ask_size": _num(node.get("askSize")),
             # MARK ONLY -- select_contract must never return this row. It was
             # pulled by OCC symbol because we already hold it, not because the
             # bot surveyed it, and run_daily shares one market across all 25
