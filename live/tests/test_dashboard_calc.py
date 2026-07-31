@@ -35,3 +35,16 @@ def test_assigned_shares_use_spot():
     rows, equity, unreal = _rows_and_equity(state, marks={})
     assert equity == 50_000.0 + 13.0 * 500           # cash + share value
     assert unreal == (13.0 - 12.0) * 500
+
+
+def test_stored_fallback_prefers_the_ask_over_the_mid():
+    """The engine marks equity at the ask (owner decision B). If the dashboard
+    kept falling back to last_mid, the page would show a more flattering number
+    than the account it is displaying -- the exact gap the change removed."""
+    state = {"cash": 100_000.0, "positions": [
+        {"ticker": "GDX", "phase": "PUT", "short": {
+            "contracts": 10, "credit": 0.20, "last_mid": 0.30, "last_ask": 0.34,
+            "contract": {"root": "GDX", "expiry": "2026-08-15", "strike": 40.0, "right": "P"}}}]}
+    rows, equity, unreal = _rows_and_equity(state, marks={})
+    assert equity == 100_000.0 - 0.34 * 100 * 10
+    assert round(unreal, 2) == round((0.20 - 0.34) * 1000, 2)

@@ -24,18 +24,34 @@ def _contract_from_dict(d):
 def _pos_to_dict(p):
     d = {k: p[k] for k in _POS_SCALARS}
     sh = p["short"]
-    d["short"] = None if sh is None else {
-        "contract": _contract_to_dict(sh["contract"]),
-        "contracts": sh["contracts"], "credit": sh["credit"], "last_mid": sh["last_mid"]}
+    if sh is None:
+        d["short"] = None
+        return d
+    out = {"contract": _contract_to_dict(sh["contract"]),
+           "contracts": sh["contracts"], "credit": sh["credit"],
+           "last_mid": sh["last_mid"]}
+    # last_ask is what equity is marked from (owner decision B, 2026-07-31). It
+    # is optional ONLY because legs opened before that change have none; once a
+    # leg has one it must survive the round trip, or every run would reload the
+    # stale mid and silently restore the defect.
+    if "last_ask" in sh:
+        out["last_ask"] = sh["last_ask"]
+    d["short"] = out
     return d
 
 
 def _pos_from_dict(d):
     p = {k: d[k] for k in _POS_SCALARS}
     sh = d["short"]
-    p["short"] = None if sh is None else {
-        "contract": _contract_from_dict(sh["contract"]),
-        "contracts": sh["contracts"], "credit": sh["credit"], "last_mid": sh["last_mid"]}
+    if sh is None:
+        p["short"] = None
+        return p
+    out = {"contract": _contract_from_dict(sh["contract"]),
+           "contracts": sh["contracts"], "credit": sh["credit"],
+           "last_mid": sh["last_mid"]}
+    if "last_ask" in sh:
+        out["last_ask"] = sh["last_ask"]
+    p["short"] = out
     return p
 
 

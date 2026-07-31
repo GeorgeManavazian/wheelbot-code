@@ -1,0 +1,125 @@
+"""Mark the legs the bounded option chain cannot see.
+
+`chain_frame` pulls `strike_count=12` strikes around the money. That is the right
+window for CHOOSING a contract, and the wrong window for MARKING one you already
+hold: a short put whose underlying rallies drifts out of it, and from that moment
+`option_mark` returns None for the leg. Every branch that could act on it —
+take-profit, the equity mark — is guarded by `mark is not None`, so the position
+silently freezes at whatever it was last worth.
+
+Found live on 2026-07-29: TMO 512.5P carried at $11.30 with the stock at 576 and
+the contract offered near $0.42, months past its 60% take-profit trigger. Not
+only a reporting error; the strategy stopped executing on that position.
+
+Fix: ask Schwab directly for each held leg by OCC symbol (one batched quote pull,
+data-only) and splice the ones the chain is missing into it before `step_one_day`
+reads it. Data-only; no order code.
+"""
+from __future__ import annotations
+
+import pandas as pd
+
+from live.data import _CHAIN_COLS
+from live.marks import occ_symbol, _contract_field
+
+
+def held_contracts(position_lists) -> list:
+    """Every distinct short leg across every account, as plain dicts.
+
+    Deduped by (ticker, expiry, strike, right): the 25 accounts hold heavily
+    overlapping legs — one underlying was 47% of realized P&L — and Schwab's
+    quote endpoint should be asked once per contract, not once per account."""
+    out = {}
+    for positions in position_lists:
+        for p in positions:
+            short = p.get("short")
+            if not short:
+                continue
+            c = short["contract"]
+            expiry = pd.Timestamp(_contract_field(c, "expiry")).normalize()
+            strike = float(_contract_field(c, "strike"))
+            right = _contract_field(c, "right")
+            key = (p["ticker"], expiry, strike, right)
+            out.setdefault(key, {"ticker": p["ticker"], "root": _contract_field(c, "root"),
+                                 "expiry": expiry, "strike": strike, "right": right,
+                                 "symbol": occ_symbol(_contract_field(c, "root"),
+                                                      expiry, strike, right)})
+    return list(out.values())
+
+
+def rows_from_quotes(quotes: dict, contracts, obs) -> dict:
+    """{ticker: [chain row, ...]} from a Schwab quotes payload. Pure mapping.
+
+    Deliberately looser than `chain_from_json`, in one direction only: a held leg
+    is kept when bid is 0.00 as long as ask is a real offer. A 0.00 x 0.01 put is
+    worthless, and worthless is precisely the state the take-profit exists to
+    act on — dropping it (as the chain builder rightly does for contracts we
+    might SELL) is what leaves the position frozen. A two-sided 0.00 x 0.00 is
+    still refused: that is a halt or a pre-open book, not a price, and an ask of
+    zero satisfies every take-profit test there is."""
+    obs = pd.Timestamp(obs).normalize()
+    out = {}
+    for c in contracts:
+        q = quotes.get(c["symbol"])
+        if not isinstance(q, dict):
+            continue
+        node = q.get("quote", {})
+        ref = q.get("reference", {})
+        bid, ask = _num(node.get("bidPrice")), _num(node.get("askPrice"))
+        if bid is None or ask is None or ask <= 0 or bid < 0:
+            continue
+        mark = _num(node.get("mark"))
+        mid = mark if (mark is not None and mark > 0) else (bid + ask) / 2.0
+        und = _num(node.get("underlyingPrice"))
+        dte = ref.get("daysToExpiration")
+        if dte is None:
+            dte = max((c["expiry"] - obs).days, 0)
+        out.setdefault(c["ticker"], []).append({
+            "date": obs, "expiry": c["expiry"], "strike": c["strike"],
+            "right": c["right"], "dte": int(dte),
+            "delta": _num(node.get("delta")), "bid": bid, "ask": ask, "mid": mid,
+            "underlying": und,
+        })
+    return out
+
+
+def merge_held_legs(market, client, position_lists, obs) -> dict:
+    """Splice missing held legs into `market`'s chains. Returns run stats.
+
+    Only ADDS rows the chain does not already carry — the EOD chain is the
+    authoritative snapshot for the day and a quote pulled minutes later must not
+    restate it. Never raises: a failed quote pull leaves the run exactly as it
+    was before this fix existed (legs unmarked), which is worse but not wrong,
+    and must not take the daily run down with it."""
+    contracts = held_contracts(position_lists)
+    stats = {"requested": len(contracts), "merged": 0, "unquoted": [], "error": None}
+    if not contracts:
+        return stats
+    try:
+        resp = client.get_quotes([c["symbol"] for c in contracts])
+        data = resp.json() if hasattr(resp, "json") else resp
+    except Exception as e:
+        stats["error"] = f"{type(e).__name__}: {e}"
+        return stats
+    if not isinstance(data, dict):
+        stats["error"] = f"quote payload was {type(data).__name__}, not a dict"
+        return stats
+
+    rows_by_ticker = rows_from_quotes(data, contracts, obs)
+    quoted = {(r["ticker"], row["expiry"], row["strike"], row["right"])
+              for r in contracts
+              for row in rows_by_ticker.get(r["ticker"], [])}
+    stats["unquoted"] = [c["symbol"] for c in contracts
+                         if (c["ticker"], c["expiry"], c["strike"], c["right"])
+                         not in quoted]
+    for ticker, rows in rows_by_ticker.items():
+        stats["merged"] += market.add_chain_rows(ticker, rows)
+    return stats
+
+
+def _num(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f

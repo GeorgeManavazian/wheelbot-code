@@ -63,8 +63,8 @@ def _pull_marks(positions, timeout=8.0):
     import concurrent.futures as _cf
 
     def _work():
-        from live.marks import live_marks
-        return live_marks(_client(), positions)
+        from live.marks import live_asks
+        return live_asks(_client(), positions)
     try:
         with _cf.ThreadPoolExecutor(max_workers=1) as ex:
             return ex.submit(_work).result(timeout=timeout)
@@ -91,7 +91,13 @@ def _rows_and_equity(state, marks):
             strike, right = float(c_["strike"]), c_["right"]
             k = short["contracts"]
             credit = short["credit"]
-            mark = marks.get(tk, short.get("last_mid", credit))
+            # The ASK, to match how the engine marks equity (owner decision B,
+            # 2026-07-31): a short leg is closed by buying, so the offer is the
+            # only price the account can actually get out at. Falling back to
+            # last_mid here would print a friendlier number than the account it
+            # is describing. `credit` remains the last resort for a leg that has
+            # never been marked at all.
+            mark = marks.get(tk, short.get("last_ask", short.get("last_mid", credit)))
             collected = credit * 100 * k              # premium collected on this leg
             liability = mark * 100 * k
             unreal = collected - liability            # sold at credit, buy back at mark

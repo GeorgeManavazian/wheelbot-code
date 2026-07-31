@@ -38,3 +38,18 @@ def test_append_and_load_round_trip(tmp_path):
     snaps = load_snapshots(path)
     assert len(snaps) == 2                        # append-only, oldest first
     assert snaps[0]["equity"] == 100_010.0 and snaps[1]["equity"] == 100_020.0
+
+
+def test_snapshot_records_the_ask_the_equity_was_marked_from(tmp_path):
+    """The snapshot is the permanent record of a day. Without last_ask it stores
+    an equity figure that cannot be re-derived from the prices beside it."""
+    from live.snapshots import snapshot
+    put = Contract("GDX", pd.Timestamp("2026-08-21"), 30.0, "P")
+    pos = {"ticker": "GDX", "shares": 0, "phase": "PUT", "basis": None,
+           "premium": 90.0, "campaign": 1, "last_spot": 35.0,
+           "short": {"contract": put, "contracts": 1, "credit": 1.0,
+                     "last_mid": 1.10, "last_ask": 1.30}}
+    snap = snapshot(PortfolioState(cash=100_000.0, positions=[pos]),
+                    equity=100_000.0 - 130.0, day=pd.Timestamp("2026-07-31"))
+    assert snap["positions"][0]["short"]["last_ask"] == 1.30
+    assert snap["positions"][0]["short"]["last_mid"] == 1.10

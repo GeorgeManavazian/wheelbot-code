@@ -43,12 +43,23 @@ def test_universe_of_one_matches_solo_run_wheel():
     solo = run_wheel(_chain(SPY_CH), cfg)
     port = run_portfolio_wheel({"SPY": _chain(SPY_CH)}, cfg,
                                {"SPY": _states(CALM)})
+    # DECISIONS are still identical -- same entries, same exits, same sizes, same
+    # cash after every trade. That is the invariant this test was written to
+    # protect and it still holds.
     assert [(t.date, t.action, t.contracts, t.price_per_contract, t.cash_after)
             for t in solo.trades] == \
            [(t.date, t.action, t.contracts, t.price_per_contract, t.cash_after)
             for t in port.trades]
-    assert solo.equity.equals(port.equity)
-    assert solo.final_cash == port.final_cash
+    # VALUATION deliberately diverges as of 2026-07-31: the portfolio engine
+    # marks its short book at the ask (owner decision, option B -- see
+    # test_mark_at_ask.py), the solo wheel still marks at the mid. So the
+    # portfolio equity is the more conservative of the two on every day that
+    # carries an open short, never the other way round, and the gap is the
+    # half-spread. If wheel.py is ever brought onto the same basis, this becomes
+    # equality again and the solo digest anchor breaks with it.
+    assert (port.equity <= solo.equity).all()
+    assert (solo.equity - port.equity).max() > 0        # the divergence is real
+    assert port.final_cash <= solo.final_cash           # residual settled at ask
 
 def test_routes_to_highest_vol_pctile():
     port = run_portfolio_wheel({"SPY": _chain(SPY_CH), "GDX": _chain(GDX_CH)},

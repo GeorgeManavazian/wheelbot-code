@@ -19,7 +19,11 @@ def snapshot(state, equity: float, day) -> dict:
                 "strike": sh["contract"].strike,
                 "expiry": pd.Timestamp(sh["contract"].expiry).isoformat(),
                 "right": sh["contract"].right, "contracts": sh["contracts"],
-                "credit": sh["credit"], "last_mid": sh["last_mid"]},
+                "credit": sh["credit"], "last_mid": sh["last_mid"],
+                # the price the day's equity was actually marked from -- without
+                # it a stored equity figure cannot be re-derived from the prices
+                # recorded next to it. Absent on legs opened before 2026-07-31.
+                **({"last_ask": sh["last_ask"]} if "last_ask" in sh else {})},
         })
     return {
         "date": pd.Timestamp(day).normalize().isoformat(),

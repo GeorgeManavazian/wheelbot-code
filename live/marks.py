@@ -68,6 +68,44 @@ def live_marks(client, positions) -> dict:
     return out
 
 
+def live_asks(client, positions) -> dict:
+    """{ticker: ask} for every held short leg -- what it would COST to close the
+    book right now, which is what the dashboard displays and what the engine
+    marks equity from (owner decision B, 2026-07-31).
+
+    Unlike `contract_quotes` this does not require a live bid: a deep-OTM leg
+    quoted 0.00 x 0.01 is worthless, and worthless is exactly the state the
+    display must be able to show. It does require a real ask, because an ask of
+    zero is a halted or empty book and would display the liability as nil."""
+    legs = {}
+    for p in positions:
+        short = p.get("short")
+        if not short:
+            continue
+        c = short["contract"]
+        sym = occ_symbol(_contract_field(c, "root"), _contract_field(c, "expiry"),
+                         _contract_field(c, "strike"), _contract_field(c, "right"))
+        legs[sym] = p["ticker"]
+    if not legs:
+        return {}
+    try:
+        resp = client.get_quotes(list(legs))
+        data = resp.json() if hasattr(resp, "json") else resp
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for sym, tk in legs.items():
+        q = data.get(sym)
+        if not isinstance(q, dict):
+            continue
+        ask = q.get("quote", q).get("askPrice")
+        if ask is not None and float(ask) > 0:
+            out[tk] = float(ask)
+    return out
+
+
 def _contract_field(c, name):
     return getattr(c, name) if hasattr(c, name) else c[name]
 

@@ -209,7 +209,19 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                 if day_chain is not None else None
             if mk is not None:
                 pos["short"]["last_mid"] = mk.mid
-            liab += pos["short"]["last_mid"] * mult * pos["short"]["contracts"]
+                pos["short"]["last_ask"] = mk.ask
+            # Marked at the ASK (owner decision 2026-07-29, option B). A short
+            # option is a liability dischargeable only by BUYING it back, and you
+            # buy at the offer; the midpoint books half a spread the account can
+            # never capture. Measured on the live paper run: +$31,752 reported at
+            # mid became +$12,061 at exitable prices, and 7 of 25 accounts turned
+            # out to be losing. This deliberately breaks the byte-identical
+            # anchor -- every portfolio-engine number produced before this line
+            # changed is non-comparable with one produced after.
+            # `.get` fallback: legs recorded under the old scheme carry no
+            # last_ask until their next successful mark.
+            short_ = pos["short"]
+            liab += short_.get("last_ask", short_["last_mid"]) * mult * short_["contracts"]
         shares_val += pos["shares"] * pos["last_spot"]
     equity_val = cash + shares_val - liab
 
@@ -285,8 +297,11 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
             day_chain = market.chain(pos["ticker"], last)
             mk = option_mark(day_chain, last, pos["short"]["contract"]) \
                 if day_chain is not None else None
-            mid = mk.mid if mk is not None else pos["short"]["last_mid"]
-            cash -= mid * mult * pos["short"]["contracts"]
+            # At the ASK, for the same reason the daily mark is (option B): this
+            # finalizer BUYS the residual book back, and a buyer pays the offer.
+            exit_px = mk.ask if mk is not None else \
+                pos["short"].get("last_ask", pos["short"]["last_mid"])
+            cash -= exit_px * mult * pos["short"]["contracts"]
             residual_settled = True
         if pos["shares"]:
             final_shares[pos["ticker"]] = final_shares.get(pos["ticker"], 0) + pos["shares"]

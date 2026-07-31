@@ -52,6 +52,28 @@ def append_gap(date, reason: str, path: str = GAPS_PATH, **extra) -> bool:
     return True
 
 
+def append_correction(date, reason: str, path: str = GAPS_PATH, **extra) -> bool:
+    """Re-file a day under a different reason. Unlike `append_gap` this is NOT
+    idempotent-per-date: it always writes, because its whole purpose is to
+    supersede a record that already exists.
+
+    Why a second line and not an edit: the original record is evidence of what
+    the bot believed at the time it failed, and this ledger is the disclosure of
+    record. 2026-07-24 went in as a bare `pull_failure` -- true but misleading,
+    because the bot did not skip the day, it STEPPED it against 3-6 day old
+    option marks and stamped it complete. Readers of a line saying `pull_failure`
+    would assume the day is simply absent from the equity curve. It isn't; it is
+    in there, as a measurement of nothing. `gap_summary` folds later records over
+    earlier ones per date, so the correction is what gets displayed while the
+    superseded line stays on disk."""
+    rec = {"date": str(date), "reason": reason, "correction": True}
+    rec.update(extra)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    return True
+
+
 def gap_summary(path: str = GAPS_PATH) -> dict:
     """Human-facing summary of the ledger, for the dashboard.
 
@@ -74,6 +96,13 @@ def gap_summary(path: str = GAPS_PATH) -> dict:
                     recs.append(r)
     except FileNotFoundError:
         pass
+    # Fold: one record per date, last line wins. Corrections are appended rather
+    # than edited (see append_correction), so without this a corrected day would
+    # be displayed twice -- under both the wrong reason and the right one.
+    latest = {}
+    for r in recs:
+        latest[str(r["date"])] = r
+    recs = list(latest.values())
     recs.sort(key=lambda r: str(r["date"]))
     return {
         "count": len(recs),

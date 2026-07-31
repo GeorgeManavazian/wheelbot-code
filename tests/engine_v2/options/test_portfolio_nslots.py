@@ -18,7 +18,10 @@ def _load():
 
 def test_nslots_1_vol_pctile_matches_solo_run_wheel():
     # Real byte-identity teeth: a one-ticker universe at n_slots=1, selector
-    # vol_pctile, must reproduce the solo wheel on that ticker exactly.
+    # vol_pctile, must reproduce the solo wheel's DECISIONS on that ticker
+    # exactly. Its equity no longer matches, on purpose: since 2026-07-31 the
+    # portfolio engine marks the short book at the ask and the solo wheel still
+    # marks at the mid (owner decision B -- see test_mark_at_ask.py).
     from src.engine_v2.options.wheel import run_wheel
     chains, states = _load()
     cfg = WheelConfig(ticker="SPY", **BASE)
@@ -27,7 +30,8 @@ def test_nslots_1_vol_pctile_matches_solo_run_wheel():
                                selector="vol_pctile", n_slots=1)
     assert [(t.date, t.action, t.contracts, t.price_per_contract) for t in solo.trades] == \
            [(t.date, t.action, t.contracts, t.price_per_contract) for t in port.trades]
-    assert solo.equity.equals(port.equity)
+    assert (port.equity <= solo.equity).all()
+    assert (solo.equity - port.equity).max() > 0
 
 
 def test_nslots_5_holds_multiple_and_never_two_per_ticker():

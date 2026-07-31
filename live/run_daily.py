@@ -23,6 +23,7 @@ from live.universe import UNIVERSE
 from live.accounts import all_accounts, account_paths, account_label
 from live.alerts import send_alert
 from live.gaps import append_gap
+from live.held_legs import merge_held_legs
 from live.config import load_run_config
 
 ET = ZoneInfo("America/New_York")
@@ -183,6 +184,22 @@ def main():
     market = _live_market(universe, held_all, obs, client, cfg.target_dte,
                           cfg.chop_max_ma_spread, cfg.chop_max_fast_spread,
                           cfg.chop_max_fast_fall)
+    # Mark the legs the bounded chain cannot see. MUST run before any account
+    # steps: without it a position whose strike drifted outside the 12-strike
+    # window is invisible to the take-profit and freezes at its last mark
+    # (TMO 512.5P, carried at $11.30 while offered near $0.42). See held_legs.py.
+    merged = merge_held_legs(market, client,
+                             [st.positions for (st, _p) in loaded.values()], obs)
+    if merged["requested"]:
+        print(f"held-leg quotes: {merged['merged']} spliced into chains "
+              f"({merged['requested']} distinct legs held"
+              f"{', ' + str(len(merged['unquoted'])) + ' unquoted' if merged['unquoted'] else ''})")
+    if merged["error"]:
+        # Not fatal: this is the pre-2026-07-31 behaviour, i.e. legs outside the
+        # window stay unmarked. But it silently suspends the take-profit on them,
+        # so it must be said out loud rather than swallowed.
+        print(f"HELD-LEG QUOTE PULL FAILED -- {merged['error']}. Any position "
+              f"outside the strike window will not be marked or take-profited today.")
     if market.skipped:
         print(f"skipped {len(market.skipped)} tickers (pull failures): "
               f"{[s[0] for s in market.skipped][:8]}")

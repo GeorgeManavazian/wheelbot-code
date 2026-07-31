@@ -56,3 +56,42 @@ def test_save_keeps_prev_backup(tmp_path):
     assert os.path.exists(p + ".prev")        # second write backs up the first
     assert load_state(p + ".prev").cash == 95_000.0   # prev holds the OLD value
     assert load_state(p).cash == 1.0
+
+
+def test_last_ask_round_trips(tmp_path):
+    """Equity is marked off last_ask (owner decision B). The serializer
+    whitelists keys, so a field it does not name is silently dropped on save --
+    which would send every leg back to its stale mid on the next run, i.e.
+    restore the exact defect the change was made to remove."""
+    from live.state import save_state, load_state
+    put = Contract("GDX", pd.Timestamp("2026-08-21"), 30.0, "P")
+    pos = {"ticker": "GDX", "shares": 0, "phase": "PUT", "basis": None,
+           "premium": 90.0, "campaign": 1, "last_spot": 35.0,
+           "short": {"contract": put, "contracts": 1, "credit": 1.0,
+                     "last_mid": 1.10, "last_ask": 1.30}}
+    p = str(tmp_path / "state.json")
+    save_state(PortfolioState(cash=100_000.0, positions=[pos]), p)
+    back = load_state(p)
+    assert back.positions[0]["short"]["last_ask"] == 1.30
+    assert back.positions[0]["short"]["last_mid"] == 1.10
+
+
+def test_a_leg_saved_before_last_ask_existed_still_loads(tmp_path):
+    """The 25 live accounts hold 43 legs written under the old schema."""
+    import json
+    from live.state import load_state
+    p = str(tmp_path / "state.json")
+    with open(p, "w") as f:
+        json.dump({"cash": 100.0, "campaign": 1, "days_flat": 0,
+                   "days_shares_uncovered": 0, "prev_d": None,
+                   "positions": [{"ticker": "GDX", "shares": 0, "phase": "PUT",
+                                  "basis": None, "premium": 90.0, "campaign": 1,
+                                  "last_spot": 35.0,
+                                  "short": {"contract": {"root": "GDX",
+                                                         "expiry": "2026-08-21T00:00:00",
+                                                         "strike": 30.0, "right": "P"},
+                                            "contracts": 1, "credit": 1.0,
+                                            "last_mid": 1.10}}]}, f)
+    back = load_state(p)
+    assert "last_ask" not in back.positions[0]["short"]
+    assert back.positions[0]["short"]["last_mid"] == 1.10

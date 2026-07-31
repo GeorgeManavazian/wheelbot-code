@@ -1,4 +1,4 @@
-from live.marks import occ_symbol, _mark_from_quote, live_marks, contract_quotes
+from live.marks import occ_symbol, _mark_from_quote, live_marks, live_asks, contract_quotes
 
 
 def test_occ_symbol_format():
@@ -73,3 +73,21 @@ def test_contract_quotes_skips_zero_quote():
     # a real two-sided quote still comes through
     out = contract_quotes(_FakeClient({sym: {"quote": {"bidPrice": 0.10, "askPrice": 0.12}}}), positions)
     assert out["AGNC"].ask == 0.12
+
+
+def test_live_asks_returns_the_offer_and_keeps_a_zero_bid():
+    """What it costs to CLOSE the short book. A 0.00 x 0.01 leg is worthless and
+    must still be shown as worthless, so only the ask is required to be real."""
+    positions = [{"ticker": "RIG", "short": {"contract": {"root": "RIG",
+                 "expiry": "2026-08-07", "strike": 4.5, "right": "P"}}}]
+    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": 0.0, "askPrice": 0.01}}}
+    assert live_asks(_FakeClient(quotes), positions) == {"RIG": 0.01}
+
+
+def test_live_asks_skips_a_zero_ask():
+    """ask=0 is a halt or an empty book, not a price -- and it would display the
+    liability as nil."""
+    positions = [{"ticker": "RIG", "short": {"contract": {"root": "RIG",
+                 "expiry": "2026-08-07", "strike": 4.5, "right": "P"}}}]
+    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": 0.0, "askPrice": 0.0}}}
+    assert live_asks(_FakeClient(quotes), positions) == {}

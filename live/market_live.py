@@ -71,6 +71,29 @@ class LiveMarket:
     def chain(self, ticker, day):
         return self._chains.get(ticker)
 
+    def add_chain_rows(self, ticker, rows) -> int:
+        """Splice extra contract rows into a pulled chain; returns how many were
+        actually added. Used to mark held legs that fall outside the bounded
+        strike window (see live/held_legs.py).
+
+        Rows for a (expiry, strike, right) the chain already carries are DROPPED,
+        not overwritten — the chain pull is the day's authoritative snapshot. A
+        ticker with no chain at all is skipped rather than given a synthetic
+        one-row chain, because `day_chain is not None` is what gates the
+        covered-call branch, and a chain holding only the leg we already hold
+        would be a misleading thing to hand it."""
+        existing = self._chains.get(ticker)
+        if existing is None or not rows:
+            return 0
+        have = set(zip(existing["expiry"], existing["strike"], existing["right"]))
+        fresh = [r for r in rows if (r["expiry"], r["strike"], r["right"]) not in have]
+        if not fresh:
+            return 0
+        self._chains[ticker] = pd.concat(
+            [existing, pd.DataFrame(fresh, columns=existing.columns)],
+            ignore_index=True)
+        return len(fresh)
+
     def spot(self, ticker, day, fallback):
         s = self._closes.get(ticker)
         if s is None:
