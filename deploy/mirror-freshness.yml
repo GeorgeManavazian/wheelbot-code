@@ -1,0 +1,41 @@
+# D14 (owner 2026-08-01): the off-VPS watcher. Lives INSIDE the state mirror
+# repo (sync.py self-installs it under .github/), so GitHub itself judges the
+# mirror's freshness every weekday evening and emails the owner when the VPS
+# goes dark -- no new accounts, no new credentials.
+#
+# Known limits (declared): Actions cron is best-effort (delays up to hours --
+# fine at daily granularity); scheduled workflows auto-disable after 60 days
+# WITHOUT repo pushes -- irrelevant while the bot pushes daily, but re-enable
+# is a resume-day checklist item after any long pause. A failed run both
+# emails (workflow-failure notification) and opens an issue with the reason.
+name: mirror-freshness
+on:
+  schedule:
+    # 01:30 UTC Tue-Sat == weekday evening ET (20:30 EST / 21:30 EDT)
+    - cron: "30 1 * * 2-6"
+  workflow_dispatch: {}
+permissions:
+  issues: write
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: freshness
+        run: python3 .github/check_mirror_freshness.py --root . 2>&1 | tee freshness.txt
+      - name: file issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let detail = '';
+            try { detail = fs.readFileSync('freshness.txt', 'utf8'); } catch {}
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Wheel Bot mirror STALE -- ${new Date().toISOString().slice(0,10)}`,
+              body: 'The nightly freshness check failed.\n\n```\n' + detail +
+                    '\n```\nThe VPS may be dead, the tick broken, or the sync wedged.'
+            });

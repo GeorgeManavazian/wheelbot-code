@@ -175,6 +175,30 @@ def sync_state(state_dir: str, message: str, cfg_path: str = GIT_CFG) -> bool:
         except OSError:
             pass
 
+        # D14: self-install the mirror-side freshness watcher (workflow +
+        # checker) so the GitHub robot exists wherever the mirror lives --
+        # it rides the first Phase-F sync onto the VPS's store with no
+        # separate deploy step. NOTE (declared): pushing .github/workflows/
+        # requires the PAT to carry the `workflow` scope; verify at Phase F.
+        try:
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            wf_dir = os.path.join(state_dir, ".github", "workflows")
+            os.makedirs(wf_dir, exist_ok=True)
+            for src, dst in (
+                    (os.path.join(repo_root, "deploy", "mirror-freshness.yml"),
+                     os.path.join(wf_dir, "mirror-freshness.yml")),
+                    (os.path.join(repo_root, "deploy", "check_mirror_freshness.py"),
+                     os.path.join(state_dir, ".github", "check_mirror_freshness.py"))):
+                if os.path.exists(src):
+                    with open(src) as f:
+                        body = f.read()
+                    cur = open(dst).read() if os.path.exists(dst) else None
+                    if cur != body:
+                        with open(dst, "w") as f:
+                            f.write(body)
+        except OSError:
+            pass
+
         _git(["add", "-A"], state_dir)
 
         offenders = secret_guard(_staged_paths(state_dir), state_dir,
