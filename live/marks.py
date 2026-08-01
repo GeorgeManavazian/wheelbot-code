@@ -6,7 +6,12 @@ Everything here is defensive: any pull/parse failure (bad token, market closed,
 missing symbol) yields no mark for that position, and the caller falls back to
 the entry credit + flags the quote stale. It NEVER guesses a price."""
 from __future__ import annotations
+import datetime as dt
+from zoneinfo import ZoneInfo
+
 import pandas as pd
+
+_ET = ZoneInfo("America/New_York")
 
 from src.engine_v2.options.chain import Mark
 
@@ -180,6 +185,32 @@ def contract_quotes(client, positions) -> dict:
         # It also rejects NaN, which the old `bid <= 0` clause caught only by
         # accident. Same coercion as held_legs.rows_from_quotes.
         if bid is None or ask is None or ask <= 0 or bid < 0:
+            continue
+        # A7: a quote stamped on a PREVIOUS session's ET date is not a price
+        # you can trade on today. market_is_open knows no holidays by design,
+        # so on Thanksgiving Schwab serves Wednesday's book and the bot once
+        # booked CLOSE_PUT @ 0.39 against it. Parameter-free (no calendar to
+        # rot): same-ET-date or refused; a missing timestamp is refused too
+        # (a book whose freshness cannot be judged is not tradeable).
+        # Minutes-scale halt staleness within a session is C1's row.
+        qt = _num(node.get("quoteTimeInLong"))
+        if qt is None:
+            print(f"stale-quote gate: {sym} has no quoteTimeInLong -- refused")
+            continue
+        try:
+            # skeptic F1: inf / out-of-Timestamp-range / unit-drifted values
+            # must refuse THIS leg, not raise out of the whole account's tick
+            # (the module contract is skip-per-leg, {}-on-total-failure)
+            qdate = pd.Timestamp(int(qt), unit="ms", tz="UTC").tz_convert(_ET).date()
+        except (OverflowError, ValueError, OSError, NotImplementedError,
+                pd.errors.OutOfBoundsDatetime):
+            print(f"stale-quote gate: {sym} quoteTimeInLong={qt!r} is not a "
+                  f"convertible timestamp -- refused")
+            continue
+        today_et = dt.datetime.now(_ET).date()
+        if qdate != today_et:
+            print(f"stale-quote gate: {sym} quoted {qdate}, today is "
+                  f"{today_et} -- prior-session book refused (holiday?)")
             continue
         mk = _num(node.get("mark"))
         mid = mk if (mk is not None and mk > 0) else (bid + ask) / 2.0

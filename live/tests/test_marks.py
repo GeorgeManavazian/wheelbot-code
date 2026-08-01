@@ -49,10 +49,18 @@ def test_live_marks_empty_on_failure():
     assert live_marks(_FakeClient({}), []) == {}
 
 
+
+
+def _fresh_ms():
+    # A7: contract_quotes now refuses quotes not stamped with today's ET date;
+    # admission-behavior tests need a fresh stamp on their fixture books
+    import time
+    return int(time.time() * 1000)
+
 def test_contract_quotes_returns_bid_ask_mark():
     positions = [{"ticker": "AGNC", "short": {"contract": {"root": "AGNC",
                  "expiry": "2026-08-15", "strike": 11.0, "right": "P"}}}]
-    quotes = {"AGNC  260815P00011000": {"quote": {"bidPrice": 0.38, "askPrice": 0.40}}}
+    quotes = {"AGNC  260815P00011000": {"quote": {"bidPrice": 0.38, "askPrice": 0.40, "quoteTimeInLong": _fresh_ms()}}}
     out = contract_quotes(_FakeClient(quotes), positions)
     m = out["AGNC"]
     assert (m.bid, m.ask) == (0.38, 0.40)
@@ -67,13 +75,13 @@ def test_contract_quotes_skips_zero_quote():
     positions = [{"ticker": "AGNC", "short": {"contract": {"root": "AGNC",
                  "expiry": "2026-08-15", "strike": 11.0, "right": "P"}}}]
     sym = "AGNC  260815P00011000"
-    assert contract_quotes(_FakeClient({sym: {"quote": {"bidPrice": 0.0, "askPrice": 0.0}}}), positions) == {}
+    assert contract_quotes(_FakeClient({sym: {"quote": {"bidPrice": 0.0, "askPrice": 0.0, "quoteTimeInLong": _fresh_ms()}}}), positions) == {}
     # NOTE: a one-sided zero (bid 0, ask 0.05) was asserted skipped here until A6
     # (audit 2026-07-31). That was the defect, not the spec: it made the intraday
     # manager blind to a fully-decayed leg. It is now REQUIRED to come through --
     # see test_a_worthless_leg_is_still_closable_intraday below.
     # a real two-sided quote still comes through
-    out = contract_quotes(_FakeClient({sym: {"quote": {"bidPrice": 0.10, "askPrice": 0.12}}}), positions)
+    out = contract_quotes(_FakeClient({sym: {"quote": {"bidPrice": 0.10, "askPrice": 0.12, "quoteTimeInLong": _fresh_ms()}}}), positions)
     assert out["AGNC"].ask == 0.12
 
 
@@ -108,7 +116,8 @@ def test_a_worthless_leg_is_still_closable_intraday():
     produces 100% of realized P&L -- so this is the path that matters."""
     positions = [{"ticker": "RIG", "short": {"contract": {
         "root": "RIG", "expiry": "2026-08-07", "strike": 4.5, "right": "P"}}}]
-    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": 0.0, "askPrice": 0.01}}}
+    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": 0.0, "askPrice": 0.01,
+                                                  "quoteTimeInLong": _fresh_ms()}}}
     out = contract_quotes(_FakeClient(quotes), positions)
     assert "RIG" in out, "a 0.00 x 0.01 market is worthless, not absent"
     assert (out["RIG"].bid, out["RIG"].ask) == (0.0, 0.01)
@@ -121,7 +130,7 @@ def test_contract_quotes_still_refuses_a_two_sided_zero():
     for free and drop it. That is defect C1 from the 2026-07-18 audit."""
     positions = [{"ticker": "RIG", "short": {"contract": {
         "root": "RIG", "expiry": "2026-08-07", "strike": 4.5, "right": "P"}}}]
-    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": 0.0, "askPrice": 0.0}}}
+    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": 0.0, "askPrice": 0.0, "quoteTimeInLong": _fresh_ms()}}}
     assert contract_quotes(_FakeClient(quotes), positions) == {}
 
 
@@ -138,11 +147,13 @@ def test_contract_quotes_survives_a_non_numeric_quote():
     # NB "0.05" is NOT in this list: a numeric string coerces, matching
     # rows_from_quotes. Only genuinely unusable values are refused.
     for bad in ("", None, "abc", float("nan"), {}, [], "None"):
-        quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": 0.0, "askPrice": bad}}}
+        quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": 0.0, "askPrice": bad,
+                                                      "quoteTimeInLong": _fresh_ms()}}}
         out = contract_quotes(_FakeClient(quotes), positions)   # must not raise
         assert out == {}, f"askPrice={bad!r} must be refused, got {out}"
     # and a NUMERIC-STRING bid with a real ask is coerced, not refused
-    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": "0.00", "askPrice": "0.05"}}}
+    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": "0.00", "askPrice": "0.05",
+                                                  "quoteTimeInLong": _fresh_ms()}}}
     out = contract_quotes(_FakeClient(quotes), positions)
     assert (out["RIG"].bid, out["RIG"].ask, out["RIG"].mid) == (0.0, 0.05, 0.025)
 
@@ -156,7 +167,7 @@ def test_contract_quotes_refuses_a_nan_bid():
     about the same contract, which is the exact failure A6 exists to end."""
     positions = [{"ticker": "RIG", "short": {"contract": {
         "root": "RIG", "expiry": "2026-08-07", "strike": 4.5, "right": "P"}}}]
-    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": float("nan"), "askPrice": 0.05}}}
+    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": float("nan"), "askPrice": 0.05, "quoteTimeInLong": _fresh_ms()}}}
     assert contract_quotes(_FakeClient(quotes), positions) == {}
 
 
@@ -165,5 +176,78 @@ def test_contract_quotes_refuses_a_negative_bid():
     which uses `bid < 0` for the same purpose."""
     positions = [{"ticker": "RIG", "short": {"contract": {
         "root": "RIG", "expiry": "2026-08-07", "strike": 4.5, "right": "P"}}}]
-    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": -0.01, "askPrice": 0.05}}}
+    quotes = {"RIG   260807P00004500": {"quote": {"bidPrice": -0.01, "askPrice": 0.05, "quoteTimeInLong": _fresh_ms()}}}
     assert contract_quotes(_FakeClient(quotes), positions) == {}
+
+
+def _q_with_time(bid, ask, quote_ms):
+    return {"GDX   260821P00030000": {"quote": {"bidPrice": bid, "askPrice": ask,
+                                                "quoteTimeInLong": quote_ms}}}
+
+
+def _pos_gdx():
+    from src.engine_v2.options.chain import Contract
+    import pandas as pd
+    return [{"ticker": "GDX",
+             "short": {"contract": Contract("GDX", pd.Timestamp("2026-08-21"),
+                                            30.0, "P"), "contracts": 1,
+                       "credit": 1.0, "last_mid": 1.0}}]
+
+
+class _RawClient:
+    # returns a raw dict (no .json()) -- exercises marks.py's hasattr branch's
+    # OTHER arm; the original _FakeClient at the top of this file keeps the
+    # .json() arm covered (skeptic F3: this class previously SHADOWED it)
+    def __init__(self, payload):
+        self._p = payload
+
+    def get_quotes(self, syms):
+        return self._p
+
+
+def test_prior_session_quote_is_refused():
+    """A7: on a market holiday the exchange never opens, but Schwab still
+    serves the LAST session's book -- market_is_open passes (it knows no
+    holidays by design) and the bot booked CLOSE_PUT @ 0.39 on Thanksgiving.
+    A quote stamped on a previous session's ET date is not a price you can
+    trade on today; refuse it like an absent quote (TP waits for the EOD
+    run). Parameter-free: no vendored holiday calendar to rot."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+    from live.marks import contract_quotes
+    stale_ms = int(dt.datetime(2026, 7, 30, 15, 59,
+                               tzinfo=ZoneInfo("America/New_York"))
+                   .timestamp() * 1000)          # a past session, always stale
+    q = contract_quotes(_RawClient(_q_with_time(0.30, 0.39, stale_ms)),
+                        _pos_gdx())
+    assert q == {}, "A7: a prior-session quote must be refused, not traded on"
+
+
+def test_same_session_quote_is_served():
+    import time
+    from live.marks import contract_quotes
+    q = contract_quotes(_RawClient(_q_with_time(0.30, 0.39,
+                                                int(time.time() * 1000))),
+                        _pos_gdx())
+    assert "GDX" in q and q["GDX"].ask == 0.39
+
+
+def test_missing_quote_timestamp_is_refused():
+    # fail-safe: a book whose freshness cannot be judged is not tradeable
+    # (provisional; Schwab always stamps quoteTimeInLong in practice)
+    from live.marks import contract_quotes
+    q = contract_quotes(_RawClient(
+        {"GDX   260821P00030000": {"quote": {"bidPrice": 0.30,
+                                             "askPrice": 0.39}}}),
+        _pos_gdx())
+    assert q == {}
+
+
+def test_pathological_timestamp_refuses_the_leg_not_the_account():
+    """Skeptic F1: inf / out-of-range / unit-drifted quoteTimeInLong must
+    refuse THIS leg, never raise out of the whole account's tick (vendor unit
+    drift is exactly the failure class this gate exists for)."""
+    for crazy in (float("inf"), 1e16, -9e15):
+        q = contract_quotes(_RawClient(_q_with_time(0.30, 0.39, crazy)),
+                            _pos_gdx())
+        assert q == {}, f"quoteTimeInLong={crazy} must refuse, not raise"

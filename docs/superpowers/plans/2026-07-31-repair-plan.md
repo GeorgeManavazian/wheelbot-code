@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 9 of 66 done (A2, A3, A4, A5, A6, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16 added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 10 of 66 done (A2, A3, A4, A5, A6, A7, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16 added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -196,7 +196,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A4 | Covered-call window — reach the basis floor | HIGH | **DONE** | see A4 evidence block below. Follow-ups: **A4b** (solo backtest engines keep the silent covered-call no-op — warning is live-path only), **C16** filed (surface `days_shares_uncovered` on the dashboard — it still has no live reader). **A3b now urgent** (skeptic F4): the splice converts "unreachable" days into deep-OTM micro-credit call sales with NO liquidity/unclosability gating — the exact population A3b asks about, now growing. Answer A3b soon. |
 | A5 | Same-day re-entry guard must see intraday closes | HIGH | **DONE** | see A5 evidence block below. Skeptic-found sibling gap (EOD closes left no self-note for the crash-retry window) amended in the same fix. | **A6 is an amplifier for this** — `portfolio.py:84` rebuilds `closed_today = set()` inside `step_one_day` and `manage_intraday` persists nothing, so every intraday close is invisible to the guard, and A6 exists to increase intraday closes. Bound: the newly-admitted population is deep-OTM/near-worthless, least likely to be re-selected at 0.30 delta, so the marginal exposure from A6 alone is probably small. |
 | A6 | Intraday must see a 0.00 bid (align with `rows_from_quotes`) | HIGH | **DONE** | see A6 evidence block below |
-| A7 | Intraday holiday + quote-freshness gate | MED | WIP | overnight 2026-08-01 |
+| A7 | Intraday holiday + quote-freshness gate | MED | **DONE** | see A7 evidence block below. Minutes-scale intra-session staleness deliberately left to **C1**; EOD held-leg staleness stays **A21**; dashboard marks (`live_marks`/`live_asks`) still show prior-session prices on holidays — display-only, noted for **A18b**. |
 | A8 | Early assignment modelling | MED | TODO | |
 | A9 | Defer the covered call one session after assignment | MED | TODO | |
 | A10 | Corporate actions — at minimum detect and refuse | HIGH | TODO | |
@@ -322,6 +322,29 @@ spec; the assertion mis-stated it. Refusal is still asserted for `""`, `None`, `
 
 **Not re-run after the amendment:** a second skeptic pass. The amendment is itself skeptic-derived
 and mutation-tested, but this is declared, not claimed as verified (A1/A5).
+
+---
+
+## A7 — evidence (completed 2026-08-01, overnight autonomous run)
+
+**In plain language.** On ~9 weekday holidays a year the exchange never opens, but the bot's
+clock gate deliberately knows no holidays, and Schwab happily repeats *yesterday's* prices — so
+the bot once booked a Thanksgiving trade against Wednesday's book. Now every live quote's date
+tag is checked: stamped on a previous session's ET date (or missing, or unconvertible) → thrown
+out like an absent quote, loudly, and the take-profit simply waits for the EOD run. Parameter-
+free — no vendored holiday calendar to rot; the data itself says "this price is an echo."
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | Prior-session-stamped quote served by old code → `AssertionError: A7: a prior-session quote must be refused, not traded on` (behavioral; fixture stamped with a fixed past session). |
+| 2 Minimal fix | ~20 lines in `contract_quotes` (stamp → ET date → same-session check, per-leg try/except, printed refusals). Nothing else touched. |
+| 3 Suites | `526` backtest + `178` live = **704**. |
+| 4 Mutation | 3 mutants killed cache-safe: prior-session admitted · unjudgeable-book admitted · (revived) negative-bid guard deleted — the last one is the skeptic's F2 proof, see below. |
+| 5 Line audit | Gate sits AFTER the bid/ask admission clauses (their order is the A6-amendment lesson, untouched). Four pre-existing fixture payloads gained fresh stamps — assertions unchanged, verified additions-only by the skeptic. |
+| 6 Blast radius | `contract_quotes` has one production caller (`run_intraday`); refusal == absent quote == leg skipped, the pre-existing degrade path. `held_legs`/`live_marks` deliberately untouched (A21/A18b). Backtest imports nothing from `live/` — its green is declared trivially so. |
+| C1 Skeptic | **CORRECT-BUT-INCOMPLETE** → all three findings **amended + verified same session**: F1 pathological timestamps (inf / 1e16 / unit drift) raised out of the whole account's tick — now per-leg refusals (test spans all three shapes); F2 my fixture stamps had silently vacated three old refusal tests — proven with a surviving negative-bid mutant, fixtures stamped, mutant re-run and killed; F3 duplicate `_FakeClient` shadowed the original and killed `.json()`-branch coverage — renamed. Proven clean: DST/UTC-midnight conversions both seasons; no false refusal reachable inside the 9:30-16:00 window (nearest midnight ≥9.5h away); log noise bounded to the holiday's own file with no spurious alert greps; new tests non-vacuous against pre-A7 code. |
+| C2 Dry run | Not applicable live tonight (market shut — every real quote would correctly refuse; that IS the gate working, but proves only the refusing half). The serving half is pinned by the fresh-stamp tests. |
+| C3 Dollars | Historical: the Thanksgiving `CLOSE_PUT @ 0.39` class — trades dated on days the exchange never opened, unreconcilable against any statement. Prospective: ~9 days/yr of phantom-trade risk closed. |
 
 ---
 
@@ -650,6 +673,7 @@ test (E8).
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
 | 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |
+| 2026-08-01 | **A7 DONE** (overnight). Parameter-free session-date gate on live quotes (no holiday calendar to rot); skeptic CORRECT-BUT-INCOMPLETE → 3 amendments same session (pathological-timestamp per-leg refusal; three vacated fixtures re-stamped + mutant re-killed; test-double unshadowed). Suites 526+178=**704**. |
 | 2026-08-01 | **A5 DONE** (overnight). Date-stamped close notes on the state seed the anti-churn set; skeptic COULD-NOT-BREAK (adversarial round-trip equality, retry windows, partial-close interplay all held) and its one real finding — the EOD step left no note for itself in the crash-retry window — amended + mutant-killed same session. Suites 526+174=**700**. |
 | 2026-08-01 | **A4 DONE** (overnight). OTM-call splice for CALL-phase holdings (no width guess; live-verified +43% reach vs +3.9%) + loud warnings + one deduped alert. Skeptic CORRECT-BUT-INCOMPLETE → 3 amendments same session (delta-sanity guard, per-position crash isolation, dead branch deleted). Fingerprint-caveat disclosed (harness never executes the branch — proof is tests+probes). **A3b escalated:** splice grows the ungated micro-credit call population; owner should rule soon. A4b + C16 filed. Suites 521+174=**695**. |
 | 2026-08-01 | **A3 DONE** (overnight run). Analyst found the parameter-free core (TP-exit feasibility: reachable at the tick AND not net-negative at the worst accepted fill) and proved A2 subsumes it 3.8× in production — its value is invariance + backtest coverage. Skeptic **COULD-NOT-BREAK** (370,800-point brute force, 0 violations); F1/F4 amended same session (tp=0 refuse-all; loud roll vetoes). Max-spread clause discharged by A2; surrender curve moved to A20; **A3b** filed (covered-call side, owner decision). Suites 517+170=**687**. |
