@@ -80,6 +80,45 @@ def test_equal_split_unchanged_when_affordable():
     assert sorted(t.contracts for t in r.trades) == [16, 26]
 
 
+class MRanked(M):
+    def __init__(self, chains, rows):
+        super().__init__(chains)
+        self._rows = rows
+
+    def regime_row(self, tk, day):
+        return self._rows[tk]
+
+
+def test_fallback_buys_richest_ranked_not_cheapest():
+    """Owner decision 2026-08-01 (A12 skeptic F3): when the equal split
+    affords nothing, the pooled money buys the BEST-RANKED name that fits at
+    any concentration, not the cheapest name at the least concentration.
+    $3.5k: CHEAP ($1.2k collateral, pctile 0.10) fits at k=2; RICH ($3.0k,
+    pctile 0.90) fits only at k=1. The account must buy RICH and then
+    honestly idle -- not CHEAP."""
+    st = PortfolioState(cash=3_500.0, positions=[])
+    rows = {"CHEAP": {"trend": "uptrend", "vol": "calm", "vol_pctile": 0.10},
+            "RICH": {"trend": "uptrend", "vol": "calm", "vol_pctile": 0.90}}
+    r = step_one_day(st, MRanked({"CHEAP": _chain(12.0), "RICH": _chain(30.0)},
+                                 rows), D, _cfg(), selector="plain", n_slots=5)
+    assert [(t.action, t.contract.root) for t in r.trades] == \
+        [("SELL_PUT", "RICH")], \
+        "A12 owner routing: fallback must buy the richest-ranked fitting name"
+
+
+def test_fallback_sizes_at_least_concentration_that_fits():
+    """The fallback buys the best name at the LARGEST k that affords it --
+    one contract's worth of concentration, never the whole pot. $4.4k / N4:
+    equal split ($1.1k) misses the $1.2k contract; k=3 fits n=1. Sizing at
+    k=1 would buy 3 contracts -- forbidden."""
+    st = PortfolioState(cash=4_400.0, positions=[])
+    r = step_one_day(st, M({"GDX": _chain(12.0)}), D, _cfg(), selector="plain",
+                     n_slots=4)
+    assert [t.action for t in r.trades] == ["SELL_PUT"]
+    assert r.trades[0].contracts == 1, \
+        "A12: fallback must size at the least concentration that fits"
+
+
 def test_totally_unaffordable_day_still_goes_idle():
     # $1k against a $30 strike: even the full pot affords nothing -> idle,
     # correctly (no fantasy fractional contracts)

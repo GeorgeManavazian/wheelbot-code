@@ -291,16 +291,26 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
         # $5k/N5 offered $1,000/slot, afforded nothing, and sat 82% idle
         # while a $3k contract was listed; the grid then measured which slots
         # could buy anything, not N. Concentration only when the alternative
-        # is idleness. (Provisional: audit-prescribed direction.)
-        candidates = []
-        for k in range(empty_slots, 0, -1):
-            budget = available / k
-            candidates = [(negpct, idx, tk_, c_, mk_,
-                           int(budget // (c_.strike * mult)))
-                          for (negpct, idx, tk_, c_, mk_) in pool
-                          if int(budget // (c_.strike * mult)) > 0]
-            if candidates:
-                break
+        # is idleness. Fallback pick order = richest-ranked-first (owner
+        # decision 2026-08-01; was least-concentration, skeptic F3).
+        budget = available / empty_slots
+        candidates = [(negpct, idx, tk_, c_, mk_,
+                       int(budget // (c_.strike * mult)))
+                      for (negpct, idx, tk_, c_, mk_) in pool
+                      if int(budget // (c_.strike * mult)) > 0]
+        if not candidates:
+            # Fallback (owner 2026-08-01, skeptic F3): the BEST-RANKED name
+            # that fits at ANY concentration wins, sized at the largest k
+            # (least concentration) that affords it -- not the cheapest name
+            # at the least concentration. Pool is already rank-sorted.
+            for cand in pool:
+                for k in range(empty_slots - 1, 0, -1):
+                    n = int((available / k) // (cand[3].strike * mult))
+                    if n > 0:
+                        candidates = [(*cand, n)]
+                        break
+                if candidates:
+                    break
         if not candidates:
             break
         _, _, tk, c, mark, n = candidates[0]
