@@ -58,7 +58,9 @@ py live/run_notify.py retry-spool >> "$LOGDIR/tick.log" 2>&1 || true
 # (exit 0) -- an undelivered nag retries next tick.
 TOKEN="${WHEELBOT_TOKEN_PATH:-$HOME/.schwab/token.json}"
 NAG="$LOGDIR/.tokennag-$TODAY"
-if [ -f "$TOKEN" ] && [ ! -f "$NAG" ]; then
+# D5b: no [ -f "$TOKEN" ] gate -- a MISSING token file is exactly what the
+# nag must be able to report (run_notify owns fresh-install-vs-ran-before).
+if [ ! -f "$NAG" ]; then
   if py live/run_notify.py token-age "$TOKEN" >> "$LOGDIR/tick.log" 2>&1; then
     touch "$NAG"
     log "token nag sent"

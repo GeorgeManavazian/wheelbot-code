@@ -35,7 +35,7 @@ SSH_HINT = (
 )
 
 
-def token_age(token_path: str) -> int:
+def token_age(token_path: str, logs_dir: str | None = None) -> int:
     """Warn while the Schwab REFRESH token has <= 3 days of runway; escalate
     with a distinct subject once it has lapsed; alert when the token file
     exists but is unreadable (the about-to-go-blind case the old None-check
@@ -44,7 +44,23 @@ def token_age(token_path: str) -> int:
     age = token_age_days(token_path)
     if age is None:
         if not os.path.exists(token_path):
-            return 1                    # fresh install: genuinely nothing to say
+            # D5b: absence is "fresh install, nothing to say" ONLY when the
+            # bot has never run. Any .dailyran-* marker means a token existed
+            # once -- a deleted/moved token.json previously never nagged and
+            # surfaced only as failing pulls.
+            import glob
+            if logs_dir is None:
+                from live.health import LOGS_DIR as logs_dir
+            if not glob.glob(os.path.join(logs_dir, ".dailyran-*")):
+                return 1                # fresh install: genuinely nothing to say
+            ok = send_alert(
+                "Schwab token file MISSING -- bot will go blind",
+                f"{token_path} does not exist, but completion markers show "
+                f"this bot has run before -- the token file was deleted or "
+                f"moved. Every Schwab pull will fail until you log in "
+                f"again.\n\nRe-run the login on the VPS:\n{SSH_HINT}",
+            )
+            return 0 if ok else 1
         ok = send_alert(
             "Schwab token file unreadable",
             f"{token_path} exists but its creation_timestamp cannot be read.\n"

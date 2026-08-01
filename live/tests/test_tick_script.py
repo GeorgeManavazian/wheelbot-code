@@ -79,8 +79,16 @@ def test_eod_failure_no_marker(sb):
 
 
 def test_weekend_runs_only_spool_retry(sb):
+    # Weekend = no trading-path work. retry-spool and token-age are both
+    # legitimate any-day maintenance (D5 made the nag every-tick; D5b made
+    # it run even with the token file absent -- which is why this sandbox,
+    # which writes no token.json, now sees the token-age call too).
     sb.tick(dow="6", hm="1700")
-    assert all("retry-spool" in c for c in sb.calls())
+    for c in sb.calls():
+        assert ("retry-spool" in c or "token-age" in c), \
+            f"weekend tick ran trading-path work: {c}"
+    assert not any(x in c for c in sb.calls()
+                   for x in ("run_daily", "run_intraday", "run_chain_snapshot"))
 
 
 def test_intraday_error_alerts_once(sb):
@@ -176,3 +184,13 @@ def test_heartbeat_reflects_completed_day(sb):
     sb.tick(dow="5", hm="1700")
     rec = _json.loads((sb.root / "data" / "live" / "heartbeat.json").read_text())
     assert rec["dailyran"] is True
+
+
+def test_missing_token_file_still_reaches_the_nag(sb):
+    """D5b: the [ -f "$TOKEN" ] gate meant a deleted token.json never even
+    invoked token-age -- silent forever. The Python side owns the
+    fresh-install-vs-ran-before judgment now; the tick just always asks."""
+    # NO token.json written into the sandbox
+    sb.tick(dow="6", hm="1000")
+    assert any("token-age" in c for c in sb.calls()), \
+        "D5b: an absent token file must still be judged by run_notify"

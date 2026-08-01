@@ -86,9 +86,15 @@ def test_unreadable_token_file_alerts(monkeypatch, tmp_path):
 
 
 def test_absent_token_file_stays_quiet(monkeypatch, tmp_path):
-    # no file yet (fresh install) is genuinely "nothing to say"
+    # no file yet (fresh install) is genuinely "nothing to say" -- but ONLY
+    # on a fresh install. D5b narrowed this: absence + prior .dailyran-*
+    # markers now alerts, so the quiet case needs an explicitly empty logs
+    # dir (the bare call would read THIS machine's real archive markers).
     calls = _patch_send(monkeypatch, ok=True)
-    assert rn.token_age(str(tmp_path / "nope.json")) == 1
+    empty = tmp_path / "logs"
+    empty.mkdir()
+    assert rn.token_age(str(tmp_path / "nope.json"),
+                        logs_dir=str(empty)) == 1
     assert not calls
 
 
@@ -107,3 +113,36 @@ def test_tick_failed_retries_when_undelivered(monkeypatch, tmp_path):
     calls = _patch_send(monkeypatch, ok=True)
     assert rn.tick_failed(str(tmp_path), "2026-07-24") == 0
     assert len(calls) == 1
+
+
+# ---- D5b: a MISSING token file must nag when the bot has run before ----
+
+def test_missing_token_after_prior_runs_alerts(monkeypatch, tmp_path):
+    """D5b: tick gated the nag on [ -f token ] and token_age treated absence
+    as fresh-install -- a deleted/moved token.json never nagged and surfaced
+    only when pulls started failing. Evidence of prior life (any .dailyran-*
+    marker) + absent token = the bot is about to go blind, say so."""
+    calls = _patch_send(monkeypatch, ok=True)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / ".dailyran-2026-07-30").touch()
+    rc = rn.token_age(str(tmp_path / "gone.json"), logs_dir=str(logs))
+    assert rc == 0, "delivered missing-token alert must exit 0 (marker written)"
+    assert calls and "missing" in calls[0][0].lower()
+
+
+def test_missing_token_fresh_install_still_quiet(monkeypatch, tmp_path):
+    calls = _patch_send(monkeypatch, ok=True)
+    logs = tmp_path / "logs"
+    logs.mkdir()          # exists but no .dailyran-* evidence
+    assert rn.token_age(str(tmp_path / "gone.json"), logs_dir=str(logs)) == 1
+    assert not calls
+
+
+def test_missing_token_undelivered_alert_retries(monkeypatch, tmp_path):
+    calls = _patch_send(monkeypatch, ok=False)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / ".dailyran-2026-07-30").touch()
+    assert rn.token_age(str(tmp_path / "gone.json"), logs_dir=str(logs)) == 1
+    assert calls, "the alert must have been ATTEMPTED"
