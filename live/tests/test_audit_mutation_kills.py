@@ -208,3 +208,26 @@ def test_intraday_manager_skips_frozen_positions():
                              pd.Timestamp("2026-07-21 10:00"))
     assert trades == [], "A10: the intraday manager closed a frozen leg"
     assert pos["short"] is not None
+
+
+def test_nonstandard_drop_is_loud_not_silent():
+    """A10c: B10's nonStandard/multiplier skip was the ONE place a
+    contract-side corporate action becomes visible -- and it was silent
+    (every B3 skip prints, this one didn't). One line per dropped contract."""
+    import io
+    import contextlib
+    from live.data import chain_from_json
+    payload = {"underlyingPrice": 50.0, "putExpDateMap": {
+        "2026-08-07:7": {"45.0": [{
+            "delta": -0.3, "bid": 1.0, "ask": 1.1, "mark": 1.05,
+            "strikePrice": 45.0, "daysToExpiration": 7,
+            "multiplier": 10, "nonStandard": True,
+            "openInterest": 1, "totalVolume": 1, "bidSize": 1,
+            "askSize": 1}]}}}
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ch = chain_from_json(payload, pd.Timestamp("2026-07-21"))
+    assert ch is None or len(ch) == 0
+    out = buf.getvalue().lower()
+    assert "nonstandard" in out or "non-standard" in out, \
+        "A10c: a corporate-action-shaped contract was dropped in silence"

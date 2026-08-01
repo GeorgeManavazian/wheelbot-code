@@ -100,9 +100,17 @@ def _rows_for(exp_map, right, obs, und):
                         or bid <= 0 or ask <= 0:
                     continue
                 # B10: adjusted/non-standard contracts and multiplier != 100
-                # break every x100 cost computation downstream
+                # break every x100 cost computation downstream. A10c: say so
+                # -- this is the ONE place a contract-side corporate action
+                # (OCC-adjusted deliverable after a split/special dividend)
+                # becomes visible, and it used to drop in silence.
                 m_ = _num(ct.get("multiplier"))
                 if ct.get("nonStandard") is True or (m_ is not None and m_ != 100):
+                    print(f"nonStandard/multiplier skip: "
+                          f"{ct.get('symbol', ct.get('strikePrice'))} "
+                          f"(multiplier={ct.get('multiplier')}, "
+                          f"nonStandard={ct.get('nonStandard')}) -- possible "
+                          f"corporate action on this underlying (A10c)")
                     continue
                 rows.append({
                     "date": obs, "expiry": expiry,
