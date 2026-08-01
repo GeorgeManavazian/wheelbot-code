@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import pandas as pd
 from .select import select_contract, select_roll_contract, option_mark, liquidity_ok
-from .fills import try_take_profit
+from .fills import try_take_profit, tp_exit_feasible
 
 MAX_ROLLS_PER_CAMPAIGN = 2   # then the normal expiry path (assignment) applies
 
@@ -202,9 +202,17 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                                                  c.expiry, cfg.target_dte, cfg.ticker)
                     # A2: a roll OPENS a new leg; its destination faces the same
                     # liquidity veto as an entry. The close half is untouched.
+                    # Never silent (A3 skeptic F4): a refused roll runs the leg
+                    # to expiry, and the log must say why.
                     if new_c is not None and not liquidity_ok(day_chain, d, new_c, cfg)[0]:
+                        warnings.append((d, "roll_gated_illiquid", cfg.ticker))
                         new_c = None
                     new_mark = option_mark(day_chain, d, new_c) if new_c is not None else None
+                    # A3: the destination's own TP exit must be feasible too --
+                    # rolling INTO an unclosable leg is opening one.
+                    if new_mark is not None and not tp_exit_feasible(new_mark.bid, cfg)[0]:
+                        warnings.append((d, "roll_gated_unclosable", cfg.ticker))
+                        new_c, new_mark = None, None
                     cost = buy_cost(mark, n, cfg)
                     proceeds = (sell_proceeds(new_mark, n, cfg)
                                 if new_mark is not None else None)
@@ -308,6 +316,11 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                     # backtest day is otherwise indistinguishable from a
                     # no-weather day when attributing days_flat.
                     warnings.append((d, "entry_gated_illiquid", cfg.ticker))
+                if liq and c is not None and c != closed_today and mark is not None \
+                        and not tp_exit_feasible(mark.bid, cfg)[0]:
+                    # A3: the entry's own TP exit is unsatisfiable/net-negative
+                    warnings.append((d, "entry_gated_unclosable", cfg.ticker))
+                    liq = False
                 if c is not None and c != closed_today and mark is not None and liq:
                     n = int(cash // (c.strike * mult))
                     if n > 0:

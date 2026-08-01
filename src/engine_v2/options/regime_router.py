@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import pandas as pd
 from .select import select_contract, option_mark, liquidity_ok
-from .fills import try_take_profit
+from .fills import try_take_profit, tp_exit_feasible
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, _state_before,
                     sell_proceeds)
 
@@ -197,6 +197,11 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                 if not liq:
                     # A2 skeptic F2: never a silent veto
                     warnings.append((d, "entry_gated_illiquid", cfg.ticker))
+                if liq and c is not None and c != closed_today and mark is not None \
+                        and not tp_exit_feasible(mark.bid, cfg)[0]:
+                    # A3: the entry's own TP exit is unsatisfiable/net-negative
+                    warnings.append((d, "entry_gated_unclosable", cfg.ticker))
+                    liq = False
                 if c is not None and c != closed_today and mark is not None and liq:
                     n = int(cash // (c.strike * mult))
                     if n > 0:

@@ -42,6 +42,62 @@ class FillDecision:
     filled_contracts: int = 0
 
 
+# Smallest quotable increment. Market-structure fact for penny-pilot classes;
+# nickel-tick classes exist and the bot has no per-class tick model -- $0.01
+# is the PERMISSIVE choice (smallest floor, fewest refusals), so the guard
+# can under-refuse on nickel names but never over-refuse. A comment, not a
+# knob, on purpose (A3).
+MIN_TICK = 0.01
+
+
+def tp_exit_floor(cfg):
+    """A3: the minimum entry credit at which this config's take-profit exit is
+    both REACHABLE and NOT A GUARANTEED LOSS. None when no TP exit exists
+    (tp None, >= 1.0 hold-to-expiry, or degenerate <= 0).
+
+    Two parameter-free zero-crossings, derived from try_take_profit's own
+    arithmetic (thresh = (1-tp)*credit; fill at ask <= thresh; cost
+    ask*mult*n + comm*n):
+      reachability:  (1-tp)*credit >= MIN_TICK  -- admitted quotes have
+                     ask > 0 on the tick grid, so a thresh below one tick can
+                     never be satisfied (the WBD 25P case: thresh $0.004).
+      net-positive:  tp*credit*mult > 2*comm -- the worst fill the rule
+                     accepts is thresh itself; below this the "winning" exit
+                     loses money after both commissions, by construction.
+    Guard order mirrors try_take_profit (tp tested before any arithmetic
+    touches it -- the A6 amendment lesson)."""
+    tp = cfg.take_profit_pct
+    if tp is None or tp >= 1.0:
+        return None                     # hold-to-expiry: no TP exit exists
+    if tp <= 0.0:
+        # A3 skeptic F1: try_take_profit treats tp=0 as a LIVE rule that fires
+        # at any ask <= credit, where the worst accepted fill nets
+        # 0*credit*mult - 2*comm < 0 -- EVERY entry's TP exit is a guaranteed
+        # loss. Infinite floor (refuse all), never "inert": inert was the one
+        # gap that waved the WBD class through under a degenerate config.
+        return float("inf")
+    # NOTE (skeptic F2): the commission conjunct evaluates the worst fill at
+    # continuous thresh; the engine's actual worst fill is the penny at/below
+    # it, so for tp <= ~0.43 this over-refuses a thin band of survivable
+    # entries. Conservative-only; exact at every config in the repo (tp 0.50,
+    # 0.60). Revisit only if a small-tp config ever appears.
+    return max(MIN_TICK / (1.0 - tp),
+               2.0 * cfg.commission_per_contract / (tp * cfg.contract_multiplier))
+
+
+def tp_exit_feasible(credit, cfg):
+    """(True, "") when an entry at `credit` has a satisfiable, non-guaranteed-
+    loss TP exit under cfg -- or when no TP exit exists at all (nothing to be
+    infeasible). Else (False, "tp_unreachable" | "tp_net_negative")."""
+    floor = tp_exit_floor(cfg)
+    if floor is None or credit >= floor:
+        return True, ""
+    tp = cfg.take_profit_pct
+    if (1.0 - tp) * credit < MIN_TICK:
+        return False, "tp_unreachable"
+    return False, "tp_net_negative"
+
+
 def try_take_profit(*, mark, credit, contracts, cfg, day, expiry,
                     bars=None, day_stamp=None) -> FillDecision:
     """The one answer to "does this short's take-profit fill today, and how".

@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import pandas as pd
 from .select import select_contract, option_mark, liquidity_ok
-from .fills import try_take_profit
+from .fills import try_take_profit, tp_exit_feasible
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, sell_proceeds,
                     buy_cost, GATE_STALENESS_DAYS)
 from ..regime.state import is_good_renting_weather
@@ -232,6 +232,13 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                 # (skeptic F4).
                 if (d, "entry_gated_illiquid", tk) not in warnings:
                     warnings.append((d, "entry_gated_illiquid", tk))
+                continue
+            if not tp_exit_feasible(mark.bid, cfg)[0]:
+                # A3: this entry's own take-profit exit is unreachable at the
+                # minimum tick or a guaranteed net loss -- unclosable by
+                # construction (the WBD 25P $0.01-credit case).
+                if (d, "entry_gated_unclosable", tk) not in warnings:
+                    warnings.append((d, "entry_gated_unclosable", tk))
                 continue
             n = int(budget // (c.strike * mult))
             if n <= 0:

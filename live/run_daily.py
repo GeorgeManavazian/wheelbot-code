@@ -135,10 +135,11 @@ def paper_step(state, market, cfg, n_slots, trades_path, state_path,
     # to discard result.warnings entirely, which would have made the liquidity
     # veto invisible in production -- the same silent-failure class as the
     # 2026-07-29 audit findings.
-    gated = sorted({w[2] for w in result.warnings if w[1] == "entry_gated_illiquid"})
+    gated = sorted({w[2] for w in result.warnings
+                    if w[1] in ("entry_gated_illiquid", "entry_gated_unclosable")})
     if gated:
         print(f"liquidity gate: entries refused on {len(gated)} ticker(s) "
-              f"{gated[:8]} (A2 veto -- illiquid, not quiet)")
+              f"{gated[:8]} (A2/A3 veto -- illiquid or unclosable, not quiet)")
     # State FIRST (the source of truth). If it saved, the log/snapshot appends
     # that follow are secondary — a failure there leaves state correct + an
     # incomplete log (recoverable), never a log claiming trades the reloaded
