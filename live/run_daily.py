@@ -310,6 +310,23 @@ def main():
               f"tick retries inside its 17:00-23:30 window. --force overrides.")
         return 2
 
+    # A23: --smoke must be throwaway END TO END. State/trades/snapshots
+    # already isolate to the _smoke store, but the zombie/partial/failure
+    # paths called the REAL send_alert and appended to the REAL gaps.jsonl --
+    # a dead feed during a casual connectivity check emailed the owner and
+    # permanently gapped a day the real 17:00 run may go on to complete.
+    # Exit codes are unchanged (a failed smoke run still exits nonzero).
+    if args.smoke:
+        def _alert(subject, body):
+            print(f"[smoke] alert suppressed: {subject}")
+            return True
+        def _gap(date, reason, **kw):
+            print(f"[smoke] gap suppressed: {date} {reason}")
+            return True
+        _correction = _gap
+    else:
+        _alert, _gap, _correction = send_alert, append_gap, append_correction
+
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "schwab"))
     from schwab_client import get_client
     client = get_client()
@@ -372,17 +389,6 @@ def main():
         print(f"skipped {len(market.skipped)} tickers (pull failures): "
               f"{[s[0] for s in market.skipped][:8]}")
 
-    if held_marks_failed(merged):
-        day = str(obs.date())
-        msg = (f"{day}: held-leg quote pull failed WHOLESALE "
-               f"({merged['requested']} leg(s) requested, error="
-               f"{merged['error']!r}, unquoted={merged['unquoted'][:6]}). "
-               f"Every take-profit is suspended -- that is a failed run, not "
-               f"a quiet one. No marker written; the next tick retries.")
-        print(f"HELD MARKS FAILED -- {msg}")
-        send_alert(f"daily run FAILED {day} (held-leg marks)", msg)
-        return 1
-
     run_cfg = load_run_config()
     # group-skeptic F3: B5 widened the closes population to universe UNION
     # held -- ratios must divide by what was actually PULLED or a handful of
@@ -408,8 +414,8 @@ def main():
                    f"on the next run via the late-expiry path. Marker written; "
                    f"day recorded as a gap.")
             print(f"NO CHAIN SNAPSHOT -- {msg}")
-            send_alert(f"daily run SKIPPED {day} (no chain snapshot)", msg)
-            append_gap(day, "chain_snapshot_missing")
+            _alert(f"daily run SKIPPED {day} (no chain snapshot)", msg)
+            _gap(day, "chain_snapshot_missing")
             return 0
         # outcome == "retry": the closes feed itself is dead -- fall through to
         # the zombie check below, which exits 1 so the tick retries.
@@ -442,8 +448,8 @@ def main():
                    f"decision the day is SKIPPED, not retried. Marker written; "
                    f"day recorded as a gap.")
             print(f"SNAPSHOT INCOMPLETE -- {msg}")
-            send_alert(f"daily run SKIPPED {day} (snapshot incomplete)", msg)
-            append_gap(day, "chain_snapshot_incomplete", missing=missing,
+            _alert(f"daily run SKIPPED {day} (snapshot incomplete)", msg)
+            _gap(day, "chain_snapshot_incomplete", missing=missing,
                        chains_ok=market.chains_ok,
                        chain_attempts=market.chain_attempts)
             return 0
@@ -460,8 +466,8 @@ def main():
                f"completion marker was written -- the next tick will retry. "
                f"Likely a lapsed Schwab token or a Schwab outage.")
         print(f"ZOMBIE RUN -- {msg}")
-        send_alert(f"daily run FAILED {day}", msg)
-        append_gap(day, "pull_failure",
+        _alert(f"daily run FAILED {day}", msg)
+        _gap(day, "pull_failure",
                    skipped_closes=len(market.skipped_closes),
                    universe=len(universe),
                    chain_attempts=market.chain_attempts,
@@ -484,6 +490,21 @@ def main():
               f"was stepped; this is not a gap.")
         holiday_note(obs, smoke=args.smoke)
         return 0
+
+    # A21c: judged only AFTER every no-session/no-snapshot classification --
+    # a dead quote endpoint on a market holiday used to exit 1 here and
+    # retry-alert "FAILED (held-leg marks)" all evening for a day with no
+    # session. No session means there are no marks to fail.
+    if held_marks_failed(merged):
+        day = str(obs.date())
+        msg = (f"{day}: held-leg quote pull failed WHOLESALE "
+               f"({merged['requested']} leg(s) requested, error="
+               f"{merged['error']!r}, unquoted={merged['unquoted'][:6]}). "
+               f"Every take-profit is suspended -- that is a failed run, not "
+               f"a quiet one. No marker written; the next tick retries.")
+        print(f"HELD MARKS FAILED -- {msg}")
+        _alert(f"daily run FAILED {day} (held-leg marks)", msg)
+        return 1
 
     print(f"\n=== paper day {obs.date()} — {len(accounts)} account(s), down-only gate ===")
     print(f"{'account':<10}{'trades':>7}{'open':>6}{'cash':>13}{'equity':>13}")
@@ -528,7 +549,7 @@ def main():
         # expiry it is. A leg stuck because its close never arrives (delisted
         # ticker, corporate action) can no longer wait in silence.
         legs = ", ".join(f"{k} ({v}d late)" for k, v in sorted(unsettled_all.items()))
-        send_alert(f"UNSETTLEABLE EXPIRY -- {len(unsettled_all)} leg(s) stuck",
+        _alert(f"UNSETTLEABLE EXPIRY -- {len(unsettled_all)} leg(s) stuck",
                    f"{day}: expiry close still missing for: {legs}. The leg "
                    f"stays open and retries daily; if this repeats, suspect a "
                    f"delisting or corporate action (A10).")
@@ -536,7 +557,7 @@ def main():
         # A4: ONE deduped alert for all 25 accounts (heavy overlap, avg 7.2x
         # replication) -- shares sitting naked must reach the owner's inbox,
         # not just a log line.
-        send_alert(f"shares uncovered -- covered call unreachable "
+        _alert(f"shares uncovered -- covered call unreachable "
                    f"({len(naked_all)} ticker(s))",
                    f"{day}: basis floor sits above every listed call strike in "
                    f"the snapshot for {sorted(naked_all)}. Shares are held "
@@ -553,8 +574,8 @@ def main():
                f"disk space, memory, and the run log. No completion marker was "
                f"written; the next tick will retry.")
         print(f"ALL ACCOUNTS FAILED -- {msg}")
-        send_alert(f"daily run FAILED {day}", msg)
-        append_gap(day, "all_accounts_failed", accounts=len(accounts))
+        _alert(f"daily run FAILED {day}", msg)
+        _gap(day, "all_accounts_failed", accounts=len(accounts))
         return 1
     if failed:
         # Partial failure still completes the day for the other accounts, so we
@@ -565,15 +586,15 @@ def main():
                f"is marked done. The failed accounts have a GAP for this date -- "
                f"their equity curve will look continuous but is missing a day.")
         print(f"PARTIAL FAILURE -- {msg}")
-        send_alert(f"daily run PARTIAL {day} ({len(failed)} accounts)", msg)
+        _alert(f"daily run PARTIAL {day} ({len(failed)} accounts)", msg)
         # C13: the old call passed date= twice (TypeError -- the hole went
         # undisclosed AND the exception escaped after the healthy accounts
         # stepped; post-D9 that meant an all-evening retry loop + a false
         # no_run gap at 23:45). Key the REAL date; if the day already has a
         # record (a 17:05 zombie attempt before a 17:35 partial retry), file
         # a correction -- the day was not fully missed, it partially stepped.
-        if not append_gap(day, "accounts_failed", accounts=failed):
-            append_correction(day, "accounts_failed", accounts=failed)
+        if not _gap(day, "accounts_failed", accounts=failed):
+            _correction(day, "accounts_failed", accounts=failed)
     return 0
 
 

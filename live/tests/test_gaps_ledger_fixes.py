@@ -106,8 +106,13 @@ def test_run_daily_partial_failure_call_site_shape():
         "C13 regressed: append_gap called with a colliding date= kwarg"
     assert "#accounts" not in src, \
         "C13 regressed: gap keyed on a fake '<day>#accounts' date"
-    m = re.search(r"if not append_gap\(day, \"accounts_failed\"[\s\S]{0,120}"
-                  r"append_correction\(day, \"accounts_failed\"", src)
+    # A23 renamed the call sites to the smoke-aware wrappers (_gap/_correction
+    # alias the real functions off-smoke; the aliasing is behaviorally pinned
+    # by test_smoke_pull_failure_touches_no_real_ledger_and_sends_no_mail).
+    # The property pinned HERE is unchanged: keyed on the real day, correction
+    # fallback when the day already has a record.
+    m = re.search(r"if not _gap\(day, \"accounts_failed\"[\s\S]{0,120}"
+                  r"_correction\(day, \"accounts_failed\"", src)
     assert m, "C13: gap-then-correction fallback shape missing from run_daily"
 
 

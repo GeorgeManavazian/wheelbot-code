@@ -299,3 +299,120 @@ def test_holiday_note_quiet_on_smoke_and_weekends(monkeypatch):
     assert calls == []
     rd.holiday_note(pd.Timestamp("2026-11-26"))                 # real weekday
     assert len(calls) == 1
+
+
+def test_smoke_pull_failure_touches_no_real_ledger_and_sends_no_mail(tmp_path, monkeypatch):
+    """A23: --smoke is a throwaway connectivity check, but its zombie path
+    called the REAL send_alert and appended to the REAL gaps.jsonl. A dead
+    feed during a casual smoke test emailed the owner and permanently wrote
+    a pull_failure gap for a day the real 17:00 run may go on to complete.
+    State/trades/snapshots already isolate to _smoke; gaps+alerts must too."""
+    import sys
+    import types
+    import live.data as data
+    from live import run_daily
+
+    monkeypatch.setenv("WHEELBOT_STATE_DIR", str(tmp_path))
+
+    def dead_feed(c, tk):
+        raise RuntimeError("connectivity check: feed down")
+    monkeypatch.setattr(data, "daily_closes", dead_feed)
+
+    alerts, gaps = [], []
+    monkeypatch.setattr(run_daily, "send_alert",
+                        lambda *a, **k: alerts.append(a) or True)
+    monkeypatch.setattr(run_daily, "append_gap",
+                        lambda date, reason, **kw: gaps.append((str(date), reason)) or True)
+
+    fake = types.ModuleType("schwab_client")
+    fake.get_client = lambda: object()
+    monkeypatch.setitem(sys.modules, "schwab_client", fake)
+    monkeypatch.setattr(sys, "argv", ["run_daily.py", "--smoke"])
+
+    rc = run_daily.main()
+    assert rc == 1, "a dead feed is still a FAILED smoke run (exit contract kept)"
+    assert gaps == [], "A23: --smoke wrote the real gaps ledger"
+    assert alerts == [], "A23: --smoke sent a real alert"
+
+
+def test_holiday_with_dead_quote_endpoint_is_a_holiday_not_a_failed_run(tmp_path, monkeypatch):
+    """A21c: held_marks_failed was judged BEFORE the holiday classification.
+    On a market holiday Schwab's quote endpoint can answer for nothing (or
+    error), so the run exited 1 and the tick retry-alerted 'daily run FAILED
+    (held-leg marks)' all evening -- for a day with no session, which every
+    later gate classifies as exit-0 holiday. Session classification must come
+    first: no session means there are no marks to fail."""
+    import datetime as dt
+    import sys
+    import types
+    from zoneinfo import ZoneInfo
+    import live.data as data
+    from live import run_daily
+
+    monkeypatch.setenv("WHEELBOT_STATE_DIR", str(tmp_path))
+    # closes exist but carry NO bar for today -> is_trading_day False (holiday)
+    obs = pd.Timestamp(dt.datetime.now(ZoneInfo("America/New_York")).date())
+    stale = pd.Series([50.0, 50.5], index=pd.bdate_range(end=obs - pd.Timedelta(days=3), periods=2))
+    monkeypatch.setattr(run_daily, "UNIVERSE", ["GDX"])
+    monkeypatch.setattr(data, "daily_closes", lambda c, tk: stale)
+
+    # held legs requested, endpoint answered for NOTHING (the B4 wholesale shape)
+    monkeypatch.setattr(run_daily, "merge_held_legs",
+                        lambda *a, **k: {"requested": 4, "merged": 0,
+                                         "unquoted": ["RIG 4.5P"], "no_chain": [],
+                                         "error": "HTTP 503", "answered": 0})
+
+    alerts, gaps = [], []
+    monkeypatch.setattr(run_daily, "send_alert",
+                        lambda *a, **k: alerts.append(a) or True)
+    monkeypatch.setattr(run_daily, "append_gap",
+                        lambda date, reason, **kw: gaps.append((str(date), reason)) or True)
+
+    fake = types.ModuleType("schwab_client")
+    fake.get_client = lambda: object()
+    monkeypatch.setitem(sys.modules, "schwab_client", fake)
+    monkeypatch.setattr(sys, "argv", ["run_daily.py", "--force"])
+
+    rc = run_daily.main()
+    assert rc == 0, "A21c: a holiday must exit 0 even when the quote endpoint is dead"
+    assert not any("held-leg marks" in a[0] for a in alerts), \
+        "A21c: FAILED-held-marks alert fired on a day with no session"
+    assert gaps == [], "a holiday is not a gap"
+
+
+def test_trading_day_dead_quote_endpoint_still_fails_loud(tmp_path, monkeypatch, capsys):
+    """A21c positive path (and the B4 wiring pin the Group B batch declared
+    missing): on a REAL trading day a wholesale held-marks failure must still
+    refuse the run BEFORE any account steps -- exit 1, loud, retried."""
+    import datetime as dt
+    import sys
+    import types
+    from zoneinfo import ZoneInfo
+    import live.data as data
+    from live import run_daily
+
+    monkeypatch.setenv("WHEELBOT_STATE_DIR", str(tmp_path))
+    obs = pd.Timestamp(dt.datetime.now(ZoneInfo("America/New_York")).date())
+    fresh = pd.Series([50.0, 50.5],
+                      index=[obs - pd.Timedelta(days=1), obs])   # bar TODAY
+    monkeypatch.setattr(data, "daily_closes", lambda c, tk: fresh)
+    monkeypatch.setattr(run_daily, "merge_held_legs",
+                        lambda *a, **k: {"requested": 4, "merged": 0,
+                                         "unquoted": ["RIG 4.5P"], "no_chain": [],
+                                         "error": "HTTP 503", "answered": 0})
+    alerts = []
+    monkeypatch.setattr(run_daily, "send_alert",
+                        lambda *a, **k: alerts.append(a) or True)
+    fake = types.ModuleType("schwab_client")
+    fake.get_client = lambda: object()
+    monkeypatch.setitem(sys.modules, "schwab_client", fake)
+    # --smoke: throwaway store, skips the snapshot gates (a complete snapshot
+    # fixture is not this test's subject) while exercising the same block
+    monkeypatch.setattr(sys, "argv", ["run_daily.py", "--smoke"])
+
+    rc = run_daily.main()
+    out = capsys.readouterr().out
+    assert rc == 1, "a dead quote endpoint on a trading day is a FAILED run"
+    assert "HELD MARKS FAILED" in out
+    assert "paper day" not in out, "no account may step past dead held marks"
+    assert alerts == [], "smoke keeps alert isolation even on this path (A23)"
