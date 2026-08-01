@@ -184,6 +184,17 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
             c = select_contract(day_chain, d, "C", cfg.call_delta,
                                 cfg.target_dte, tk, min_strike=floor)
             mark = option_mark(day_chain, d, c) if c is not None else None
+            if floor is not None and c is None:
+                # A4: the basis floor sits above every strike the chain
+                # carries -- the income half of the wheel cannot start and the
+                # shares sit naked. Silent for months live (TMO class); never
+                # silent again. (No warning when floor is None: a plain-wheel
+                # run has no floor and no defect. No separate "no_mark" branch:
+                # select_contract picks rows from the same frame option_mark
+                # re-scans with the same key, and ingest guarantees float
+                # bid/ask/mid -- a selected contract always marks; the skeptic
+                # proved the branch dead.)
+                warnings.append((d, "covered_call_unreachable", tk))
             if c is not None and c not in closed_today and mark is not None:
                 n = pos["shares"] // mult
                 proceeds = sell_proceeds(mark, n, cfg)

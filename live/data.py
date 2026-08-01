@@ -102,6 +102,29 @@ def chain_frame(client, ticker: str, target_dte: int, strike_count: int = 12,
     return chain_from_json(r.json(), obs_date or today)
 
 
+def otm_call_frame(client, ticker: str, target_dte: int, obs_date=None) -> pd.DataFrame:
+    """A4: every listed OUT-OF-THE-MONEY CALL strike for the same expiry
+    window as chain_frame -- no strike_count guess. The 12-strike spot-centred
+    window reaches ~+3.8% above spot; after the drawdown that caused an
+    assignment the basis floor sits above that, and the covered call was
+    unreachable on 31% of real 10%-drawdown ticker-days (audit A4). Measured
+    alternative: a count-based fix needs strike_count~100 (8.3x the payload,
+    on the endpoint documented to 502 at full width); strike_range=OTM gets
+    exactly what the exchange lists in ~48 KB.
+
+    CALL-only is load-bearing: ALL+OTM would add far-OTM PUTS as tradeable
+    entry candidates for every account sharing the market."""
+    from schwab.client import Client
+    today = dt.date.today()
+    r = throttle(client.get_option_chain, ticker,
+                 contract_type=Client.Options.ContractType.CALL,
+                 strike_range=Client.Options.StrikeRange.OUT_OF_THE_MONEY,
+                 from_date=today, to_date=today + dt.timedelta(days=target_dte + 20))
+    if r.status_code != 200:
+        raise RuntimeError(f"{ticker} otm_call_chain -> HTTP {r.status_code}")
+    return chain_from_json(r.json(), obs_date or today)
+
+
 def throttle(fn, *args, retries: int = 2, backoff: float = 1.0, **kwargs):
     """Call fn(*args, **kwargs); on a transient 429/502 Response, sleep and retry
     up to `retries` times. Returns the final Response (caller checks status)."""

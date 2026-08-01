@@ -46,6 +46,44 @@ SNAP_OPEN, SNAP_CLOSE = 1520, 1550
 SAVE_DEADLINE = 1605
 
 
+def additive_call_rows(primary, wide):
+    """A4 splice filter: from a full OTM-call pull, keep ONLY rows strictly
+    above the primary chain's per-expiry max CALL strike, for expiries the
+    primary already carries call rows for. Purely additive at the top of the
+    existing window: it cannot introduce a new expiry into select_contract's
+    candidate set, and (call delta decreasing in strike) every added row's
+    delta is strictly further from the 0.50 target than an existing row's --
+    so the selected contract is bit-identical whenever the floor was already
+    reachable. (Provisional splice decision, analyst-proven, 2026-08-01.)"""
+    if wide is None or len(wide) == 0:
+        return []
+    calls = primary[primary["right"] == "C"]
+    if len(calls) == 0:
+        return []
+    tops = calls.groupby("expiry")["strike"].max()
+    # A4 skeptic F1: the bit-identical guarantee relies on call delta being
+    # monotone decreasing in strike. A garbage-but-plausible delta (~0.49) on
+    # a far-OTM spliced row would WIN select_contract's |delta-target| idxmin
+    # and silently move the sold strike. Enforce the monotonicity the
+    # guarantee needs: a spliced row's |delta| must sit strictly below the
+    # primary's minimum call |delta| for that expiry, else the row is dropped
+    # (the quote is lying about its own moneyness).
+    floors_ = calls.copy()
+    floors_["_ad"] = floors_["delta"].abs()
+    min_deltas = floors_.groupby("expiry")["_ad"].min()
+    out = []
+    for _, r in wide[wide["right"] == "C"].iterrows():
+        top = tops.get(r["expiry"])
+        if top is None or top != top or not float(r["strike"]) > float(top):
+            continue
+        dmin = min_deltas.get(r["expiry"])
+        d = abs(float(r["delta"])) if r["delta"] == r["delta"] else None
+        if d is None or dmin is None or dmin != dmin or not d < float(dmin):
+            continue
+        out.append(r.to_dict())
+    return out
+
+
 def snapshot_window_open(now_et) -> bool:
     """Weekday 15:20-15:50 ET. 17:00 is NOT in the window -- that is the
     defect (A16), not a fallback."""
@@ -89,11 +127,28 @@ def main():
     client = get_client()
 
     obs = pd.Timestamp(now.date())
-    held_all = set()
+    held_all, call_floors = set(), {}
     for (cap, n) in all_accounts():
         st = load_state(account_paths(cap, n)["state"])
-        if st is not None:
-            held_all |= {p["ticker"] for p in st.positions}
+        if st is None:
+            continue
+        for p in st.positions:
+            held_all.add(p["ticker"])
+            # A4: the highest basis floor across accounts per CALL-phase
+            # ticker -- the strike the covered-call selection must reach.
+            # Per-position try/except (skeptic F2): one hand-corrupted state
+            # file must degrade to "no wide pull for that leg", never kill the
+            # snapshot for all 25 accounts -- the 17:00 step is per-account
+            # isolated and this pass must not be weaker.
+            try:
+                if (p.get("phase") == "CALL" and p.get("shares", 0) >= 100
+                        and p.get("basis") is not None):
+                    floor = p["basis"] - p["premium"] / p["shares"]
+                    call_floors[p["ticker"]] = max(
+                        call_floors.get(p["ticker"], float("-inf")), floor)
+            except (TypeError, ZeroDivisionError, KeyError) as e:
+                print(f"A4: malformed position for {p.get('ticker')} "
+                      f"({type(e).__name__}) -- floor skipped for that leg")
 
     cfg = WheelConfig(ticker="SPY", starting_capital=100_000.0, **FROZEN)
     market = _live_market(UNIVERSE, held_all, obs, client, cfg.target_dte,
@@ -109,6 +164,34 @@ def main():
               f"{market.chains_ok}/{market.chain_attempts} usable (threshold "
               f"{thr:.0%}). Nothing saved; the next tick in the window retries.")
         return 1
+
+    # A4: the 12-strike spot-centred window cannot reach a post-drawdown
+    # basis floor. For CALL-phase holdings, pull EVERY listed OTM call and
+    # splice the strikes above the window in -- additively only. A failed
+    # wide pull degrades to today's behavior (reach unchanged), never fails
+    # the snapshot.
+    if call_floors:
+        from live.data import otm_call_frame
+        for tk in sorted(call_floors):
+            floor = call_floors[tk]
+            base = market._chains.get(tk)
+            if base is None or len(base) == 0:
+                print(f"A4: {tk} is CALL-phase but has no primary chain -- "
+                      f"floor pull skipped; covered call unreachable today")
+                continue
+            try:
+                wide = otm_call_frame(client, tk, cfg.target_dte, obs_date=obs)
+            except Exception as e:
+                print(f"A4: {tk} OTM-call pull failed ({type(e).__name__}: {e})"
+                      f" -- covered-call reach unchanged today")
+                continue
+            added = market.add_chain_rows(tk, additive_call_rows(base, wide))
+            calls = market._chains[tk]
+            calls = calls[calls["right"] == "C"]
+            top = float(calls["strike"].max()) if len(calls) else float("nan")
+            status = "OK" if top >= floor else "FLOOR NOT COVERED"
+            print(f"A4: {tk} floor={floor:.2f} top_call={top:.2f} "
+                  f"added={added} rows -- {status}")
 
     done = dt.datetime.now(ET)
     if not args.force and not save_still_rth(done):

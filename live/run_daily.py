@@ -140,6 +140,11 @@ def paper_step(state, market, cfg, n_slots, trades_path, state_path,
     if gated:
         print(f"liquidity gate: entries refused on {len(gated)} ticker(s) "
               f"{gated[:8]} (A2/A3 veto -- illiquid or unclosable, not quiet)")
+    naked = sorted({w[2] for w in result.warnings
+                    if w[1] == "covered_call_unreachable"})
+    if naked:
+        print(f"covered call unreachable on {len(naked)} ticker(s) {naked[:8]} "
+              f"-- shares sit uncovered today (A4)")
     # State FIRST (the source of truth). If it saved, the log/snapshot appends
     # that follow are secondary — a failure there leaves state correct + an
     # incomplete log (recoverable), never a log claiming trades the reloaded
@@ -361,6 +366,7 @@ def main():
     print(f"\n=== paper day {obs.date()} — {len(accounts)} account(s), down-only gate ===")
     print(f"{'account':<10}{'trades':>7}{'open':>6}{'cash':>13}{'equity':>13}")
     stepped, failed, already = 0, [], []
+    naked_all = set()   # A4: tickers whose covered call was unreachable, any account
     for (cap, n) in accounts:
         state, paths = loaded[(cap, n)]
         label = "_smoke" if args.smoke else account_label(cap, n)
@@ -381,6 +387,8 @@ def main():
             acfg = WheelConfig(ticker="SPY", starting_capital=float(cap), **FROZEN)
             r = paper_step(state, market, acfg, n, paths["trades"], paths["state"],
                            paths["snapshots"])
+            naked_all |= {w[2] for w in r.warnings
+                          if w[1] == "covered_call_unreachable"}
             stepped += 1
             print(f"{label:<10}{len(r.trades):>7}{len(state.positions):>6}"
                   f"{state.cash:>13,.0f}{r.equity:>13,.0f}")
@@ -389,6 +397,17 @@ def main():
             print(f"{label:<10} ERROR: {type(e).__name__}: {e} — skipped, others continue")
 
     day = str(obs.date())
+    if naked_all:
+        # A4: ONE deduped alert for all 25 accounts (heavy overlap, avg 7.2x
+        # replication) -- shares sitting naked must reach the owner's inbox,
+        # not just a log line.
+        send_alert(f"shares uncovered -- covered call unreachable "
+                   f"({len(naked_all)} ticker(s))",
+                   f"{day}: basis floor sits above every listed call strike in "
+                   f"the snapshot for {sorted(naked_all)}. Shares are held "
+                   f"uncovered and the bot will retry each session (A4). If "
+                   f"this repeats daily for one ticker, suspect a corporate "
+                   f"action (A10).")
     # A run that stepped NOTHING is a failed run, whatever the pulls did. The old
     # unconditional `return 0` meant 25 exceptions still exited 0, so the tick
     # wrote .dailyran and the day was permanently recorded as traded.

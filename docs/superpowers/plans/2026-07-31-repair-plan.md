@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 7 of 64 done (A2, A3, A6, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 8 of 66 done (A2, A3, A4, A6, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16 added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -192,8 +192,8 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A1 | ~~Intraday fill realism~~ **DEFERRED — strategy decision, see owner decision above** | CRIT | DEFERRED (owner) | resting limit and next-poll both rejected on evidence; spread-fraction k≈0.5 is the supported candidate |
 | A2 | Liquidity gate (rel-spread/OI/volume) — **gate yes, cap parameter DEFERRED** | CRIT | **DONE** | see A2 evidence block below. Cap parameter still deferred (per-account per the 2026-08-01 alternate-universes ruling). **Provisional owner decisions (dialog declined; veto cheap):** covered calls NOT gated · rel-spread = (ask−bid)/computed midpoint @ 0.10 · gate ON in FROZEN, dataclass defaults OFF. |
 | A3 | Minimum credit / maximum spread / unclosable-by-construction guard | HIGH | **DONE** | see A3 evidence block below. Max-spread clause **discharged by A2** (no parameter-free residual). The RIG 70.2%/VALE 26.0%/AGNC 22.4% surrender evidence is the TP policy on a micro-credit population → **moved to A20** (percentage cut = strategy). New row **A3b**: covered-call side (22.6% of backtest call entries sell at ≤ $0.02 vs 1.05% of puts; refusing one leaves shares naked → owner decision, not guessed overnight). | **Sized during A6** (skeptic, real trade log, 145 SELL_PUTs, `commission_per_contract=0.65`): on micro-credit names a leg that used to expire free is now bought back at the $0.01 tick, surrendering **RIG 70.2% / VALE 26.0% / AGNC 22.4%** of banked premium (RIG: $6.60 to close $9.40 banked). 144 of 145 entries have a TP trigger reachable at the minimum tick. This is the minimum-credit case in dollars. |
-| A20 | **TP=0.60 is out of sample on the population A6 admits** | HIGH | TODO | **+ evidence moved from A3 (2026-08-01):** the tick-close surrender fraction (t*m+c)/(credit*m−c) is a pure per-contract credit curve — 122% @ $0.02, 89% @ $0.025, 70.2% @ $0.03 (RIG), 22.4% @ $0.08 (AGNC), 18.6% @ $0.095 (the A2-implied floor), 4.2% @ $0.40. Any cut other than the 100% crossing ($0.023, now enforced by A3) is a strategy parameter and belongs to this row's TP decision. Realized: cheapest close ever printed $0.03; AGNC legs kept only 50.3% of banked. Found by the A6 skeptic. `src/engine_v2/options/chain.py:42` and `live/data.py:66-67` both filter `bid > 0`, so a `0.00 x 0.01` row is **unrepresentable in the backtest chain** — the frozen TP policy was never measured over it. Not created by A6 (`rows_from_quotes` opened it for EOD on 07-31), but A6 extends it to the path producing 100% of realized P&L. |
-| A4 | Covered-call window — reach the basis floor | HIGH | TODO | |
+| A20 | **TP=0.60 is out of sample on the population A6 admits** | HIGH | **BLOCKED (owner)** — this IS the deferred "should TP=0.60 exist" strategy question; not decidable in the overnight run. Skipped 2026-08-01, not forgotten. | **+ evidence moved from A3 (2026-08-01):** the tick-close surrender fraction (t*m+c)/(credit*m−c) is a pure per-contract credit curve — 122% @ $0.02, 89% @ $0.025, 70.2% @ $0.03 (RIG), 22.4% @ $0.08 (AGNC), 18.6% @ $0.095 (the A2-implied floor), 4.2% @ $0.40. Any cut other than the 100% crossing ($0.023, now enforced by A3) is a strategy parameter and belongs to this row's TP decision. Realized: cheapest close ever printed $0.03; AGNC legs kept only 50.3% of banked. Found by the A6 skeptic. `src/engine_v2/options/chain.py:42` and `live/data.py:66-67` both filter `bid > 0`, so a `0.00 x 0.01` row is **unrepresentable in the backtest chain** — the frozen TP policy was never measured over it. Not created by A6 (`rows_from_quotes` opened it for EOD on 07-31), but A6 extends it to the path producing 100% of realized P&L. |
+| A4 | Covered-call window — reach the basis floor | HIGH | **DONE** | see A4 evidence block below. Follow-ups: **A4b** (solo backtest engines keep the silent covered-call no-op — warning is live-path only), **C16** filed (surface `days_shares_uncovered` on the dashboard — it still has no live reader). **A3b now urgent** (skeptic F4): the splice converts "unreachable" days into deep-OTM micro-credit call sales with NO liquidity/unclosability gating — the exact population A3b asks about, now growing. Answer A3b soon. |
 | A5 | Same-day re-entry guard must see intraday closes | HIGH | TODO | **A6 is an amplifier for this** — `portfolio.py:84` rebuilds `closed_today = set()` inside `step_one_day` and `manage_intraday` persists nothing, so every intraday close is invisible to the guard, and A6 exists to increase intraday closes. Bound: the newly-admitted population is deep-OTM/near-worthless, least likely to be re-selected at 0.30 delta, so the marginal exposure from A6 alone is probably small. |
 | A6 | Intraday must see a 0.00 bid (align with `rows_from_quotes`) | HIGH | **DONE** | see A6 evidence block below |
 | A7 | Intraday holiday + quote-freshness gate | MED | TODO | |
@@ -272,6 +272,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | E5 | Assert on behaviour, not fixtures, in the two flagged tests | TODO | |
 | E6 | Rewrite `test_all_modules_follow_the_override` so it stops proving the opposite | TODO | |
 | E7 | Re-run all nine surviving mutations; every one must now be killed | TODO | |
+| C16 | Surface `days_shares_uncovered` per account on the dashboard (incremented + persisted, zero live readers) | MED | TODO | filed from the A4 analyst, 2026-08-01 |
 | E8 | `run_chain_snapshot.main()` wiring tests (zombie wiring, partial-exit-1, save-recheck call site, `--force`) — predicates are tested, the wiring is executed only by the A16 skeptic's S1 run and the C2 dry run | TODO | filed from skeptic F6, 2026-07-31 |
 
 ---
@@ -321,6 +322,39 @@ spec; the assertion mis-stated it. Refusal is still asserted for `""`, `None`, `
 
 **Not re-run after the amendment:** a second skeptic pass. The amendment is itself skeptic-derived
 and mutation-tested, but this is declared, not claimed as verified (A1/A5).
+
+---
+
+## A4 — evidence (completed 2026-08-01, overnight autonomous run)
+
+**In plain language.** After the drawdown that gets the bot assigned, the rent it must charge
+(the basis floor) sits ABOVE the top of its price list — the 12-strike window reaches ~+3.8%
+over spot, the floor needs +10-15%. So the covered call could never be selected, the income half
+of the wheel never started, the shares sat naked, and nothing said a word (TMO class, months).
+Fix: for CALL-phase holdings the snapshot pass now asks Schwab for **every listed OTM call**
+(no width guess — a count-based fix would need strike_count≈100 per the 10,810-ticker-day
+measurement) and staples the strikes above the window into the chain, additively only; the
+engine warns `covered_call_unreachable` whenever a floor still cannot be reached, `paper_step`
+prints it, and all 25 accounts fold into ONE alert email. A daily-repeating single-ticker alert
+doubles as a live corporate-action tripwire (A10: splits push the floor to ~2× spot).
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | Floor 79 vs window top 72.5 → `AssertionError: A4: shares sit naked and the engine said nothing` (no trade AND no warning on old code). |
+| 2 Minimal fix | `otm_call_frame` (CALL+OTM, same date window — CALL-only is load-bearing: ALL would add far-OTM puts as entry candidates) · `additive_call_rows` splice filter · floors-from-state in the snapshot runner + coverage print · engine warning · one deduped alert. Backtest engines untouched (A4b). |
+| 3 Suites | `521` backtest + `174` live = **695**. |
+| 4 Mutation | 4 mutants killed cache-safe: warning silenced · splice admits new expiries · `>`→`>=` at the window top · delta-sanity guard dropped. |
+| 5 Line audit | All additive; primary 12-strike pull untouched (normal-case floor-below-spot provably unchanged — splice adds only strictly-above-top rows whose deltas sit further from target). **Fingerprint caveat declared honestly (skeptic F5): the byte-identical fingerprints prove NOTHING for this change — instrumented, the modified branch executes zero times in that harness.** The proof is the test suite + skeptic probes instead. |
+| 6 Blast radius | `otm_call_frame`: 1 caller (snapshot runner). `additive_call_rows`: 1 caller + tests. Warnings: paper_step + main alert. Put selection proven bit-identical pre/post splice (skeptic). Snapshot round-trip proven (spliced rows carry all `_CHAIN_COLS` + A19 columns). |
+| C1 Skeptic | **CORRECT-BUT-INCOMPLETE** → all three real findings **amended same session**: F1 garbage-delta hijack (a far-OTM spliced row claiming delta≈0.49 would win selection even with the floor reachable — monotonicity guard added: spliced |delta| must sit strictly below the primary's per-expiry min, + test + mutant) · F2 one corrupt state file (`premium: null`) crashed the WHOLE snapshot runner vs the 17:00 step's per-account isolation (per-position try/except added) · F3 `covered_call_no_mark` proven dead code (a selected contract always marks) — branch deleted, test tightened. F4 recorded as the A3b escalation above. Everything else held: round-trip, alert-exactly-once across 25 accounts incl. exception paths, all degrade paths fail soft, no put-selection pollution. |
+| C2 Dry run | Live Schwab GDX: 12-strike window top **+3.9%** over spot; OTM pull top **+43.0%** (106 strike), 90 call rows, **66 additive rows** through the real splice filter. The analyst's one unverified assumption (does Schwab honor `strike_range=OTM` unbounded) — verified live. |
+| C3 Dollars | Today: $0 (zero CALL-phase holdings in the real book — 4 held tickers, all PUT phase). Historical shape: at a 10% post-assignment drawdown the old window blocked the covered call on **31.0%** of 4,411 real ticker-days (audit); every blocked day was rent never collected on shares already owned. |
+
+**Declared (A1/A5):** the floor-reaching calls are micro-credit (median bid $0.07 at 10% dd,
+$0.04 at 15%) and now sell UNGATED — that is the pending A3b owner decision, made more frequent
+by this fix; flagged, not decided. Parquet strike grids are ±15-banded so the width measurement
+extrapolates beyond (exact where checkable). `strike_count=N` → N/2 per side established on one
+fixture + the audit's independent figure.
 
 ---
 
@@ -590,6 +624,7 @@ test (E8).
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
 | 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |
+| 2026-08-01 | **A4 DONE** (overnight). OTM-call splice for CALL-phase holdings (no width guess; live-verified +43% reach vs +3.9%) + loud warnings + one deduped alert. Skeptic CORRECT-BUT-INCOMPLETE → 3 amendments same session (delta-sanity guard, per-position crash isolation, dead branch deleted). Fingerprint-caveat disclosed (harness never executes the branch — proof is tests+probes). **A3b escalated:** splice grows the ungated micro-credit call population; owner should rule soon. A4b + C16 filed. Suites 521+174=**695**. |
 | 2026-08-01 | **A3 DONE** (overnight run). Analyst found the parameter-free core (TP-exit feasibility: reachable at the tick AND not net-negative at the worst accepted fill) and proved A2 subsumes it 3.8× in production — its value is invariance + backtest coverage. Skeptic **COULD-NOT-BREAK** (370,800-point brute force, 0 violations); F1/F4 amended same session (tp=0 refuse-all; loud roll vetoes). Max-spread clause discharged by A2; surrender curve moved to A20; **A3b** filed (covered-call side, owner decision). Suites 517+170=**687**. |
 | 2026-08-01 | **A2 DONE.** Owner rulings: 25 accounts = alternate universes (size judged per account, never aggregated); 3 provisional decisions (covered calls ungated, midpoint denominator @0.10, ON-in-FROZEN idiom) — dialog declined, veto cheap. Analyst spec (veto-not-filter proven by measured delta drift; backtest parquets have NO OI/volume) → predicate + 4 veto sites + observability. Skeptic CORRECT-BUT-INCOMPLETE → both gaps amended (5 body-mutant killers, solo-engine warnings). **Stale-pyc incident** during gate 4 disclosed in the evidence block; process rule adopted. Suites 509+170=**679** on fresh bytecode. |
 | 2026-07-31 | **A17 DONE.** Analyst spec (schema map, 9 invariants, migration story) → capacity landed: `filled_contracts` on the seam, shared `close_short_fill`, I3 stale-size re-read, optional `opened_contracts`/`working_order` round-trip — zero migration, fingerprints byte-identical pre/post. Skeptic **COULD-NOT-BREAK**; its two capacity notes (ghost-fill guard, opened_contracts writer) amended + tested same session. Follow-up **A17b** filed. Suites 501+170=**671**. |
