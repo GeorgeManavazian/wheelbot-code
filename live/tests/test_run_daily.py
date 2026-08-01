@@ -205,3 +205,58 @@ def test_clock_gate_boundary_is_seventeen(monkeypatch):
         raise AssertionError("17:00 must pass the gate (sentinel expected)")
     except _Sentinel:
         pass
+
+
+def test_every_warning_kind_reaches_the_log(tmp_path, capsys):
+    """A14: paper_step surfaced only the gate/covered-call reasons; every
+    OTHER warning (expiry_unsettleable above all -- a leg past expiry that
+    cannot settle because its close is missing) was thrown away. A leg could
+    sit unsettled forever and the log would say nothing."""
+    from live.run_daily import paper_step
+    from src.engine_v2.options.chain import Contract
+
+    class _M:
+        universe = ["TMO"]
+        _obs = OBS
+
+        def chain(self, tk, d):
+            return None
+
+        def spot(self, tk, d, fb):
+            return None if d == pd.Timestamp("2026-07-10") else 500.0
+
+        def settle_price(self, tk, expiry):
+            return None
+
+        def regime_row(self, tk, day):
+            return None
+
+        def eligible(self, tk, day):
+            return True
+
+    c = Contract("TMO", pd.Timestamp("2026-07-10"), 512.5, "P")   # expired, unsettleable
+    state = PortfolioState(cash=100_000.0, positions=[{
+        "ticker": "TMO", "shares": 0, "phase": "PUT", "basis": None,
+        "premium": 900.0, "campaign": 1, "last_spot": 500.0,
+        "short": {"contract": c, "contracts": 1, "credit": 9.0,
+                  "last_mid": 9.0}}])
+    cfg = WheelConfig(ticker="TMO", put_delta=0.30, call_delta=0.50,
+                      target_dte=11, take_profit_pct=0.60,
+                      starting_capital=100_000.0, call_min_strike="basis")
+    r = paper_step(state, _M(), cfg, 1, str(tmp_path / "t.jsonl"),
+                   str(tmp_path / "s.json"))
+    assert any(w[1] == "expiry_unsettleable" for w in r.warnings)
+    out = capsys.readouterr().out
+    assert "expiry_unsettleable" in out, \
+        "A14: an unsettleable expiry must be visible in the run log"
+
+
+def test_collect_unsettled_names_the_leg_and_the_lateness():
+    from live.run_daily import collect_unsettled
+    from src.engine_v2.options.chain import Contract
+    c = Contract("TMO", pd.Timestamp("2026-07-10"), 512.5, "P")
+    w = [(pd.Timestamp("2026-07-17"), "expiry_unsettleable", c),
+         (pd.Timestamp("2026-07-15"), "expiry_unsettleable", c),   # earlier sighting
+         (pd.Timestamp("2026-07-17"), "route_state_unknown", "GDX")]
+    got = collect_unsettled(w)
+    assert got == {"TMO 512.5P 2026-07-10": 7}   # max lateness wins

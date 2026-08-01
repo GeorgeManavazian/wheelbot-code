@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 11 of 67 done (A2, A3, A4, A5, A6, A7, A11, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16/A23 added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 12 of 67 done (A2, A3, A4, A5, A6, A7, A11, A14, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16/A23 added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -204,7 +204,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A11 | Clock gate inside `run_daily` (refuse before 17:00 ET without `--force`) | MED | **DONE** | see A11 evidence block below. Boundary tightened 16:00→17:00 per its skeptic (Schwab's bar isn't settled until ~17:00 and `already_stepped` locks a half-baked day in). New row filed: **A23** — `--smoke` isolation is imperfect (its zombie path writes the REAL gaps.jsonl + a real email on a pull failure; pre-existing, skeptic F5). Cosmetic: run_health strings still say "20:00 window" (stale, noted). |
 | A12 | Budget allocation must not strand capital at small sizes | MED | TODO | |
 | A13 | Model exchange/OCC/regulatory and assignment fees | LOW | TODO | |
-| A14 | Surface `StepResult.warnings`; bound the unsettleable-expiry refusal | HIGH | TODO | |
+| A14 | Surface `StepResult.warnings`; bound the unsettleable-expiry refusal | HIGH | **DONE** | see A14 evidence block below. **Incident logged there too:** the A14 skeptic's probe wrote test states into the LOCAL frozen archive (`data/live/accounts/100k_N1..N6`) via the WHEELBOT_STATE_DIR import-time trap — self-reported, recovered same session (N6 deleted; N1 byte-exact from `data/live-synced@a8ea1f8`; N2-N5 nearest-frozen, one intraday session off; polluted snapshot rows stripped). Canonical VPS store untouched; Phase F resets all accounts anyway. Process rule saved to memory: main()-touching probes need the env pre-set in a fresh interpreter. |
 | A15 | Restore a bounded reach-back for the batch engine | MED | TODO | |
 
 ### Group B — what the bot SEES
@@ -323,6 +323,41 @@ spec; the assertion mis-stated it. Refusal is still asserted for `""`, `None`, `
 
 **Not re-run after the amendment:** a second skeptic pass. The amendment is itself skeptic-derived
 and mutation-tested, but this is declared, not claimed as verified (A1/A5).
+
+---
+
+## A14 — evidence (completed 2026-08-01, overnight autonomous run)
+
+**In plain language.** The engine writes worry-notes (`warnings`) about everything it couldn't
+do — the worst being "this leg is past expiry and I cannot settle it because its closing price
+never arrived." The daily runner used to surface only the gate/covered-call notes and throw the
+rest away, so a stuck leg (delisting, corporate action) could sit broken forever in silence.
+Now EVERY note kind reaches the run log (generic by reason, so future kinds can't slip back
+into the void), and stuck expiries escalate: one email per day naming each leg and how many
+days late it is.
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | Unsettleable TMO leg stepped through `paper_step` → warning present in the result but ABSENT from stdout → red. |
+| 2 Minimal fix | Generic reason-printer in `paper_step` + `collect_unsettled()` + one deduped daily alert in `main()`. |
+| 3 Suites | `526` backtest + `182` live = **708**. |
+| 4 Mutation | 2 mutants killed (surfacing void restored · collector blinded). |
+| 5 Line audit | Additive. Skeptic F1 (Contract subjects printed as raw dataclass repr; the intended branch was dead behind `map(str)`) — **amended** with explicit formatting; its caution honored (naive de-`map(str)` would crash sorting None against str). |
+| 6 Blast radius | Print set `_handled` failure mode is a double-print — loud in the safe direction (skeptic F4, accepted). `expiry_unsettleable` produced at exactly one site inside `d >= expiry` → lateness ≥ 0 by construction; contracts always dataclasses post-load (skeptic-verified). |
+| C1 Skeptic | **SURVIVES.** All warning shapes through one step without crash; 6 accounts × same stuck leg → ONE alert, leg named once, max lateness; clean day → zero alerts; retry tick cannot re-spam (already_stepped empties the collector); new tests proven red on HEAD. Its venv note: the "1 failed" backtest it saw was the suite run under the WRONG interpreter (pandas alias drift) — the real `.venv` run is 526 green. |
+| C2 Dry run | The real TMO 512.5P leg (unsettled since the pause, by design) is exactly what the first post-resume run will now name and alert on — the mechanism will demonstrate itself on day 1. |
+| C3 Dollars | Escalation-only ($0 change). Value: a leg stuck by delisting/corporate action now costs at most one day of silence instead of unbounded. |
+
+**INCIDENT (disclosed in full).** The A14 skeptic violated its read-only constraint by accident:
+`WHEELBOT_STATE_DIR` binds at import time, its harness set the env after import, and
+`run_daily.main()` wrote test states into the local FROZEN archive (`data/live/accounts/`),
+including creating `100k_N6`. It self-reported with recovery commands and wrote nothing further.
+Remediated by the main session same hour: N6 deleted · N1 `state.json`+`.prev` restored
+byte-exact from `data/live-synced@a8ea1f8` · N2–N5 restored from the same commit (nearest-frozen;
+one VPS intraday session newer than the 07-28 cutover freeze — display archive only) · the five
+appended 2026-08-01 snapshot rows stripped. The canonical store (VPS + GitHub mirror) was never
+touched. Process rule saved to session memory: any probe reaching `main()` must pre-set the env
+in a fresh interpreter. This is audit-P1's lesson re-learned in miniature — recorded, not hidden.
 
 ---
 
@@ -698,6 +733,7 @@ test (E8).
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
 | 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |
+| 2026-08-01 | **A14 DONE** (overnight). Every warning kind now reaches the log; stuck expiries escalate via one daily alert. Skeptic SURVIVES + F1 formatting amended. **Skeptic pollution incident on the local frozen archive disclosed + remediated in the A14 evidence block** (canonical VPS store untouched); WHEELBOT_STATE_DIR import-trap rule saved to memory. Suites 526+182=**708**. |
 | 2026-08-01 | **A11 DONE** (overnight). Clock gate ≥17:00 (skeptic-tightened from 16:00: settled-close semantics + already_stepped lock-in hazard), frozen-clock boundary tests, real 04:26 refusal observed. A23 filed (smoke gaps leak). Suites 526+180=**706**. |
 | 2026-08-01 | **A7 DONE** (overnight). Parameter-free session-date gate on live quotes (no holiday calendar to rot); skeptic CORRECT-BUT-INCOMPLETE → 3 amendments same session (pathological-timestamp per-leg refusal; three vacated fixtures re-stamped + mutant re-killed; test-double unshadowed). Suites 526+178=**704**. |
 | 2026-08-01 | **A5 DONE** (overnight). Date-stamped close notes on the state seed the anti-churn set; skeptic COULD-NOT-BREAK (adversarial round-trip equality, retry windows, partial-close interplay all held) and its one real finding — the EOD step left no note for itself in the crash-retry window — amended + mutant-killed same session. Suites 526+174=**700**. |

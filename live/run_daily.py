@@ -127,6 +127,23 @@ def _trade_row(t):
             "campaign": t.campaign_id}
 
 
+def collect_unsettled(warnings) -> dict:
+    """A14: {leg label -> days past expiry} for every unsettleable-expiry
+    warning. The 'bound' on the refusal is escalation -- these feed one loud
+    daily alert, so a leg stuck because its close never arrives (delisting,
+    corporate action) can no longer wait in silence."""
+    out = {}
+    for w in warnings:
+        if w[1] != "expiry_unsettleable":
+            continue
+        c = w[2]
+        late = (pd.Timestamp(w[0]).normalize()
+                - pd.Timestamp(c.expiry).normalize()).days
+        key = f"{c.root} {c.strike}{c.right} {pd.Timestamp(c.expiry).date()}"
+        out[key] = max(out.get(key, 0), late)
+    return out
+
+
 def paper_step(state, market, cfg, n_slots, trades_path, state_path,
                snapshot_path=None):
     day = market._obs
@@ -145,6 +162,25 @@ def paper_step(state, market, cfg, n_slots, trades_path, state_path,
     if naked:
         print(f"covered call unreachable on {len(naked)} ticker(s) {naked[:8]} "
               f"-- shares sit uncovered today (A4)")
+    # A14: EVERY other warning kind reaches the log too -- expiry_unsettleable
+    # above all (a leg past expiry whose close is missing sits open until a
+    # later run can settle it; that must never be silent). Generic by reason
+    # so a future warning kind can't slip back into the void.
+    _handled = {"entry_gated_illiquid", "entry_gated_unclosable",
+                "covered_call_unreachable"}
+    other = {}
+    for w in result.warnings:
+        if w[1] not in _handled:
+            other.setdefault(w[1], []).append(w[2])
+    def _label(s):
+        # skeptic F1: format Contracts as "TMO 512.5P 2026-07-10", everything
+        # else via str -- and never sort raw mixed types (None vs str raises)
+        if hasattr(s, "root") and hasattr(s, "strike"):
+            return f"{s.root} {s.strike}{s.right} {pd.Timestamp(s.expiry).date()}"
+        return str(s)
+    for reason, subjects in sorted(other.items()):
+        subj = sorted({_label(s) for s in subjects})
+        print(f"warning {reason}: {len(subjects)} occurrence(s) {subj[:8]}")
     # State FIRST (the source of truth). If it saved, the log/snapshot appends
     # that follow are secondary — a failure there leaves state correct + an
     # incomplete log (recoverable), never a log claiming trades the reloaded
@@ -388,6 +424,7 @@ def main():
     print(f"{'account':<10}{'trades':>7}{'open':>6}{'cash':>13}{'equity':>13}")
     stepped, failed, already = 0, [], []
     naked_all = set()   # A4: tickers whose covered call was unreachable, any account
+    unsettled_all = {}  # A14: contract -> days-late, any account
     for (cap, n) in accounts:
         state, paths = loaded[(cap, n)]
         label = "_smoke" if args.smoke else account_label(cap, n)
@@ -410,6 +447,8 @@ def main():
                            paths["snapshots"])
             naked_all |= {w[2] for w in r.warnings
                           if w[1] == "covered_call_unreachable"}
+            for key, late in collect_unsettled(r.warnings).items():
+                unsettled_all[key] = max(unsettled_all.get(key, 0), late)
             stepped += 1
             print(f"{label:<10}{len(r.trades):>7}{len(state.positions):>6}"
                   f"{state.cash:>13,.0f}{r.equity:>13,.0f}")
@@ -418,6 +457,16 @@ def main():
             print(f"{label:<10} ERROR: {type(e).__name__}: {e} — skipped, others continue")
 
     day = str(obs.date())
+    if unsettled_all:
+        # A14: the bound on the unsettleable-expiry refusal is ESCALATION --
+        # one alert per day naming each stuck leg and how many days past
+        # expiry it is. A leg stuck because its close never arrives (delisted
+        # ticker, corporate action) can no longer wait in silence.
+        legs = ", ".join(f"{k} ({v}d late)" for k, v in sorted(unsettled_all.items()))
+        send_alert(f"UNSETTLEABLE EXPIRY -- {len(unsettled_all)} leg(s) stuck",
+                   f"{day}: expiry close still missing for: {legs}. The leg "
+                   f"stays open and retries daily; if this repeats, suspect a "
+                   f"delisting or corporate action (A10).")
     if naked_all:
         # A4: ONE deduped alert for all 25 accounts (heavy overlap, avg 7.2x
         # replication) -- shares sitting naked must reach the owner's inbox,
