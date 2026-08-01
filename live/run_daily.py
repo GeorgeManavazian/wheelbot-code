@@ -211,7 +211,28 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", action="store_true",  # 1 account, 3 tickers, throwaway store
                     help="quick live connectivity check (100k/N5 on GDX/SLV/XOP -> _smoke store)")
+    ap.add_argument("--force", action="store_true",
+                    help="bypass the A11 clock gate (manual/backfill use only)")
     args = ap.parse_args()
+
+    # A11: the decision run must not step before the 16:00 ET close --
+    # settlement reads the expiry day's OWN close and equity marks are
+    # close-to-close, so an early run books a full paper day off stale or
+    # partial prices (2026-07-24: a 04:13 ET catch-up booked every entry from
+    # the prior day's quotes). Nonzero exit: no done-marker, and the tick's
+    # 17:00-23:30 window retries as designed. The RTH SNAPSHOT phase has the
+    # inverse gate (refuse OUTSIDE 09:30-16:00) -- the two never conflict.
+    # --smoke is exempt (throwaway store, connectivity only).
+    now_et = dt.datetime.now(ET)
+    if not args.force and not args.smoke and now_et.hour < 17:
+        # < 17, not < 16 (skeptic F1): Schwab's daily bar is not reliably
+        # SETTLED until ~17:00 (the old loop's "data settled" constant), and a
+        # manual 16:0x run that steps on a preliminary close gets locked in by
+        # already_stepped -- the official 17:00 rerun could never correct it.
+        print(f"A11: refusing to step at {now_et:%H:%M} ET -- settlement and "
+              f"marks need the SETTLED close (~17:00). No marker written; the "
+              f"tick retries inside its 17:00-23:30 window. --force overrides.")
+        return 2
 
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "schwab"))
     from schwab_client import get_client

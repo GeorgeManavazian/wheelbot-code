@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 10 of 66 done (A2, A3, A4, A5, A6, A7, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16 added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 11 of 67 done (A2, A3, A4, A5, A6, A7, A11, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16/A23 added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -185,6 +185,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A16 | **Pull the chain during RTH, not at 17:00 after the close** | CRIT | **DONE** | see A16 evidence block below. **Owner decisions 2026-07-31:** (1) snapshot missing on a trading day → **skip the day + gap record + alert**, never fall back to a post-close pull; (2) half days (~3/yr) → **accepted as-is**, no half-day calendar — those snapshots will be post-close, a disclosed bounded corruption; (3) held-leg quote pull stays post-close → filed as **A21**, not folded in. |
 | A18 | One shared fill function across all four engines (seam only, no model choice) | HIGH | **DONE** | see A18 evidence block below. Follow-ups filed: **A18b** (dedupe `_num`, delete dead `live_marks`/`_mark_from_quote`, align `live_asks`' admission or document it), **A18c** (migrate or retire the fifth copy in `scripts/audit_defense_execution.py` — currently kept as an independent referee and it verified the seam with 0 mismatches on 384 intraday + 13 EOD fills). Original note preserved: **Also four ADMISSION rules, measured during A6** on identical payloads — `0.00 x 0.00`: `contract_quotes` skip / `live_asks` skip / `_mark_from_quote` None. bid `None`, ask `0.05`: skip / **admits 0.05** / None. bid `-0.01`, ask `0.05`: skip / **admits 0.05** / **0.02**. So the dashboard prices a liability the intraday manager refuses to act on. Also: `live_marks` and `_mark_from_quote` have **zero production callers** — dead code, tests only. And `_num` still exists twice (`live/marks.py:25`, `live/data.py:32`, byte-identical). |
 | A19 | Capture `openInterest`/`totalVolume`/`bidSize`/`askSize` from the Schwab response | MED | **DONE** | see A19 evidence block below |
+| A23 | `--smoke` isolation imperfect: its zombie path appends to the REAL `gaps.jsonl` and sends a real alert on a pull failure (state/trades/snapshots correctly go to `_smoke`) | LOW | TODO | filed from the A11 skeptic, 2026-08-01 |
 | A21 | `merge_held_legs` quote pull happens at 17:00, post-close (`run_daily.py:192` → `held_legs.py:113`) — same staleness class as A16 but marks/dashboard only, not entries | MED | TODO | Split out of A16 by owner decision 2026-07-31. Affects held-leg marks, snapshot equity (`snapshots.py:26`), and the EOD TP branch (`portfolio.py:94-101`); the intraday TP already runs on RTH quotes. |
 | A3b | Gate the covered-call side for liquidity/unclosability? 22.6% of backtest CALL entries (1,073/4,757) sell at bid ≤ $0.02 vs 1.05% of puts — but refusing a call leaves shares NAKED and re-attempts daily (measured 2,611 vetoes). Owner decision: gate calls, or accept micro-credit calls as closing-risk-on-owned-shares | MED | TODO | filed from the A3 analyst, 2026-08-01 |
 | A22 | `chain_frame` stamps `from_date`/`to_date` from the **box (UTC) clock**, not ET (`live/data.py:81 dt.date.today()`) — on the UTC VPS any retry from 19:00-20:00 ET onward requests **tomorrow's** expiry window, shifting the DTE band the selector uses | MED | TODO | Found by the A16 analyst. `obs_date` is threaded correctly; only the request dates are wrong. Dormant on the new RTH snapshot path (UTC date == ET date at 15:xx ET) but live on `--smoke` and any manual post-19:00 pull. |
@@ -200,7 +201,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A8 | Early assignment modelling | MED | TODO | |
 | A9 | Defer the covered call one session after assignment | MED | TODO | |
 | A10 | Corporate actions — at minimum detect and refuse | HIGH | TODO | |
-| A11 | Clock gate inside `run_daily` (refuse before 16:00 ET without `--force`) | MED | TODO | |
+| A11 | Clock gate inside `run_daily` (refuse before 17:00 ET without `--force`) | MED | **DONE** | see A11 evidence block below. Boundary tightened 16:00→17:00 per its skeptic (Schwab's bar isn't settled until ~17:00 and `already_stepped` locks a half-baked day in). New row filed: **A23** — `--smoke` isolation is imperfect (its zombie path writes the REAL gaps.jsonl + a real email on a pull failure; pre-existing, skeptic F5). Cosmetic: run_health strings still say "20:00 window" (stale, noted). |
 | A12 | Budget allocation must not strand capital at small sizes | MED | TODO | |
 | A13 | Model exchange/OCC/regulatory and assignment fees | LOW | TODO | |
 | A14 | Surface `StepResult.warnings`; bound the unsettleable-expiry refusal | HIGH | TODO | |
@@ -322,6 +323,30 @@ spec; the assertion mis-stated it. Refusal is still asserted for `""`, `None`, `
 
 **Not re-run after the amendment:** a second skeptic pass. The amendment is itself skeptic-derived
 and mutation-tested, but this is declared, not claimed as verified (A1/A5).
+
+---
+
+## A11 — evidence (completed 2026-08-01, overnight autonomous run)
+
+**In plain language.** On 2026-07-24 a catch-up run fired at 04:13 in the morning and booked an
+entire trading day using the previous day's prices — nothing inside the program stops it from
+doing homework before the answers are posted. Now the decision run refuses to step before
+17:00 ET (settled-close time; the only clock rule the shell wrapper enforced from outside),
+exits nonzero so no done-marker is written and the normal 17:00–23:30 retry window proceeds as
+designed. `--smoke` (throwaway connectivity check) and `--force` (manual backfill) bypass it;
+`--force` provably bypasses ONLY this gate (grepped: one conditional).
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | Frozen clock at 04:13 → old code proceeds to build a Schwab client (sentinel raised) → test red; fixed code returns 2 before any client exists. |
+| 2 Minimal fix | One gate + `--force` flag + refusal message; boundary 16:59/17:00 pinned by frozen-clock tests. |
+| 3 Suites | `526` backtest + `180` live = **706**. |
+| 4 Mutation | 2 mutants killed (gate off · refusal-writes-marker rc 0). |
+| 5 Line audit | Gate sits before the client build (a refused run touches nothing). Incomplete-snapshot test gained `--force` — necessary, not a weakening (suite runs pre-17:00; and it now pins that `--force` does NOT skip the snapshot gate). |
+| 6 Blast radius | `args.force` read exactly once. Tick marker written only on rc 0 (read); dead-man's switch records an all-refused day as `no_run` + alert (skeptic-verified path). |
+| C1 Skeptic | **SURVIVES.** Boundary proven by execution; global-datetime monkeypatch checked for leaks both orderings (none; noted for future xdist); pathological-clock day ends recorded not lost; `--smoke` store isolation verified for state/trades/snapshots with the gaps.jsonl hole filed as A23. Its F1 (16:00 vs 17:00 data-settled) **adopted** — gate tightened + boundary test. |
+| C2 Dry run | Real 04:26 ET invocation refused instantly, rc 2, no client build — the gate observed working against the live clock. |
+| C3 Dollars | Historical: the 2026-07-24 class — a full fabricated day booked at stale quotes across 25 accounts, permanently stamped complete. Prospective: unreachable from any manual or drifted-cron run. |
 
 ---
 
@@ -673,6 +698,7 @@ test (E8).
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
 | 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |
+| 2026-08-01 | **A11 DONE** (overnight). Clock gate ≥17:00 (skeptic-tightened from 16:00: settled-close semantics + already_stepped lock-in hazard), frozen-clock boundary tests, real 04:26 refusal observed. A23 filed (smoke gaps leak). Suites 526+180=**706**. |
 | 2026-08-01 | **A7 DONE** (overnight). Parameter-free session-date gate on live quotes (no holiday calendar to rot); skeptic CORRECT-BUT-INCOMPLETE → 3 amendments same session (pathological-timestamp per-leg refusal; three vacated fixtures re-stamped + mutant re-killed; test-double unshadowed). Suites 526+178=**704**. |
 | 2026-08-01 | **A5 DONE** (overnight). Date-stamped close notes on the state seed the anti-churn set; skeptic COULD-NOT-BREAK (adversarial round-trip equality, retry windows, partial-close interplay all held) and its one real finding — the EOD step left no note for itself in the crash-retry window — amended + mutant-killed same session. Suites 526+174=**700**. |
 | 2026-08-01 | **A4 DONE** (overnight). OTM-call splice for CALL-phase holdings (no width guess; live-verified +43% reach vs +3.9%) + loud warnings + one deduped alert. Skeptic CORRECT-BUT-INCOMPLETE → 3 amendments same session (delta-sanity guard, per-position crash isolation, dead branch deleted). Fingerprint-caveat disclosed (harness never executes the branch — proof is tests+probes). **A3b escalated:** splice grows the ungated micro-credit call population; owner should rule soon. A4b + C16 filed. Suites 521+174=**695**. |

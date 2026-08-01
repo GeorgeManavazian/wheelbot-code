@@ -89,7 +89,8 @@ def test_incomplete_snapshot_skips_day_instead_of_retry_spam(tmp_path, monkeypat
     fake = types.ModuleType("schwab_client")
     fake.get_client = lambda: object()
     monkeypatch.setitem(sys.modules, "schwab_client", fake)
-    monkeypatch.setattr(sys, "argv", ["run_daily.py"])
+    # --force: this test exercises the snapshot gate, not the A11 clock gate
+    monkeypatch.setattr(sys, "argv", ["run_daily.py", "--force"])
 
     rc = run_daily.main()
     assert rc == 0, "must exit 0 (marker written, no retry spam)"
@@ -141,3 +142,66 @@ def test_paper_step_persists_state_and_trades(tmp_path):
     assert len(lines) == len(r.trades)
     if lines:
         assert {"date", "action", "ticker"} <= set(lines[0])
+
+
+def test_decision_run_refuses_before_the_close(monkeypatch):
+    """A11: the 2026-07-24 catch-up ran at 04:13 ET and booked every entry
+    off the prior day's quotes. The decision run must refuse to step before
+    16:00 ET (settlement and marks need the official close) unless --force.
+    Exit must be NONZERO so the tick writes no done-marker and retries after
+    17:00 as designed."""
+    import datetime as dt
+    import sys
+    import types
+    from zoneinfo import ZoneInfo
+    from live import run_daily
+
+    class _FrozenDT(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt.datetime(2026, 7, 24, 4, 13, tzinfo=tz)
+
+    monkeypatch.setattr(run_daily.dt, "datetime", _FrozenDT)
+    fake = types.ModuleType("schwab_client")
+    fake.get_client = lambda: (_ for _ in ()).throw(
+        AssertionError("A11: refused run must never build a client"))
+    monkeypatch.setitem(sys.modules, "schwab_client", fake)
+    monkeypatch.setattr(sys, "argv", ["run_daily.py"])
+    rc = run_daily.main()
+    assert rc not in (0, None), \
+        "A11: a 04:13 run must refuse with a nonzero exit (no marker, retry later)"
+
+
+def test_clock_gate_boundary_is_seventeen(monkeypatch):
+    """Skeptic F1: 16:0x closes are preliminary; the shell's old constant was
+    'after 5pm ET (data settled)'. 16:59 refused, 17:00 reaches the client
+    build (sentinel)."""
+    import datetime as dt
+    import sys
+    import types
+    from live import run_daily
+
+    def frozen(h, m):
+        class _F(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return dt.datetime(2026, 7, 24, h, m, tzinfo=tz)
+        return _F
+
+    fake = types.ModuleType("schwab_client")
+
+    class _Sentinel(Exception):
+        pass
+
+    fake.get_client = lambda: (_ for _ in ()).throw(_Sentinel())
+    monkeypatch.setitem(sys.modules, "schwab_client", fake)
+    monkeypatch.setattr(sys, "argv", ["run_daily.py"])
+
+    monkeypatch.setattr(run_daily.dt, "datetime", frozen(16, 59))
+    assert run_daily.main() == 2
+    monkeypatch.setattr(run_daily.dt, "datetime", frozen(17, 0))
+    try:
+        run_daily.main()
+        raise AssertionError("17:00 must pass the gate (sentinel expected)")
+    except _Sentinel:
+        pass
