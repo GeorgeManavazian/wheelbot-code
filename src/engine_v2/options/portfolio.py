@@ -7,7 +7,7 @@ TP/expiry/covered-calls and adds ONLY the routing layer."""
 from __future__ import annotations
 from dataclasses import dataclass, field
 import pandas as pd
-from .select import select_contract, option_mark
+from .select import select_contract, option_mark, liquidity_ok
 from .fills import try_take_profit
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, sell_proceeds,
                     buy_cost, GATE_STALENESS_DAYS)
@@ -222,6 +222,16 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
             c = select_contract(day_chain, d, "P", cfg.put_delta, cfg.target_dte, tk)
             mark = option_mark(day_chain, d, c) if c is not None else None
             if c is None or c in closed_today or mark is None:
+                continue
+            liq, why = liquidity_ok(day_chain, d, c, cfg)
+            if not liq:
+                # A2: veto, never substitute -- and never silently. A fully
+                # gated day must not print like a quiet one (paper_step
+                # surfaces these warnings in the run log). Deduped: the
+                # n_slots while-loop revisits gated tickers every iteration
+                # (skeptic F4).
+                if (d, "entry_gated_illiquid", tk) not in warnings:
+                    warnings.append((d, "entry_gated_illiquid", tk))
                 continue
             n = int(budget // (c.strike * mult))
             if n <= 0:

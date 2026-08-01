@@ -9,6 +9,58 @@ def derived_band(target_dte: int) -> tuple[int, int]:
     ceiling rejects a monthly when the weekly is absent. Display-only upstream."""
     return max(5, target_dte - 2), target_dte + 3
 
+def liquidity_ok(chain, date, contract, cfg):
+    """A2 liquidity gate: is this contract liquid enough to OPEN a short in?
+    Pure veto predicate -> (True, "") or (False, reason). Evaluated AFTER
+    selection (a row-filter before selection silently moves the sold delta --
+    measured 0.28 -> 0.40 on the GDX fixture -- instead of refusing the trade)
+    and only on entry/roll-destination paths: never on closes, expiry, marks,
+    held-only rows, or covered calls (owner-provisional 2026-08-01).
+
+    A threshold left None disables that leg -- backtest chains carry no
+    OI/volume columns, so backtest configs run rel-spread only (a declared
+    one-sentence divergence, like the A18 print-vs-quote modes). With a
+    threshold SET, a missing/NaN value FAILS: a contract whose liquidity
+    cannot be measured is not one to sell.
+
+    Rel-spread denominator is the computed midpoint (ask-bid)/((bid+ask)/2),
+    never the `mid` column -- live's `mid` is Schwab's mark, and using the
+    column would score the same contract differently in the two engines."""
+    if (cfg.liq_max_rel_spread is None and cfg.liq_min_open_interest is None
+            and cfg.liq_min_volume is None):
+        return True, ""
+    rows = chain[(chain["date"] == date) & (chain["expiry"] == contract.expiry)
+                 & (chain["strike"] == contract.strike)
+                 & (chain["right"] == contract.right)]
+    # mirror select_contract: a spliced mark-only row must never answer for a
+    # tradeable contract (duplicate-key order sensitivity, A2 skeptic F7)
+    if "held_only" in rows.columns:
+        rows = rows[~rows["held_only"].fillna(False).astype(bool)]
+    if rows.empty:
+        return False, "row_missing"
+    row = rows.iloc[0]
+    bid, ask = float(row["bid"]), float(row["ask"])
+    den = (bid + ask) / 2.0
+    if not (den > 0) or ask < bid:
+        return False, "no_two_sided_market"
+    if (cfg.liq_max_rel_spread is not None
+            and (ask - bid) / den > cfg.liq_max_rel_spread):
+        return False, "rel_spread"
+    for field, thresh in (("open_interest", cfg.liq_min_open_interest),
+                          ("volume", cfg.liq_min_volume)):
+        if thresh is None:
+            continue
+        if field not in chain.columns:
+            return False, field
+        try:
+            v = float(row[field])
+        except (TypeError, ValueError):
+            return False, field
+        if v != v or v < thresh:          # NaN or below the floor
+            return False, field
+    return True, ""
+
+
 def select_contract(chain, date, right, target_delta, target_dte, root, min_strike=None):
     """Expiry FIRST (nearest target_dte within derived_band, from expiries visible
     on `date` only), THEN strike (nearest |delta| within that one expiry).

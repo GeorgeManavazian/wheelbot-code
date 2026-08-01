@@ -4,7 +4,7 @@ engine and the gate."""
 from __future__ import annotations
 from dataclasses import dataclass
 import pandas as pd
-from .select import select_contract, select_roll_contract, option_mark
+from .select import select_contract, select_roll_contract, option_mark, liquidity_ok
 from .fills import try_take_profit
 
 MAX_ROLLS_PER_CAMPAIGN = 2   # then the normal expiry path (assignment) applies
@@ -56,6 +56,18 @@ class WheelConfig:
     chop_max_ma_spread: float | None = None    # chop scanner: reject if |50d/200d-1| > this (default off)
     chop_max_fast_spread: float | None = None  # chop scanner: reject if |9d/20d-1| > this, symmetric (default off)
     chop_max_fast_fall: float | None = None    # chop scanner: reject if 9d/20d-1 < -this, down-only (default off)
+    # liquidity gate (A2, 2026-08-01) — VETO on new short-put entries and roll
+    # destinations only; never on closes, expiry, marks, or (by owner-
+    # provisional decision) covered calls. Default-off here like every gate
+    # above so the plain path stays byte-identical; production turns it ON in
+    # live/run_daily.FROZEN. With a threshold SET, a missing/NaN field FAILS
+    # (a contract whose liquidity cannot be measured is not one to sell);
+    # backtest chains have no OI/volume columns, so backtest configs leave
+    # those two legs None — a declared one-sentence divergence, like the A18
+    # print-vs-quote modes.
+    liq_max_rel_spread: float | None = None    # reject if (ask-bid)/((bid+ask)/2) > this
+    liq_min_open_interest: float | None = None # reject if open_interest missing/NaN or < this
+    liq_min_volume: float | None = None        # reject if volume missing/NaN or < this
 
     @property
     def any_regime_gate(self) -> bool:
@@ -188,6 +200,10 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                     # chains; only the same-strike out-roll can self-fund).
                     new_c = select_roll_contract(day_chain, d, "P", c.strike,
                                                  c.expiry, cfg.target_dte, cfg.ticker)
+                    # A2: a roll OPENS a new leg; its destination faces the same
+                    # liquidity veto as an entry. The close half is untouched.
+                    if new_c is not None and not liquidity_ok(day_chain, d, new_c, cfg)[0]:
+                        new_c = None
                     new_mark = option_mark(day_chain, d, new_c) if new_c is not None else None
                     cost = buy_cost(mark, n, cfg)
                     proceeds = (sell_proceeds(new_mark, n, cfg)
@@ -285,7 +301,14 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
             if phase == "PUT":
                 c = select_contract(day_chain, d, "P", cfg.put_delta, cfg.target_dte, cfg.ticker)
                 mark = option_mark(day_chain, d, c) if c is not None else None
-                if c is not None and c != closed_today and mark is not None:
+                liq = (c is None or c == closed_today or mark is None
+                       or liquidity_ok(day_chain, d, c, cfg)[0])
+                if not liq:
+                    # A2 skeptic F2: a veto must never be silent -- a gated
+                    # backtest day is otherwise indistinguishable from a
+                    # no-weather day when attributing days_flat.
+                    warnings.append((d, "entry_gated_illiquid", cfg.ticker))
+                if c is not None and c != closed_today and mark is not None and liq:
                     n = int(cash // (c.strike * mult))
                     if n > 0:
                         # entry gate: a NEW campaign never opens into an unpaid

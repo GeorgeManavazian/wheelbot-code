@@ -35,7 +35,16 @@ FROZEN = dict(put_delta=0.30, call_delta=0.50, target_dte=11,
               # a rise, so keep up-legs (winners). The symmetric + structural gates
               # backtested worse (symmetric -71% P&L, structural went negative) and
               # were dropped. Guards the AA/VALE falling-knife names.
-              chop_max_fast_fall=0.01)
+              chop_max_fast_fall=0.01,
+              # A2 liquidity gate (2026-08-01): ON in production, entries only.
+              # Audit: an ungated bot requested 757 DOW contracts vs ~84/day
+              # traded; this gate would have refused 114 of 145 real entries
+              # (fantasy fills, not lost profit). Denominator = midpoint,
+              # computed inline — a provisional owner decision, declared in
+              # the A2 evidence block. Missing/NaN field with a set threshold
+              # = refuse.
+              liq_max_rel_spread=0.10, liq_min_open_interest=250,
+              liq_min_volume=25)
 
 
 def zombie_check(skipped_closes: int, universe_size: int,
@@ -122,6 +131,14 @@ def paper_step(state, market, cfg, n_slots, trades_path, state_path,
                snapshot_path=None):
     day = market._obs
     result = step_one_day(state, market, day, cfg, selector="chop", n_slots=n_slots)
+    # A2: a fully-gated day must not print like a quiet one. paper_step used
+    # to discard result.warnings entirely, which would have made the liquidity
+    # veto invisible in production -- the same silent-failure class as the
+    # 2026-07-29 audit findings.
+    gated = sorted({w[2] for w in result.warnings if w[1] == "entry_gated_illiquid"})
+    if gated:
+        print(f"liquidity gate: entries refused on {len(gated)} ticker(s) "
+              f"{gated[:8]} (A2 veto -- illiquid, not quiet)")
     # State FIRST (the source of truth). If it saved, the log/snapshot appends
     # that follow are secondary — a failure there leaves state correct + an
     # incomplete log (recoverable), never a log claiming trades the reloaded

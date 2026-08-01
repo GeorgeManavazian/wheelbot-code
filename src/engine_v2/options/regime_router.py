@@ -10,7 +10,7 @@ byte-identically (the anchor regression)."""
 from __future__ import annotations
 from dataclasses import dataclass
 import pandas as pd
-from .select import select_contract, option_mark
+from .select import select_contract, option_mark, liquidity_ok
 from .fills import try_take_profit
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, _state_before,
                     sell_proceeds)
@@ -192,7 +192,12 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                 c = select_contract(day_chain, d, "P", cfg.put_delta,
                                     cfg.target_dte, cfg.ticker)
                 mark = option_mark(day_chain, d, c) if c is not None else None
-                if c is not None and c != closed_today and mark is not None:
+                liq = (c is None or c == closed_today or mark is None
+                       or liquidity_ok(day_chain, d, c, cfg)[0])
+                if not liq:
+                    # A2 skeptic F2: never a silent veto
+                    warnings.append((d, "entry_gated_illiquid", cfg.ticker))
+                if c is not None and c != closed_today and mark is not None and liq:
                     n = int(cash // (c.strike * mult))
                     if n > 0:
                         campaign += 1

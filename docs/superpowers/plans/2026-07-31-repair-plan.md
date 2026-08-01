@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 5 of 63 done (A6, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 6 of 63 done (A2, A6, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -102,6 +102,13 @@ before deciding anything about the strategy.*
 **In scope now (plumbing):** Groups B, C, D, E and every Group A item that is unambiguous
 correctness. Plus two new items the analysts found (A16, A17 below).
 
+**OWNER RULING 2026-08-01 — the 25 accounts are ALTERNATE UNIVERSES, not one pooled
+brokerage.** Each account is an independent counterfactual; liquidity and size are judged per
+account against the market, NEVER aggregated across accounts. This retires the audit's
+cross-account stacking argument ("258 contracts into one strike across accounts"); the
+per-account form survives (one account's 258 vs ~84/day ADV is still fantasy inside its own
+universe). The deferred size-cap decision must be framed per-account.
+
 **Deferred (strategy) — do NOT decide these while repairing:**
 - Which fill model. Build the *seam* (A18: one shared fill function), not the choice.
 - The size-cap parameter. Capture the *data* (A2), not the cap.
@@ -182,7 +189,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A22 | `chain_frame` stamps `from_date`/`to_date` from the **box (UTC) clock**, not ET (`live/data.py:81 dt.date.today()`) — on the UTC VPS any retry from 19:00-20:00 ET onward requests **tomorrow's** expiry window, shifting the DTE band the selector uses | MED | TODO | Found by the A16 analyst. `obs_date` is threaded correctly; only the request dates are wrong. Dormant on the new RTH snapshot path (UTC date == ET date at 15:xx ET) but live on `--smoke` and any manual post-19:00 pull. |
 | A17 | Represent partial fills / working-order state | HIGH | **DONE** | see A17 evidence block below. Follow-up filed: **A17b** — `run_intraday.py` saves state only `if trades`; a working order placed without an immediate fill would not persist. Inert until a fill model creates working orders; must land with that model. |
 | A1 | ~~Intraday fill realism~~ **DEFERRED — strategy decision, see owner decision above** | CRIT | DEFERRED (owner) | resting limit and next-poll both rejected on evidence; spread-fraction k≈0.5 is the supported candidate |
-| A2 | Liquidity gate (rel-spread/OI/volume) — **gate yes, cap parameter DEFERRED** | CRIT | TODO | grid-wide cap value is a strategy decision |
+| A2 | Liquidity gate (rel-spread/OI/volume) — **gate yes, cap parameter DEFERRED** | CRIT | **DONE** | see A2 evidence block below. Cap parameter still deferred (per-account per the 2026-08-01 alternate-universes ruling). **Provisional owner decisions (dialog declined; veto cheap):** covered calls NOT gated · rel-spread = (ask−bid)/computed midpoint @ 0.10 · gate ON in FROZEN, dataclass defaults OFF. |
 | A3 | Minimum credit / maximum spread / unclosable-by-construction guard | HIGH | TODO | **Sized during A6** (skeptic, real trade log, 145 SELL_PUTs, `commission_per_contract=0.65`): on micro-credit names a leg that used to expire free is now bought back at the $0.01 tick, surrendering **RIG 70.2% / VALE 26.0% / AGNC 22.4%** of banked premium (RIG: $6.60 to close $9.40 banked). 144 of 145 entries have a TP trigger reachable at the minimum tick. This is the minimum-credit case in dollars. |
 | A20 | **TP=0.60 is out of sample on the population A6 admits** | HIGH | TODO | Found by the A6 skeptic. `src/engine_v2/options/chain.py:42` and `live/data.py:66-67` both filter `bid > 0`, so a `0.00 x 0.01` row is **unrepresentable in the backtest chain** — the frozen TP policy was never measured over it. Not created by A6 (`rows_from_quotes` opened it for EOD on 07-31), but A6 extends it to the path producing 100% of realized P&L. |
 | A4 | Covered-call window — reach the basis floor | HIGH | TODO | |
@@ -313,6 +320,51 @@ spec; the assertion mis-stated it. Refusal is still asserted for `""`, `None`, `
 
 **Not re-run after the amendment:** a second skeptic pass. The amendment is itself skeptic-derived
 and mutation-tested, but this is declared, not claimed as verified (A1/A5).
+
+---
+
+## A2 — evidence (completed 2026-08-01)
+
+**In plain language.** The bot ordered 757 crates from a shop that sells 84 a day, and the
+backtest pretended someone filled it. Now a bouncer checks three things before any NEW short
+put (or roll destination) is sold: spread ≤ 10% of the midpoint, ≥ 250 contracts of open
+interest, ≥ 25 traded today. Fail any → veto, loudly logged — never a substitution (a
+row-filter would have silently moved the sold delta 0.28 → 0.40; measured). The bouncer never
+touches closes, expiry, marks, held-leg rows, or covered calls (provisional). Backtest data has
+no OI/volume columns, so backtest configs can only run the spread leg — a declared one-sentence
+divergence. Thresholds live on WheelConfig (default-off, the chop-gate idiom); production is ON
+in FROZEN. Judged per account, never aggregated (alternate-universes ruling).
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | `AssertionError: A2: engine sold an entry the liquidity gate must refuse / assert ['SELL_PUT'] == []` on a 36%-spread, 5-OI, 0-volume put with production thresholds. |
+| 2 Minimal fix | `liquidity_ok` predicate in `select.py` + veto at 3 put-entry sites + roll destination + 3 `WheelConfig` fields + FROZEN values + `paper_step` gate print (was discarding `result.warnings` wholesale — a fully-gated day would have been invisible). |
+| 3 Suites | `509` backtest + `170` live = **679**, on freshly-compiled bytecode (see incident below). Goldens intact. |
+| 4 Mutation | 9 mutants killed: gate-always-passes · unmeasurable-= -tradeable · NaN-slips-through · silent-gate (wiring) + crossed-book-guard-deleted · `>`→`>=` · `<`→`<=` · row-missing-passes · mid-column-denominator (body; added after the skeptic showed all five body mutants survived the original tests). |
+| 5 Line audit | select.py +52 (predicate), 3 engines (veto + F2 warnings), config, paper_step print, tests. Declared deltas: solo engines now emit `entry_gated_illiquid` warnings (empty when gate off — fingerprints identical); portfolio warning deduped across slot iterations (skeptic F4). |
+| 6 Blast radius | `liquidity_ok`: 4 production call sites + tests. `liq_*` fields: predicate + FROZEN only. Gate-off = byte-identical proven twice (my fingerprints + skeptic's HEAD-tree digest). `run_intraday`/snapshot runner import FROZEN but consume no liq keys (skeptic F10, executed). |
+| C1 Skeptic | **CORRECT-BUT-INCOMPLETE** — trading path could not be broken: FROZEN end-to-end on real GDX fixtures (gate warning reaches stdout; refusal correct), no candidate shadowing (rich-illiquid A vetoed → liquid B still entered), roll veto atomic (no half-executed roll; leg ran to expiry with correct cash), predicate edges fail closed (crossed, zero, penny, negative books), held-only duplicate latent-only, intraday byte-identical under FROZEN. Incompleteness = the five surviving body mutants (F1) and silent solo-engine vetoes (F2) — **both amended + mutant-verified same session**. |
+| C2 Dry run | Live Schwab GDX, post-close book: the contract the bot would have selected (71.5P) **refused at 26.4% rel-spread**; 4/48 put rows pass. Production gates against the RTH snapshot instead, where the historical entry-like median is 4.78% (63.6% of 50-ticker candidates pass) — the gate bites ghosts and thin names, not daylight liquidity. |
+| C3 Dollars | Prospective. The audit sized the gate at refusing **114/145 historical entries and 90.4% of contracts** — figures NOT reproducible from this repo (measuring script + OI source external; declared). $0 change to any existing book; the reset discards history anyway. |
+
+**Penny-put consequence, stated out loud:** a book at the minimum tick below ~$0.105 mid can
+never pass a 10% spread gate — the gate categorically refuses the micro-credit class. Aligned
+with A3's evidence (RIG surrendering 70.2% of banked premium to the closing tick), not in
+conflict; but it reshapes which cheap names ever enter, and the owner should know.
+
+**Incident, disclosed (gate-4 integrity):** during mutation testing, a mutant whose text was
+byte-for-byte the same length as the original, restored within the same second, left Python
+serving **stale mutant bytecode** while the source file was correct — pyc invalidation keys on
+(mtime, size). One "restored green" run was meaningless; caught because the M5 body test kept
+failing on correct-looking source. Remedied: all `__pycache__` purged, M5 re-run with a
+size-changing mutant (killed), both suites re-run on fresh bytecode (679 green), fingerprints
+re-verified. Process rule adopted for every future gate-4: mutants must change file size, and
+bytecode caches are purged between apply/restore. Recorded in session memory.
+
+**Declared (A1/A5):** audit's rel-spread denominator unknown (midpoint chosen, provisional);
+114/145 + 90.4% + ~84/day-ADV unreproducible from repo; RTH-snapshot `totalVolume` assumed
+intraday-cumulative and `openInterest` effectively prior-session (OPRA morning publish) —
+acceptable for floors, unverified.
 
 ---
 
@@ -509,5 +561,6 @@ test (E8).
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
 | 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |
+| 2026-08-01 | **A2 DONE.** Owner rulings: 25 accounts = alternate universes (size judged per account, never aggregated); 3 provisional decisions (covered calls ungated, midpoint denominator @0.10, ON-in-FROZEN idiom) — dialog declined, veto cheap. Analyst spec (veto-not-filter proven by measured delta drift; backtest parquets have NO OI/volume) → predicate + 4 veto sites + observability. Skeptic CORRECT-BUT-INCOMPLETE → both gaps amended (5 body-mutant killers, solo-engine warnings). **Stale-pyc incident** during gate 4 disclosed in the evidence block; process rule adopted. Suites 509+170=**679** on fresh bytecode. |
 | 2026-07-31 | **A17 DONE.** Analyst spec (schema map, 9 invariants, migration story) → capacity landed: `filled_contracts` on the seam, shared `close_short_fill`, I3 stale-size re-read, optional `opened_contracts`/`working_order` round-trip — zero migration, fingerprints byte-identical pre/post. Skeptic **COULD-NOT-BREAK**; its two capacity notes (ghost-fill guard, opened_contracts writer) amended + tested same session. Follow-up **A17b** filed. Suites 501+170=**671**. |
 | 2026-07-31 | **A19 DONE.** Red test → capture in chain + held-leg rows → skeptic **COULD-NOT-BREAK** (capture-only proven by execution three ways) → F5 amendment (quote-path value assertions + key-rename mutant). Live C2: GDX 109/109 rows populate. **Phase F note added: F4 deploy-timing** — deploy only while paused or a same-day pre-A19 snapshot gaps the day (declared). Suites 495+167=**662**. |
