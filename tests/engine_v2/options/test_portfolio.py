@@ -52,13 +52,19 @@ def test_universe_of_one_matches_solo_run_wheel():
             for t in port.trades]
     # VALUATION deliberately diverges as of 2026-07-31: the portfolio engine
     # marks its short book at the ask (owner decision, option B -- see
-    # test_mark_at_ask.py), the solo wheel still marks at the mid. So the
-    # portfolio equity is the more conservative of the two on every day that
-    # carries an open short, never the other way round, and the gap is the
-    # half-spread. If wheel.py is ever brought onto the same basis, this becomes
-    # equality again and the solo digest anchor breaks with it.
-    assert (port.equity <= solo.equity).all()
-    assert (solo.equity - port.equity).max() > 0        # the divergence is real
+    # test_mark_at_ask.py), the solo wheel still marks at the mid. E2: the old
+    # `<= everywhere, > 0 somewhere` form is what let audit mutations #1-#3
+    # (share value x0.99 / x0.5, -$1 when shares held) survive 630 tests --
+    # ANY bug that lowers portfolio equity by any amount passed it. The
+    # divergence is not "some gap": it is EXACTLY the half-spread on the open
+    # short, (ask - mid) * mult * contracts, on every day the short is open,
+    # and EXACTLY zero on every other day. Pin that number.
+    n = [t for t in solo.trades if t.action == "SELL_PUT"][0].contracts
+    half_spread = round((2.10 - 2.05) * 100 * n, 9)   # the fixture's ask - mid
+    div = (solo.equity - port.equity).round(9)
+    assert (div == half_spread).all(), (
+        f"E2: solo-vs-portfolio divergence must be exactly the half-spread "
+        f"{half_spread}, got {sorted(set(div))}")
     assert port.final_cash <= solo.final_cash           # residual settled at ask
 
 def test_routes_to_highest_vol_pctile():

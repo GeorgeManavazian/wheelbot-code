@@ -358,6 +358,11 @@ def main():
     # keeps every candidate an honest skipped_chains entry instead of a pull.
     from live.chain_store import load_chain_snapshot
     snap = None if args.smoke else load_chain_snapshot(obs)
+    if args.smoke:
+        # E4: the probe leg below needs GDX's chain, and a chop-gated day
+        # would otherwise pull no chains at all -- held tickers always get
+        # one (B5), so ride that path. Throwaway store; no state touched.
+        held_all = held_all | {"GDX"}
     market = _live_market(universe, held_all, obs, client, cfg.target_dte,
                           None if args.smoke else (snap if snap is not None else {}),
                           cfg.chop_max_ma_spread, cfg.chop_max_fast_spread,
@@ -366,8 +371,22 @@ def main():
     # steps: without it a position whose strike drifted outside the 12-strike
     # window is invisible to the take-profit and freezes at its last mark
     # (TMO 512.5P, carried at $11.30 while offered near $0.42). See held_legs.py.
-    merged = merge_held_legs(market, client,
-                             [st.positions for (st, _p) in loaded.values()], obs)
+    position_lists = [st.positions for (st, _p) in loaded.values()]
+    if args.smoke:
+        # E4: the smoke store holds no positions, so a connectivity check
+        # used to pass with the whole held-leg quote path broken. Inject one
+        # synthetic probe leg -- just below the pulled GDX chain's bottom
+        # strike, so it is a real listed contract the chain does NOT carry --
+        # into the MERGE CALL ONLY (never account state): the quote endpoint,
+        # the splice, and the unquoted disclosure all get exercised. A probe
+        # that fails to quote shows up as `unquoted`, which is itself signal.
+        probe = _smoke_probe_leg(market, obs)
+        if probe is not None:
+            print(f"[smoke] probe leg: GDX "
+                  f"{probe['short']['contract']['strike']}P "
+                  f"{probe['short']['contract']['expiry']} (merge-only)")
+            position_lists = position_lists + [[probe]]
+    merged = merge_held_legs(market, client, position_lists, obs)
     if merged["requested"]:
         print(f"held-leg quotes: {merged['merged']} spliced into chains "
               f"({merged['requested']} distinct legs held"
@@ -596,6 +615,27 @@ def main():
         if not _gap(day, "accounts_failed", accounts=failed):
             _correction(day, "accounts_failed", accounts=failed)
     return 0
+
+
+def _smoke_probe_leg(market, obs):
+    """E4: one synthetic held leg for --smoke's merge call. Strike = one grid
+    step BELOW the pulled GDX chain's bottom put strike (a real listed
+    contract the surveyed window does not carry -> the splice actually
+    splices); expiry = the chain's nearest expiry. None when GDX's chain is
+    absent (the probe is best-effort -- a dead chain pull is already loud)."""
+    ch = market.chain("GDX", obs)
+    if ch is None or not len(ch):
+        return None
+    puts = ch[ch["right"] == "P"]
+    if not len(puts):
+        return None
+    expiry = pd.Timestamp(puts["expiry"].min())
+    ks = sorted(float(k) for k in puts[puts["expiry"] == expiry]["strike"].unique())
+    step = min((b - a for a, b in zip(ks, ks[1:])), default=1.0) or 1.0
+    return {"ticker": "GDX", "smoke_probe": True,
+            "short": {"contract": {"root": "GDX", "expiry": str(expiry),
+                                   "strike": ks[0] - step, "right": "P"},
+                      "contracts": 1, "credit": 0.0, "last_mid": 0.0}}
 
 
 def _paths(capital, n, smoke=False):

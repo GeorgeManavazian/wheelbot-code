@@ -396,6 +396,14 @@ def test_trading_day_dead_quote_endpoint_still_fails_loud(tmp_path, monkeypatch,
     fresh = pd.Series([50.0, 50.5],
                       index=[obs - pd.Timedelta(days=1), obs])   # bar TODAY
     monkeypatch.setattr(data, "daily_closes", lambda c, tk: fresh)
+    # E4 marks GDX held-for-pull on --smoke; give it a chain so the zombie
+    # gate stays quiet and the flow reaches the held-marks judgment
+    exp = obs + pd.Timedelta(days=11)
+    chain = pd.DataFrame(
+        [[obs, exp, 11, 45.0, "P", 1.0, 1.1, 1.05, 1.05, -0.3, 0.2, 50.0]],
+        columns=["date", "expiry", "dte", "strike", "right", "bid", "ask",
+                 "mid", "close", "delta", "iv", "underlying"])
+    monkeypatch.setattr(data, "chain_frame", lambda *a, **k: chain)
     monkeypatch.setattr(run_daily, "merge_held_legs",
                         lambda *a, **k: {"requested": 4, "merged": 0,
                                          "unquoted": ["RIG 4.5P"], "no_chain": [],
@@ -416,3 +424,54 @@ def test_trading_day_dead_quote_endpoint_still_fails_loud(tmp_path, monkeypatch,
     assert "HELD MARKS FAILED" in out
     assert "paper day" not in out, "no account may step past dead held marks"
     assert alerts == [], "smoke keeps alert isolation even on this path (A23)"
+
+
+def test_smoke_run_probes_the_held_leg_merge(tmp_path, monkeypatch):
+    """E4: --smoke held zero positions, so a connectivity check could pass
+    with the entire held-leg quote path (merge, splice, unquoted disclosure)
+    broken. The smoke run must inject one synthetic probe leg -- derived from
+    the pulled GDX chain, just below its bottom strike -- into the MERGE call
+    only (never into account state), so the quote endpoint and splice wiring
+    are exercised every smoke run."""
+    import datetime as dt
+    import sys
+    import types
+    from zoneinfo import ZoneInfo
+    import live.data as data
+    from live import run_daily
+
+    monkeypatch.setenv("WHEELBOT_STATE_DIR", str(tmp_path))
+    obs = pd.Timestamp(dt.datetime.now(ZoneInfo("America/New_York")).date())
+    fresh = pd.Series([50.0, 50.5], index=[obs - pd.Timedelta(days=1), obs])
+    monkeypatch.setattr(data, "daily_closes", lambda c, tk: fresh)
+
+    exp = obs + pd.Timedelta(days=11)
+    chain = pd.DataFrame(
+        [[obs, exp, 11, float(k), "P", 1.0, 1.1, 1.05, 1.05, -0.3, 0.2, 50.0]
+         for k in (44, 45, 46, 47)],
+        columns=["date", "expiry", "dte", "strike", "right", "bid", "ask",
+                 "mid", "close", "delta", "iv", "underlying"])
+    monkeypatch.setattr(data, "chain_frame", lambda *a, **k: chain)
+    monkeypatch.setattr(run_daily, "send_alert", lambda *a, **k: True)
+
+    seen = []
+
+    def rec_merge(market, client, position_lists, obs_):
+        seen.append([p for lst in position_lists for p in lst])
+        return {"requested": 0, "merged": 0, "unquoted": [], "no_chain": [],
+                "error": None, "answered": 0}
+    monkeypatch.setattr(run_daily, "merge_held_legs", rec_merge)
+
+    fake = types.ModuleType("schwab_client")
+    fake.get_client = lambda: object()
+    monkeypatch.setitem(sys.modules, "schwab_client", fake)
+    monkeypatch.setattr(sys, "argv", ["run_daily.py", "--smoke"])
+    run_daily.main()
+
+    assert seen, "merge_held_legs never ran"
+    probes = [p for p in seen[0] if p.get("smoke_probe")]
+    assert probes, "E4: no probe leg reached the merge on --smoke"
+    c = probes[0]["short"]["contract"]
+    assert probes[0]["ticker"] == "GDX"
+    assert float(c["strike"]) < 44.0, \
+        "the probe must sit BELOW the surveyed bottom strike (splice path)"

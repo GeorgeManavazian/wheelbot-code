@@ -30,8 +30,36 @@ def test_nslots_1_vol_pctile_matches_solo_run_wheel():
                                selector="vol_pctile", n_slots=1)
     assert [(t.date, t.action, t.contracts, t.price_per_contract) for t in solo.trades] == \
            [(t.date, t.action, t.contracts, t.price_per_contract) for t in port.trades]
-    assert (port.equity <= solo.equity).all()
-    assert (solo.equity - port.equity).max() > 0
+    # E2 on real chains: the divergence is the ask-mark on OPEN SHORTS and
+    # nothing else. Reconstruct the open-short days from the trade log (entry
+    # date inclusive to exit date exclusive -- the exit day books the close
+    # and carries no liability at mark time) and pin: byte-equal equity on
+    # every no-short day, strictly-lower portfolio equity while a short is
+    # marked. The old `<= everywhere, > 0 somewhere` version is what audit
+    # mutations #1-#3 survived.
+    open_days = set()
+    open_since = None
+    for t in solo.trades:
+        if t.action in ("SELL_PUT", "SELL_CALL", "ROLL_OPEN"):
+            open_since = pd.Timestamp(t.date)
+        elif t.action in ("CLOSE_PUT", "CLOSE_CALL", "PUT_EXPIRED",
+                          "CALL_EXPIRED", "ASSIGNED", "CALLED_AWAY",
+                          "ROLL_CLOSE"):
+            if open_since is not None:
+                open_days.update(d for d in solo.equity.index
+                                 if open_since <= pd.Timestamp(d) < pd.Timestamp(t.date))
+                open_since = None
+    if open_since is not None:      # still open at the end of the run
+        open_days.update(d for d in solo.equity.index
+                         if pd.Timestamp(d) >= open_since)
+    div = (solo.equity - port.equity).round(9)
+    no_short = [d for d in div.index if d not in open_days]
+    assert no_short, "harness: the fixture must contain no-short days"
+    assert (div[no_short] == 0).all(), (
+        "E2: equity diverged on a day with NO open short -- the divergence "
+        "must be the ask-vs-mid liability mark and nothing else")
+    assert (div[sorted(open_days)] > 0).all(), \
+        "E2: an open short must mark strictly lower at the ask than at mid"
 
 
 def test_nslots_5_holds_multiple_and_never_two_per_ticker():
