@@ -90,3 +90,20 @@ def test_absent_token_file_stays_quiet(monkeypatch, tmp_path):
     calls = _patch_send(monkeypatch, ok=True)
     assert rn.token_age(str(tmp_path / "nope.json")) == 1
     assert not calls
+
+
+# ---- D7: OnFailure backstop ----
+
+def test_tick_failed_alerts_once_per_day(monkeypatch, tmp_path):
+    calls = _patch_send(monkeypatch, ok=True)
+    assert rn.tick_failed(str(tmp_path), "2026-07-24") == 0
+    assert rn.tick_failed(str(tmp_path), "2026-07-24") == 0
+    assert len(calls) == 1
+
+
+def test_tick_failed_retries_when_undelivered(monkeypatch, tmp_path):
+    _patch_send(monkeypatch, ok=False)
+    assert rn.tick_failed(str(tmp_path), "2026-07-24") != 0
+    calls = _patch_send(monkeypatch, ok=True)
+    assert rn.tick_failed(str(tmp_path), "2026-07-24") == 0
+    assert len(calls) == 1

@@ -75,12 +75,12 @@ def test_eod_failure_no_marker(sb):
     r = sb.tick(env={"TICK_RC_run_daily": "1"})
     assert not (sb.logs / ".dailyran-2026-07-24").exists()
     assert not any("sync_state" in c for c in sb.calls())
-    assert r.returncode == 0  # pinned CURRENT behavior; D9 flips this
+    assert r.returncode != 0  # D9: systemd must SEE the failure
 
 
-def test_weekend_runs_nothing(sb):
+def test_weekend_runs_only_spool_retry(sb):
     sb.tick(dow="6", hm="1700")
-    assert sb.calls() == []
+    assert all("retry-spool" in c for c in sb.calls())
 
 
 def test_intraday_error_alerts_once(sb):
@@ -103,3 +103,76 @@ def test_snapshot_window_marker_only_on_success(sb):
 def test_health_runs_after_cutoff(sb):
     sb.tick(dow="5", hm="2350")
     assert any("run_health.py" in c for c in sb.calls())
+
+
+# ---- Group D batch 3: the tick rewrite ----
+
+def test_health_runs_first(sb):
+    sb.tick(dow="5", hm="2350")
+    py_calls = [c for c in sb.calls()]
+    assert py_calls and "run_health.py" in py_calls[0], \
+        "D6: the watchdog must run before anything that can hang or abort"
+
+
+def test_saturday_token_nag_runs(sb):
+    (sb.root / "token.json").write_text("{}")
+    sb.tick(dow="6", hm="1000")
+    assert any("token-age" in c for c in sb.calls()), \
+        "D5: the nag must be eligible on every tick, weekends included"
+
+
+def test_nag_marker_only_on_delivered(sb):
+    (sb.root / "token.json").write_text("{}")
+    sb.tick(dow="6", hm="1000", env={"TICK_RC_run_notify": "1"})
+    assert not (sb.logs / ".tokennag-2026-07-24").exists(), \
+        "an undelivered nag must retry on the next tick"
+    sb.tick(dow="6", hm="1005")
+    assert (sb.logs / ".tokennag-2026-07-24").exists()
+
+
+def test_eod_sync_failure_retries_sync_only(sb):
+    """D10: split markers -- a GitHub hiccup must retry ONLY the push, never
+    re-run the 547-name trading day."""
+    sb.tick(dow="5", hm="1700", env={"TICK_RC_inline_sync": "1"})
+    assert (sb.logs / ".dailyran-2026-07-24").exists()
+    assert not (sb.logs / ".synced-2026-07-24").exists()
+    assert any("sync-failed" in c for c in sb.calls())
+    sb.tick(dow="5", hm="1705")
+    assert (sb.logs / ".synced-2026-07-24").exists()
+    assert sum("run_daily.py" in c for c in sb.calls()) == 1, \
+        "the trading day was re-run because a push failed"
+
+
+def test_intraday_sync_failure_alerts(sb):
+    env = {"TICK_OUT_run_intraday": "acct: closed 1 at TP (GDX)",
+           "TICK_RC_inline_sync": "1"}
+    r = sb.tick(dow="5", hm="1000", env=env)
+    assert any("sync-failed" in c for c in sb.calls()), \
+        "D10: a booked trade whose push failed must alert"
+    assert r.returncode != 0
+
+
+def test_intraday_nonzero_rc_alerts_even_without_error_text(sb):
+    env = {"TICK_OUT_run_intraday": "Traceback (most recent call last):",
+           "TICK_RC_run_intraday": "1"}
+    r = sb.tick(dow="5", hm="1000", env=env)
+    assert any("intraday-errors" in c for c in sb.calls()), \
+        "D1: a bare-traceback crash slipped the case-sensitive ERROR grep"
+    assert r.returncode != 0
+
+
+def test_heartbeat_written_every_tick(sb):
+    import json as _json
+    sb.tick(dow="5", hm="1000")
+    hb = sb.root / "data" / "live" / "heartbeat.json"
+    assert hb.exists(), "D14: no heartbeat, nothing off-VPS can judge freshness"
+    rec = _json.loads(hb.read_text())
+    assert rec["today"] == "2026-07-24"
+    assert rec["dailyran"] is False
+
+
+def test_heartbeat_reflects_completed_day(sb):
+    import json as _json
+    sb.tick(dow="5", hm="1700")
+    rec = _json.loads((sb.root / "data" / "live" / "heartbeat.json").read_text())
+    assert rec["dailyran"] is True

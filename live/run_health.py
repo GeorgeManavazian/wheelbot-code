@@ -9,7 +9,8 @@ import os
 import sys
 from zoneinfo import ZoneInfo
 
-from live.health import check_day, unalerted_gaps, EOD_WINDOW_CLOSE
+from live.health import (check_day, unalerted_gaps, intraday_last_tick,
+                         EOD_WINDOW_CLOSE, INTRADAY_ALIVE_HHMM)
 from live.alerts import send_alert
 
 ET = ZoneInfo("America/New_York")
@@ -27,6 +28,26 @@ def run_check(now_et, logs_dir=None, gaps_path=None, send=send_alert) -> str:
     status, _missed = check_day(now_et, ldir, gpath)
     if status in ("not_weekday", "too_early"):
         return status
+    # D1: nightly post-hoc intraday liveness. Only on a day whose EOD
+    # completed (VPS provably alive in the evening) -- a fully-dead day is
+    # the missed-day alert's job, not a duplicate email.
+    today = now_et.strftime("%Y-%m-%d")
+    imarker = os.path.join(ldir, f".intradayalerted-{today}")
+    if (os.path.exists(os.path.join(ldir, f".dailyran-{today}"))
+            and not os.path.exists(imarker)):
+        last = intraday_last_tick(ldir, today)
+        if last is None or last < INTRADAY_ALIVE_HHMM:
+            what = (f"last tick stamp {last} ET" if last
+                    else "NO intraday ticks at all")
+            body = (f"The intraday exit manager did not run to the close on "
+                    f"{today}: {what} (expected past {INTRADAY_ALIVE_HHMM} "
+                    f"ET). Take-profit exits after that point never fired -- "
+                    f"a dead exit engine looks identical to a quiet day.\n\n"
+                    f"Check intraday-{today}.log on the VPS.")
+            print(f"INTRADAY DEAD -- {body}")
+            if send(f"intraday manager died mid-session {today}", body):
+                open(imarker, "w").close()
+
     days = unalerted_gaps(gpath, ldir, now_et.date())
     if not days:
         print(f"health {now_et:%Y-%m-%d %H:%M}: {status}")

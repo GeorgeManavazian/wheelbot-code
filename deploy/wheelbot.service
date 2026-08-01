@@ -2,6 +2,9 @@
 Description=Wheel Bot tick (EOD run, intraday exits, health check)
 After=network-online.target
 Wants=network-online.target
+# D7: a failed tick (nonzero exit, D9) fires the alert unit. Inert until the
+# tick actually exits nonzero on failure -- which it now does.
+OnFailure=wheelbot-alert.service
 
 [Service]
 Type=oneshot

@@ -30,20 +30,30 @@ def market_is_open(now_et) -> bool:
     return now_et.weekday() < 5 and OPEN <= now_et.timetz().replace(tzinfo=None) <= CLOSE
 
 
-def main():
+def main() -> int:
+    """D1: the EXIT CODE is the dead-man's contract. 0 = clean pass (or an
+    honest out-of-hours no-op); nonzero = any account handler raised, or the
+    client/quote layer failed wholesale. The old runner returned None (exit 0)
+    even with all 25 accounts erroring, and the tick's case-sensitive
+    `grep ERROR` was the only tripwire -- a bare traceback slipped it."""
     now_et = dt.datetime.now(ET)
     if not market_is_open(now_et):
         print(f"market closed ({now_et:%Y-%m-%d %H:%M %Z}) — intraday skip")
-        return
+        return 0
 
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "schwab"))
-    from schwab_client import get_client
-    from live.marks import contract_quotes
-    client = get_client()
+    try:
+        from schwab_client import get_client
+        from live.marks import contract_quotes
+        client = get_client()
+    except Exception as e:                     # noqa: BLE001 -- deliberate
+        # wholesale failure (token lapse, import rot): no account can run
+        print(f"ERROR wholesale: {type(e).__name__}: {e} — no account ran")
+        return 2
     cfg = WheelConfig(ticker="SPY", starting_capital=100_000.0, **FROZEN)
     now = pd.Timestamp(now_et.replace(tzinfo=None))
 
-    total = 0
+    total, errors = 0, 0
     for cap, n in all_accounts():
         try:
             paths = account_paths(cap, n)
@@ -64,9 +74,11 @@ def main():
             print(f"{account_label(cap, n)}: closed {len(trades)} at TP "
                   f"({', '.join(t.contract.root for t in trades)})")
         except Exception as e:
+            errors += 1
             print(f"{account_label(cap, n)}: ERROR {type(e).__name__}: {e} — skipped")
     print(f"intraday {now_et:%H:%M %Z} — {total} TP close(s) across 25 accounts")
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

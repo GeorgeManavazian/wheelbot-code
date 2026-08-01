@@ -28,6 +28,8 @@ def test_alert_names_missed_days_and_real_deadline(tmp_path):
     g = str(tmp_path / "g.jsonl")
     append_gap("2026-07-23", "no_run", path=g)
     open(tmp_path / ".dailyran-2026-07-24", "w").close()
+    (tmp_path / "intraday-2026-07-24.log").write_text(
+        "intraday 15:55 ET — 0 TP close(s)\n")
     send, calls = _sender(ok=True)
     run_check(_et(2026, 7, 24, 23, 50), str(tmp_path), g, send=send)
     assert len(calls) == 1
@@ -63,6 +65,71 @@ def test_multi_day_outage_one_email_naming_all(tmp_path):
 def test_quiet_day_sends_nothing(tmp_path):
     g = str(tmp_path / "g.jsonl")
     open(tmp_path / ".dailyran-2026-07-24", "w").close()
+    (tmp_path / "intraday-2026-07-24.log").write_text(
+        "intraday 15:55 ET — 0 TP close(s)\n")
     send, calls = _sender(ok=True)
     r = run_check(_et(2026, 7, 24, 23, 50), str(tmp_path), g, send=send)
     assert calls == []
+
+
+# ---- D1: nightly post-hoc intraday liveness ----
+
+def _mk(tmp_path, day="2026-07-24", log_lines=None, marker=True):
+    if marker:
+        open(tmp_path / f".dailyran-{day}", "w").close()
+    if log_lines is not None:
+        (tmp_path / f"intraday-{day}.log").write_text("\n".join(log_lines) + "\n")
+
+
+def test_intraday_death_midsession_alerts_same_night(tmp_path):
+    """The intraday manager died 4x mid-session with zero signal (RTH
+    coverage 70.2%). The nightly check must notice the last tick stamp is
+    hours before the close and say so."""
+    g = str(tmp_path / "g.jsonl")
+    _mk(tmp_path, log_lines=["intraday 09:35 ET — 0 TP close(s) across 25 accounts",
+                             "intraday 14:00 ET — 1 TP close(s) across 25 accounts"])
+    send, calls = _sender(ok=True)
+    run_check(_et(2026, 7, 24, 23, 50), str(tmp_path), g, send=send)
+    assert len(calls) == 1
+    subject, body = calls[0]
+    assert "intraday" in subject.lower()
+    assert "14:00" in body
+
+
+def test_intraday_alert_delivered_marker_suppresses(tmp_path):
+    g = str(tmp_path / "g.jsonl")
+    _mk(tmp_path, log_lines=["intraday 10:00 ET — 0 TP close(s)"])
+    send, calls = _sender(ok=True)
+    run_check(_et(2026, 7, 24, 23, 50), str(tmp_path), g, send=send)
+    send2, calls2 = _sender(ok=True)
+    run_check(_et(2026, 7, 24, 23, 55), str(tmp_path), g, send=send2)
+    assert len(calls) == 1 and calls2 == []
+
+
+def test_intraday_alive_to_close_stays_quiet(tmp_path):
+    g = str(tmp_path / "g.jsonl")
+    _mk(tmp_path, log_lines=["intraday 09:35 ET — 0 TP close(s)",
+                             "intraday 15:55 ET — 0 TP close(s)"])
+    send, calls = _sender(ok=True)
+    run_check(_et(2026, 7, 24, 23, 50), str(tmp_path), g, send=send)
+    assert calls == []
+
+
+def test_no_intraday_log_on_a_completed_day_alerts(tmp_path):
+    # EOD completed (VPS alive in the evening) but the intraday manager
+    # never ticked once -- the never-started case
+    g = str(tmp_path / "g.jsonl")
+    _mk(tmp_path, log_lines=None)
+    send, calls = _sender(ok=True)
+    run_check(_et(2026, 7, 24, 23, 50), str(tmp_path), g, send=send)
+    assert len(calls) == 1
+    assert "intraday" in calls[0][0].lower()
+
+
+def test_vps_down_day_defers_to_missed_day_alert(tmp_path):
+    # no .dailyran marker: the missed-day alert owns this; no intraday email
+    g = str(tmp_path / "g.jsonl")
+    send, calls = _sender(ok=True)
+    run_check(_et(2026, 7, 24, 23, 50), str(tmp_path), g, send=send)
+    intraday_alerts = [c for c in calls if "intraday" in c[0].lower()]
+    assert intraday_alerts == []

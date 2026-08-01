@@ -1,0 +1,9 @@
+[Unit]
+Description=Wheel Bot tick-failure alert (fired by OnFailure=)
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/etf-bot
+Environment=PYTHONPATH=/home/ubuntu/etf-bot
+ExecStart=/home/ubuntu/etf-bot/.venv-live/bin/python /home/ubuntu/etf-bot/live/run_notify.py tick-failed

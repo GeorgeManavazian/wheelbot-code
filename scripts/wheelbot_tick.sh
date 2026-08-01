@@ -2,10 +2,21 @@
 # One tick of the live bot, fired every 5 minutes by systemd (wheelbot.timer).
 # All market-hours gating is done here in ET, so the system clock can stay UTC.
 #
-# Replaces scripts/wheelbot_loop.sh, whose `while true` loop died on reboot with
-# nothing to restart it. The other fix: the old loop ran `touch "$marker"`
-# unconditionally after run_daily.py, which is what made 2026-07-24's total pull
-# failure permanent. The marker is now written ONLY on exit 0.
+# Group D rewrite (owner decisions 2026-08-01):
+#   D6  the health check runs FIRST -- nothing that can hang or abort later
+#       may starve the watchdog.
+#   D9  every block records failure in FAIL; the tick exits nonzero so
+#       systemd (and D7's OnFailure alert unit) can see a bad tick.
+#   D1  the intraday manager's EXIT CODE is checked (a bare-traceback crash
+#       used to slip the case-sensitive ERROR grep with exit 0).
+#   D10 split markers: .dailyran = the trading day completed; .synced = the
+#       mirror caught up. A failed push retries ALONE on later ticks -- the
+#       547-name day is never re-run because GitHub hiccupped.
+#   D5  the token nag is eligible on EVERY tick (weekends included) and its
+#       marker is written only when the alert was DELIVERED (run_notify's
+#       exit-0-means-delivered contract, D3).
+#   D14 a heartbeat.json is refreshed every tick and rides the normal syncs,
+#       so the off-VPS GitHub freshness check can judge liveness.
 #
 # Alert logic lives in live/run_notify.py, not in `python -c` strings here --
 # alerting is the code that has to work on the worst day, so it gets to be
@@ -28,77 +39,73 @@ DOW="${WHEELBOT_FAKE_DOW:-$(ET +%u)}"
 HM="${WHEELBOT_FAKE_HM:-$((10#$(ET +%H%M)))}"
 TODAY="${WHEELBOT_FAKE_TODAY:-$(ET +%Y-%m-%d)}"
 MARKER="$LOGDIR/.dailyran-$TODAY"
+SYNCED="$LOGDIR/.synced-$TODAY"
+FAIL=0
 
-# --- weekly Schwab login reminder ------------------------------------------
-# MUST NOT key on token.json's mtime: schwab-py rewrites that file on every
-# access-token refresh, so its mtime is never more than minutes old and the
-# pre-2026-07-29 nag could never fire -- the bot would have gone blind at the
-# 7-day refresh-token lapse with no warning at all. live/tokenage.py reads the
-# `creation_timestamp` field, which is the real issue time.
+# --- Health check (dead-man's switch) FIRST (D6) ----------------------------
+# Sub-second no-op before 23:45 ET; deliberately AFTER the 23:30 EOD window
+# close so it never records a gap a later retry tick could still fill.
+if [ "$DOW" -le 5 ] && [ "$HM" -ge 2345 ]; then
+  py live/run_health.py >> "$LOGDIR/health-$TODAY.log" 2>&1 || FAIL=1
+fi
+
+# --- Failed-alert spool retry (D3): cheap file check, every tick ------------
+py live/run_notify.py retry-spool >> "$LOGDIR/tick.log" 2>&1 || true
+
+# --- Schwab login nag (D5): every tick, any day -----------------------------
+# MUST NOT key on token.json's mtime (schwab-py rewrites it constantly);
+# tokenage reads creation_timestamp. Marker only when the alert was DELIVERED
+# (exit 0) -- an undelivered nag retries next tick.
 TOKEN="${WHEELBOT_TOKEN_PATH:-$HOME/.schwab/token.json}"
 NAG="$LOGDIR/.tokennag-$TODAY"
-if [ -f "$TOKEN" ] && [ ! -f "$NAG" ] && [ "$DOW" -le 5 ] && [ "$HM" -ge 1700 ]; then
+if [ -f "$TOKEN" ] && [ ! -f "$NAG" ]; then
   if py live/run_notify.py token-age "$TOKEN" >> "$LOGDIR/tick.log" 2>&1; then
     touch "$NAG"
     log "token nag sent"
   fi
 fi
 
-# --- EOD daily run: weekdays, 17:00-23:30 ET, once per day -----------------
-# Fires on every tick inside the window; the marker stops the second success.
-# That repetition IS the retry mechanism for a failed run.
-#
-# The window runs late on purpose. The old loop had no upper bound at all, and
-# the 20:00 cap this script originally shipped with turned a RECOVERABLE evening
-# (owner re-runs the login at 20:30, the chain is still pullable) into a
-# permanent, unbackfillable gap. run_daily.py derives its trading date from ET,
-# so a late run still stamps the correct day.
-if [ "$DOW" -le 5 ] && [ "$HM" -ge 1700 ] && [ "$HM" -le 2330 ] && [ ! -f "$MARKER" ]; then
-  log "daily run start"
-  py live/run_daily.py >> "$LOGDIR/$TODAY.log" 2>&1
-  RC=$?
-  log "daily run exit $RC"
-  if [ "$RC" -eq 0 ]; then
-    touch "$MARKER"          # ONLY on success -- a failed run must retry
-    # A failed push used to be discarded here, so the mirror could freeze for
-    # weeks while everything reported success and the dashboard quietly aged.
-    if ! py -c "import sys; from live.sync import sync_state; sys.exit(0 if sync_state('data/live', 'eod $TODAY') else 1)" >> "$LOGDIR/$TODAY.log" 2>&1; then
-      py live/run_notify.py sync-failed "$TODAY" >> "$LOGDIR/tick.log" 2>&1
-      log "state sync FAILED (alerted)"
+# --- Intraday exit manager: weekdays 9:30-16:00 ET (D1) ---------------------
+if [ "$DOW" -le 5 ] && [ "$HM" -ge 930 ] && [ "$HM" -le 1600 ]; then
+  OUT=$(py live/run_intraday.py 2>&1)
+  IRC=$?
+  echo "$OUT" >> "$LOGDIR/intraday-$TODAY.log"
+
+  # D1: the exit code is the contract; the text grep (now case-insensitive,
+  # Traceback included) is belt-and-braces for partial per-account errors.
+  IERR="$LOGDIR/.intradayerr-$TODAY"
+  if [ "$IRC" -ne 0 ] || echo "$OUT" | grep -qiE "ERROR|Traceback"; then
+    FAIL=1
+    if [ ! -f "$IERR" ]; then
+      if py live/run_notify.py intraday-errors "$TODAY" "$LOGDIR/intraday-$TODAY.log" \
+        >> "$LOGDIR/tick.log" 2>&1; then
+        touch "$IERR"
+        log "intraday error alert sent"
+      fi
+    fi
+  fi
+
+  # push only when a trade was actually booked -- not on the ~78 daily no-ops.
+  # D10: the push result is CHECKED; a booked-but-unpushed trade alerts.
+  if echo "$OUT" | grep -qE "closed [1-9][0-9]* at TP"; then
+    if ! py -c "import sys; from live.sync import sync_state; sys.exit(0 if sync_state('data/live', 'intraday $TODAY') else 1)" \
+        >> "$LOGDIR/intraday-$TODAY.log" 2>&1; then
+      FAIL=1
+      ISYERR="$LOGDIR/.intradaysyncerr-$TODAY"
+      if [ ! -f "$ISYERR" ]; then
+        py live/run_notify.py sync-failed "$TODAY" >> "$LOGDIR/tick.log" 2>&1 \
+          && touch "$ISYERR"
+      fi
+      log "intraday sync FAILED (alerted)"
     fi
   fi
 fi
 
-# --- Intraday exit manager: weekdays 9:30-16:00 ET -------------------------
-if [ "$DOW" -le 5 ] && [ "$HM" -ge 930 ] && [ "$HM" -le 1600 ]; then
-  OUT=$(py live/run_intraday.py 2>&1)
-  echo "$OUT" >> "$LOGDIR/intraday-$TODAY.log"
-
-  # A dead exit engine prints output byte-identical to a quiet day ("0 TP
-  # close(s)"), so it could be broken for weeks with zero signal. Alert once per
-  # day if any account errored.
-  IERR="$LOGDIR/.intradayerr-$TODAY"
-  if echo "$OUT" | grep -q "ERROR" && [ ! -f "$IERR" ]; then
-    py live/run_notify.py intraday-errors "$TODAY" "$LOGDIR/intraday-$TODAY.log" \
-      >> "$LOGDIR/tick.log" 2>&1
-    touch "$IERR"
-    log "intraday error alert sent"
-  fi
-
-  # push only when a trade was actually booked -- not on the ~78 daily no-ops
-  if echo "$OUT" | grep -qE "closed [1-9][0-9]* at TP"; then
-    py -c "from live.sync import sync_state; sync_state('data/live', 'intraday $TODAY')" \
-      >> "$LOGDIR/intraday-$TODAY.log" 2>&1
-  fi
-fi
-
-# --- RTH chain snapshot: weekdays 15:20-15:55 ET, once per day (A16) -------
-# The 17:00 daily run consumes THIS snapshot instead of pulling chains from
-# the post-close book (measured 3-4x wider than tradeable). Placed after the
-# intraday block so a time-sensitive take-profit is never queued behind a
-# ~7-minute pull. Marker only on exit 0 -- a failed pull retries on every
-# remaining tick in the window. If the whole window fails, run_daily records
-# the day as a gap (owner decision 2026-07-31): no post-close fallback, ever.
+# --- RTH chain snapshot: weekdays 15:20-15:55 ET, once per day (A16) --------
+# Placed after the intraday block so a time-sensitive take-profit is never
+# queued behind a ~7-minute pull. Marker only on exit 0 -- a failed pull
+# retries on every remaining tick in the window (NOT a FAIL: retrying is the
+# design; a whole-window failure surfaces via run_daily's gap path).
 SNAPMARKER="$LOGDIR/.chainsnap-$TODAY"
 if [ "$DOW" -le 5 ] && [ "$HM" -ge 1520 ] && [ "$HM" -le 1555 ] && [ ! -f "$SNAPMARKER" ]; then
   log "chain snapshot start"
@@ -108,11 +115,50 @@ if [ "$DOW" -le 5 ] && [ "$HM" -ge 1520 ] && [ "$HM" -le 1555 ] && [ ! -f "$SNAP
   [ "$RC" -eq 0 ] && touch "$SNAPMARKER"
 fi
 
-# --- Health check (dead-man's switch): weekdays after 23:45 ET -------------
-# Deliberately AFTER the 23:30 EOD window close -- an earlier cutoff would
-# record a gap for a day that a later retry tick could still complete.
-if [ "$DOW" -le 5 ] && [ "$HM" -ge 2345 ]; then
-  py live/run_health.py >> "$LOGDIR/health-$TODAY.log" 2>&1
+# --- EOD daily run: weekdays, 17:00-23:30 ET, once per day ------------------
+# Fires on every tick inside the window; the marker stops the second success.
+# That repetition IS the retry mechanism for a failed run. The window runs
+# late on purpose (a 20:30 re-login evening stays recoverable); run_daily
+# derives its trading date from ET, so a late run still stamps the right day.
+if [ "$DOW" -le 5 ] && [ "$HM" -ge 1700 ] && [ "$HM" -le 2330 ] && [ ! -f "$MARKER" ]; then
+  log "daily run start"
+  py live/run_daily.py >> "$LOGDIR/$TODAY.log" 2>&1
+  RC=$?
+  log "daily run exit $RC"
+  if [ "$RC" -eq 0 ]; then
+    touch "$MARKER"          # ONLY on success -- a failed run must retry
+  else
+    FAIL=1
+  fi
 fi
 
-exit 0
+# --- Heartbeat (D14): refreshed every tick, BEFORE the EOD sync so the ------
+# pushed mirror carries today's truth. Written atomically; *.tmp is
+# gitignored so a crash mid-write stages nothing.
+HB="$REPO/data/live/heartbeat.json"
+DR=false; [ -f "$MARKER" ] && DR=true
+SY=false; [ -f "$SYNCED" ] && SY=true
+printf '{"tick_at": "%s", "today": "%s", "dailyran": %s, "synced": %s, "fail": %s}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TODAY" "$DR" "$SY" \
+  "$([ "$FAIL" -eq 0 ] && echo false || echo true)" > "$HB.tmp" \
+  && mv "$HB.tmp" "$HB"
+
+# --- EOD state sync (D10): retry the PUSH alone until it lands --------------
+# A failed push used to be attempted exactly once and the mirror could freeze
+# for weeks while everything reported success.
+if [ -f "$MARKER" ] && [ ! -f "$SYNCED" ]; then
+  if py -c "import sys; from live.sync import sync_state; sys.exit(0 if sync_state('data/live', 'eod $TODAY') else 1)" \
+      >> "$LOGDIR/$TODAY.log" 2>&1; then
+    touch "$SYNCED"
+  else
+    FAIL=1
+    SYERR="$LOGDIR/.syncerr-$TODAY"
+    if [ ! -f "$SYERR" ]; then
+      py live/run_notify.py sync-failed "$TODAY" >> "$LOGDIR/tick.log" 2>&1 \
+        && touch "$SYERR"
+    fi
+    log "state sync FAILED (alerted)"
+  fi
+fi
+
+exit $FAIL

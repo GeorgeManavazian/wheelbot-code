@@ -99,6 +99,27 @@ def check_day(now_et, logs_dir: str = LOGS_DIR, gaps_path=None,
     return "ok", missed
 
 
+# D1: the intraday manager must have ticked close to the bell. Its final
+# in-hours pass lands at 15:55-16:00; a last stamp before this means it died
+# mid-session (the audited 4-deaths pattern, RTH coverage 70.2%).
+INTRADAY_ALIVE_HHMM = "15:45"
+
+
+def intraday_last_tick(logs_dir, day):
+    """Last 'intraday HH:MM' stamp in the day's intraday log, or None when
+    the log is absent/empty (the manager never ticked at all)."""
+    last = None
+    try:
+        with open(os.path.join(logs_dir, f"intraday-{day}.log")) as f:
+            for line in f:
+                m = re.search(r"intraday (\d{2}:\d{2})", line)
+                if m:
+                    last = m.group(1)
+    except OSError:
+        return None
+    return last
+
+
 def unalerted_gaps(gaps_path, logs_dir, today, within_days: int = 14):
     """D3/D12: recorded no-run gaps whose alert has NOT been delivered yet
     (no .gapalerted-<day> marker). One failed send used to lose the missed-day

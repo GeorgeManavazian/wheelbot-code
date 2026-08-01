@@ -105,6 +105,37 @@ def intraday_errors(day: str, log_path: str) -> int:
     return 0 if ok else 1
 
 
+def tick_failed(logs_dir: str = None, day: str = None) -> int:
+    """D7: fired by systemd's OnFailure= when a tick exits nonzero. Once per
+    day (delivered marker); the tick's own per-failure alerts carry the
+    detail -- this is the backstop for failures those never reached."""
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+    from live.paths import in_state
+    if day is None:
+        day = _dt.datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    ldir = logs_dir or in_state("logs")
+    marker = os.path.join(ldir, f".tickfailalerted-{day}")
+    if os.path.exists(marker):
+        return 0
+    ok = send_alert(
+        f"tick FAILED {day}",
+        f"systemd reported wheelbot.service failed on {day} (nonzero tick "
+        f"exit). One or more blocks -- EOD run, intraday manager, sync, "
+        f"health -- failed this tick. Specific alerts should name the block; "
+        f"if none arrived, the failure happened before alerting could run.\n\n"
+        f"Check tick.log and the day's logs on the VPS.",
+    )
+    if ok:
+        try:
+            os.makedirs(ldir, exist_ok=True)
+            open(marker, "w").close()
+        except OSError:
+            pass
+        return 0
+    return 1
+
+
 def main(argv) -> int:
     if len(argv) < 2:
         print(__doc__)
@@ -118,6 +149,8 @@ def main(argv) -> int:
     if cmd == "intraday-errors":
         return intraday_errors(argv[2] if len(argv) > 2 else "unknown-date",
                                argv[3] if len(argv) > 3 else "")
+    if cmd == "tick-failed":
+        return tick_failed()
     if cmd == "retry-spool":
         sent, remaining = retry_spool()
         if sent or remaining:
