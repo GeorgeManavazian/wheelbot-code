@@ -37,6 +37,79 @@ class PortfolioResult:
     n_campaigns_opened: int = 0
 
 
+# A10: corporate-action detect-and-refuse (provisional owner defaults,
+# 2026-08-01: confirm band 0.80/1.25 · gap backstop 0.25 · manual clearing).
+# A split RESTATES history: the fresh series' close at prev_d stops matching
+# the stored last_spot, off by exactly the ratio, no market noise. A real
+# crash never rewrites yesterday. Fires only through a market providing
+# prior_close() -- LiveMarket; BatchMarket never grows it (hasattr-pinned),
+# so batch runs are byte-identical by construction.
+CA_RESTATE_LO, CA_RESTATE_HI = 0.80, 1.25
+CA_GAP_BACKSTOP = 0.25
+CA_WATCH_CAL_DAYS = 7          # ~5 sessions of re-checks for a lagged adjust
+
+
+def _ca_guard(pos, market, tk, d, prev_d, warnings):
+    """Returns 'frozen' (skip the position entirely), 'defer' (mark and TP
+    normally, refuse settlement today), or None. Runs BEFORE last_spot is
+    overwritten -- updating it on a hit would erase the detector's own
+    evidence (mutation target)."""
+    subj = pos["short"]["contract"] if pos.get("short") else tk
+    if pos.get("ca_frozen"):
+        warnings.append((d, "ca_confirmed_frozen", subj))
+        return "frozen"
+    prior = getattr(market, "prior_close", None)
+    if prior is None:
+        return None                       # batch: no capability, no guard
+    last = pos.get("last_spot")
+    if not last or last <= 0:
+        return None    # unjudgeable stored spot (C17 class) -- declared hole
+
+    def _freeze(ratio, ref_date):
+        pos["ca_frozen"] = {"date": str(pd.Timestamp(d).date()),
+                            "stored_spot": float(last),
+                            "ratio": round(float(ratio), 6),
+                            "restated_close_of": str(ref_date)}
+        pos.pop("ca_watch", None)
+        warnings.append((d, "ca_confirmed_frozen", subj))
+
+    # a pending watch: re-check the WATCHED date first (lagged adjustment)
+    watch = pos.get("ca_watch")
+    if watch is not None:
+        wd = pd.Timestamp(watch["date"])
+        fp = prior(tk, wd)
+        if fp is not None and fp > 0 and watch["spot"] > 0:
+            wr = fp / watch["spot"]
+            if wr <= CA_RESTATE_LO or wr >= CA_RESTATE_HI:
+                _freeze(wr, watch["date"])
+                return "frozen"
+        if (pd.Timestamp(d) - wd).days > CA_WATCH_CAL_DAYS:
+            pos.pop("ca_watch", None)     # bound reached, nothing restated
+
+    if prev_d is None:
+        return None
+    fresh_prev = prior(tk, prev_d)
+    if fresh_prev is not None and fresh_prev > 0:
+        ratio = fresh_prev / last
+        if ratio <= CA_RESTATE_LO or ratio >= CA_RESTATE_HI:
+            _freeze(ratio, str(pd.Timestamp(prev_d).date()))
+            return "frozen"
+        restate_clean = True
+    else:
+        restate_clean = False             # unjudgeable -> suspect via gap
+    spot_today = market.spot(tk, d, last)
+    gap = abs(spot_today / last - 1.0) if spot_today else 0.0
+    if gap >= CA_GAP_BACKSTOP:
+        if pos.get("ca_watch") is None:   # one-shot: keep the ORIGINAL pair
+            pos["ca_watch"] = {"date": str(pd.Timestamp(prev_d).date()),
+                               "spot": float(last)}
+        warnings.append((d, "ca_suspect_settlement_deferred", subj))
+        return "defer"
+    if not restate_clean:
+        return None    # no reference close AND no gap: a data hole, not a CA
+    return None
+
+
 @dataclass
 class PortfolioState:
     cash: float
@@ -136,6 +209,11 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
             closed_today.add(e["contract"])
     for pos in positions:
         tk = pos["ticker"]
+        # A10: BEFORE the last_spot overwrite -- the guard's evidence is the
+        # stored spot vs the fresh series' restated history
+        ca = _ca_guard(pos, market, tk, d, prev_d, warnings)
+        if ca == "frozen":
+            continue          # no TP, no settlement, no covered call, no mark
         day_chain = market.chain(tk, d)
         spot = market.spot(tk, d, pos["last_spot"])
         pos["last_spot"] = spot
@@ -160,6 +238,14 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                          if pd.Timestamp(e["date"]).normalize() == day_norm]
                         + [{"date": day_norm, "contract": c}])
             if short is not None and d >= c.expiry:
+                if ca == "defer":
+                    # A10 suspect day: a >=25% gap with clean (or unjudgeable)
+                    # restatement. Marks and TP ran normally above; only
+                    # SETTLEMENT waits one session -- booking strike-vs-close
+                    # arithmetic across a possible corporate action is the
+                    # $42,750 class. A real crash re-checks clean tomorrow and
+                    # settles via the late-expiry path (tested).
+                    continue
                 # re-read the size: a partial TP fill above shrank the leg, and
                 # settling the stale pre-fill `n` would assign contracts that
                 # were already bought back (A17/I3)

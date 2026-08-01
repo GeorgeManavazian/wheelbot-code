@@ -28,6 +28,12 @@ def _pos_to_dict(p):
     # byte-identical to before the field existed.
     if p.get("working_order") is not None:
         d["working_order"] = p["working_order"]
+    # A10: freeze/watch survive the round trip or a corporate-action freeze
+    # silently un-freezes overnight. Written only when present (last_ask
+    # precedent -- legacy files byte-identical).
+    for k in ("ca_frozen", "ca_watch"):
+        if p.get(k) is not None:
+            d[k] = p[k]
     sh = p["short"]
     if sh is None:
         d["short"] = None
@@ -54,6 +60,9 @@ def _pos_from_dict(d):
     p = {k: d[k] for k in _POS_SCALARS}
     if d.get("working_order") is not None:
         p["working_order"] = d["working_order"]
+    for k in ("ca_frozen", "ca_watch"):
+        if d.get(k) is not None:
+            p[k] = d[k]
     sh = d["short"]
     if sh is None:
         p["short"] = None

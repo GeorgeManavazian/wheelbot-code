@@ -154,6 +154,23 @@ class LiveMarket:
         pre = s[s.index <= pd.Timestamp(expiry)]
         return float(pre.iloc[-1]) if len(pre) else None
 
+    def prior_close(self, ticker, day):
+        """A10 capability: the FRESH series' close at a past date, exact-date
+        only. Schwab restates history retroactively on a split, so comparing
+        this against the spot the engine STORED that day is the corporate-
+        action detector. BatchMarket deliberately never grows this method
+        (hasattr-pinned) -- a batch series cannot restate against itself."""
+        s = self._closes.get(ticker)
+        if s is None:
+            return None
+        d = pd.Timestamp(day)
+        try:
+            v = s.loc[d]
+        except KeyError:
+            return None
+        v = float(v.iloc[-1] if hasattr(v, "iloc") else v)
+        return v if v > 0 else None
+
     def regime_row(self, ticker, day):
         return self._rows.get(ticker)
 

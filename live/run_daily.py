@@ -530,6 +530,7 @@ def main():
     stepped, failed, already = 0, [], []
     naked_all = set()   # A4: tickers whose covered call was unreachable, any account
     unsettled_all = {}  # A14: contract -> days-late, any account
+    frozen_all = set()  # A10: corporate-action-frozen legs, any account
     for (cap, n) in accounts:
         state, paths = loaded[(cap, n)]
         label = "_smoke" if args.smoke else account_label(cap, n)
@@ -552,6 +553,8 @@ def main():
                            paths["snapshots"])
             naked_all |= {w[2] for w in r.warnings
                           if w[1] == "covered_call_unreachable"}
+            frozen_all |= {str(w[2]) for w in r.warnings
+                           if w[1] == "ca_confirmed_frozen"}
             for key, late in collect_unsettled(r.warnings).items():
                 unsettled_all[key] = max(unsettled_all.get(key, 0), late)
             stepped += 1
@@ -572,6 +575,17 @@ def main():
                    f"{day}: expiry close still missing for: {legs}. The leg "
                    f"stays open and retries daily; if this repeats, suspect a "
                    f"delisting or corporate action (A10).")
+    if frozen_all:
+        # A10: ONE deduped alert, repeating daily until a human clears the
+        # freeze (owner-manual by design -- a sticky wrong freeze is loud and
+        # cheap; a wrongly-cleared split is the $42,750 class). Suspects
+        # (one-day settlement deferrals) print via the generic path only.
+        _alert(f"CORPORATE ACTION suspected -- {len(frozen_all)} leg(s) FROZEN",
+               f"{day}: prior-session closes were RESTATED against stored "
+               f"state for: {sorted(frozen_all)}. TP, settlement and covered "
+               f"calls are suspended on these positions. Strike/shares/basis "
+               f"need manual restatement, then clear ca_frozen in the state "
+               f"file (A10; this alert repeats daily until cleared).")
     if naked_all:
         # A4: ONE deduped alert for all 25 accounts (heavy overlap, avg 7.2x
         # replication) -- shares sitting naked must reach the owner's inbox,

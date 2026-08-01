@@ -139,6 +139,7 @@ def contract_quotes(client, positions) -> dict:
     the intraday TP check + buy_cost need (live_marks returns only a single mark).
     One batched quote pull; {} on any failure; skips a leg missing bid or ask."""
     sym_to_tk = {}
+    sym_last = {}    # A10: stored last_spot per leg, for the underlying-gap gate
     for p in positions:
         short = p.get("short")
         if not short:
@@ -147,6 +148,7 @@ def contract_quotes(client, positions) -> dict:
         sym = occ_symbol(_contract_field(c, "root"), _contract_field(c, "expiry"),
                          _contract_field(c, "strike"), _contract_field(c, "right"))
         sym_to_tk[sym] = p["ticker"]
+        sym_last[sym] = p.get("last_spot")
     if not sym_to_tk:
         return {}
     try:
@@ -211,6 +213,20 @@ def contract_quotes(client, positions) -> dict:
         if qdate != today_et:
             print(f"stale-quote gate: {sym} quoted {qdate}, today is "
                   f"{today_et} -- prior-session book refused (holiday?)")
+            continue
+        # A10: split morning, before any EOD detection has run -- a quote
+        # whose OWN underlyingPrice sits >=25% from the spot the engine
+        # stored is a possible corporate action; acting on it books the
+        # phantom-close class. Refuse the leg like an absent quote (the A7
+        # degrade: refusal == leg skipped this tick). Judged only when both
+        # numbers are judgeable; last_spot<=0 is the C17 class, declared.
+        und = _num(node.get("underlyingPrice"))
+        last = _num(sym_last.get(sym))
+        if (und is not None and und > 0 and last is not None and last > 0
+                and abs(und / last - 1.0) >= 0.25):
+            print(f"corporate-action gate: {sym} underlying {und} vs stored "
+                  f"last_spot {last} ({und / last - 1.0:+.1%}) -- refused "
+                  f"this tick (possible split/restatement, A10)")
             continue
         mk = _num(node.get("mark"))
         mid = mk if (mk is not None and mk > 0) else (bid + ask) / 2.0

@@ -186,3 +186,36 @@ def test_directory_fsync_after_rename(tmp_path, monkeypatch):
     st.save_state(st.PortfolioState(cash=1.0, positions=[]), p)
     assert any(fd in fsynced for fd in dir_fds), \
         "the state directory was never fsynced after the rename"
+
+
+def test_ca_freeze_and_watch_survive_the_round_trip(tmp_path):
+    """A10: `_POS_SCALARS` silently DROPS unlisted keys on save (the exact
+    trap the A21 analyst flagged) -- a freeze that evaporates on reload
+    un-freezes a corrupted position overnight. Optional-when-absent like
+    last_ask: files without the keys stay byte-identical."""
+    from src.engine_v2.options.portfolio import PortfolioState
+    from live.state import save_state, load_state
+    p = str(tmp_path / "state.json")
+    pos = {"ticker": "XYZ", "shares": 0, "phase": "PUT", "basis": None,
+           "premium": 0.0, "campaign": 1, "last_spot": 104.0,
+           "ca_frozen": {"date": "2026-08-01", "stored_spot": 104.0,
+                         "ratio": 0.5, "restated_close_of": "2026-07-31"},
+           "ca_watch": {"date": "2026-07-31", "spot": 104.0},
+           "short": None}
+    save_state(PortfolioState(cash=1.0, positions=[pos]), p)
+    got = load_state(p).positions[0]
+    assert got.get("ca_frozen") == pos["ca_frozen"], \
+        "A10: the freeze evaporated on the state round trip"
+    assert got.get("ca_watch") == pos["ca_watch"]
+
+
+def test_positions_without_ca_keys_stay_key_identical(tmp_path):
+    from src.engine_v2.options.portfolio import PortfolioState
+    from live.state import save_state, load_state
+    p = str(tmp_path / "state.json")
+    pos = {"ticker": "XYZ", "shares": 0, "phase": "PUT", "basis": None,
+           "premium": 0.0, "campaign": 1, "last_spot": 104.0, "short": None}
+    save_state(PortfolioState(cash=1.0, positions=[pos]), p)
+    got = load_state(p).positions[0]
+    assert "ca_frozen" not in got and "ca_watch" not in got, \
+        "absent CA keys must stay absent (legacy files byte-identical)"

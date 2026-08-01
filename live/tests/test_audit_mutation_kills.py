@@ -133,3 +133,78 @@ def test_mutation9_dashboard_live_pull_returns_ask_not_mid():
     out = live_asks(_Client(), positions)
     assert out == {"RIG": 0.10}, \
         "audit mutation #9: the dashboard priced the book at mid, not ask"
+
+
+# ---- A10 intraday refusals ----
+
+def test_intraday_quote_with_split_shaped_underlying_gap_is_refused(capsys):
+    """A10: split morning, EOD detection has not run yet -- the 10:00 manager
+    would book a phantom close against pre-split state. A quote whose OWN
+    underlyingPrice gaps >=25% from the stored last_spot is refused like an
+    absent quote (the A7 degrade), loudly."""
+    from live.marks import contract_quotes
+    sym = occ_symbol("XYZ", EXP, 100.0, "P")
+
+    class _Client:
+        def get_quotes(self, syms):
+            class R:
+                def json(self):
+                    import time
+                    return {sym: {"quote": {"bidPrice": 0.01, "askPrice": 0.05,
+                                            "underlyingPrice": 52.0,
+                                            "quoteTimeInLong": int(time.time() * 1000)}}}
+            return R()
+
+    positions = [{"ticker": "XYZ", "last_spot": 104.0,
+                  "short": {"contract": {"root": "XYZ", "expiry": str(EXP),
+                                         "strike": 100.0, "right": "P"}}}]
+    out = contract_quotes(_Client(), positions)
+    assert "XYZ" not in out, \
+        "A10: intraday manager accepted a quote across a 50% underlying gap"
+    assert "corporate-action" in capsys.readouterr().out.lower()
+
+
+def test_intraday_quote_with_normal_underlying_passes():
+    from live.marks import contract_quotes
+    sym = occ_symbol("XYZ", EXP, 100.0, "P")
+
+    class _Client:
+        def get_quotes(self, syms):
+            class R:
+                def json(self):
+                    import time
+                    return {sym: {"quote": {"bidPrice": 0.01, "askPrice": 0.05,
+                                            "underlyingPrice": 103.0,
+                                            "quoteTimeInLong": int(time.time() * 1000)}}}
+            return R()
+
+    positions = [{"ticker": "XYZ", "last_spot": 104.0,
+                  "short": {"contract": {"root": "XYZ", "expiry": str(EXP),
+                                         "strike": 100.0, "right": "P"}}}]
+    out = contract_quotes(_Client(), positions)
+    assert "XYZ" in out
+
+
+def test_intraday_manager_skips_frozen_positions():
+    """A10: a ca_frozen position must not TP intraday either -- the freeze
+    means every stored number is in unknown units."""
+    from src.engine_v2.options.portfolio import PortfolioState
+    from src.engine_v2.options.select import Contract
+    from live.intraday import manage_intraday
+    from live.marks import Mark
+    from src.engine_v2.options.wheel import WheelConfig
+    exp = EXP
+    pos = {"ticker": "XYZ", "shares": 0, "phase": "PUT", "basis": None,
+           "premium": 0.0, "campaign": 1, "last_spot": 104.0,
+           "ca_frozen": {"date": "2026-08-01", "stored_spot": 104.0,
+                         "ratio": 0.5},
+           "short": {"contract": Contract("XYZ", exp, 100.0, "P"),
+                     "contracts": 9, "credit": 2.00, "last_mid": 2.0}}
+    st = PortfolioState(cash=10_000.0, positions=[pos])
+    cfg = WheelConfig(ticker="XYZ", starting_capital=100_000.0,
+                      put_delta=0.30, call_delta=0.50, target_dte=11,
+                      take_profit_pct=0.60, call_min_strike="basis")
+    trades = manage_intraday(st, {"XYZ": Mark(0.01, 0.05, 0.03)}, cfg,
+                             pd.Timestamp("2026-07-21 10:00"))
+    assert trades == [], "A10: the intraday manager closed a frozen leg"
+    assert pos["short"] is not None

@@ -287,19 +287,60 @@ password would block every push — acceptable, noted.
 
 | ID | Fix | Status | Evidence |
 |---|---|---|---|
-| E1 | Pin the equity mark exactly for a covered position (shares **and** short) | TODO | |
-| E2 | Replace the weakened equivalence assertions with an exact divergence assertion | TODO | |
-| E3 | Cover the dashboard's live-quote path | TODO | |
-| E4 | Give `--smoke` a non-empty position set so it exercises the merge | TODO | |
-| E5 | Assert on behaviour, not fixtures, in the two flagged tests | TODO | |
-| E6 | Rewrite `test_all_modules_follow_the_override` so it stops proving the opposite | TODO | |
-| E7 | Re-run all nine surviving mutations; every one must now be killed | TODO | |
+| E1 | Pin the equity mark exactly for a covered position (shares **and** short) | **DONE** | commit `05793c9`, `test_equity_mark_pin.py` — equity == cash + shares×spot − ask×mult×n to the cent, covered AND bare-shares branches. Kills audit mutations #1-#3 (verified by execution). |
+| E2 | Replace the weakened equivalence assertions with an exact divergence assertion | **DONE** | commit `05793c9`. Synthetic fixture: divergence == exactly the half-spread. Real chains: byte-equal on every no-short day (trade-log reconstruction incl. CALL legs + rolls), strictly lower while a short is marked. |
+| E3 | Cover the dashboard's live-quote path | **DONE** | commit `05793c9`, `test_mutation9_dashboard_live_pull_returns_ask_not_mid` — fake client, mark 0.03 vs ask 0.10, must return 0.10. |
+| E4 | Give `--smoke` a non-empty position set so it exercises the merge | **DONE** | commit `05793c9`. Synthetic probe leg one grid step below GDX's bottom strike, injected into the MERGE CALL ONLY (never account state); GDX rides the held-pull path so chop-gated days can't skip it. Failed probe = `unquoted` = still signal. Mutants P1/P2 killed. |
+| E5 | Assert on behaviour, not fixtures, in the two flagged tests | **DONE (discharged)** | dedup-fixture gap covered by `test_mutation7_dedup_key_keeps_distinct_legs_per_ticker` (same ticker, distinct strikes, + true-dup case); the outside-window row test has value-asserted every field since the A19-F5 amendment. No rewrite needed — receipts in `05793c9`'s message. |
+| E6 | Rewrite `test_all_modules_follow_the_override` so it stops proving the opposite | **DONE** | commit `05793c9`. Fresh-interpreter subprocess with env set pre-import (the systemd contract; the A14-incident lesson). Non-vacuity proven with an override-ignored mutant. |
+| E7 | Re-run all nine surviving mutations; every one must now be killed | **DONE** | commit `05793c9`. All nine re-applied at their current sites, each now fails ≥1 test (receipts: #1-#3 → 3 failures each via E1/E2; #4-#9 → 1 failure each via `test_audit_mutation_kills.py`), restores green. |
 | C16 | Surface `days_shares_uncovered` per account on the dashboard (incremented + persisted, zero live readers) | MED | TODO | filed from the A4 analyst, 2026-08-01 |
 | A21b | Chain store drops unknown columns on load — flags die on round-trip (from the A21 analyst, 2026-08-01; fix inside A21's implementation) | MED | BLOCKED with A21 | |
+| A10b | Dead OCC symbol (reverse split/symbol change/delisting) sits `unquoted` indefinitely, TP suspended, print-only — needs N-consecutive-days escalation (C16b class) | MED | TODO | filed from the A10 analyst, 2026-08-01 |
+| A10c | B10's nonStandard/multiplier drop is SILENT (`live/data.py:104-106`, no print) — the one place a contract-side corporate action becomes visible leaves no trace | LOW | TODO | filed from the A10 analyst, 2026-08-01 |
+| A10d | Declared assumption: Schwab candles split-adjusted but NOT special-dividend-adjusted — verify on first live special div; wrong ⇒ restatement check false-fires (caught by signal (b) regardless) | LOW | TODO (verify live) | filed from the A10 analyst, 2026-08-01 |
+| A10e | Batch chains may contain unadjusted CA fossils beyond the one XOP `DEFAULT_CLEAN_START` fence (~19 candidates found in underlying histories) — backtest integrity sweep | LOW | TODO | filed from the A10 analyst, 2026-08-01 |
 | A21c | `held_marks_failed` judged before holiday/snapshot classification — holiday + dead quote endpoint = all-evening retry spam | MED | **DONE** | commit `7f90fee`. Block relocated after every no-session/no-snapshot exit; positive-path pin added (trading day + dead endpoint → exit 1 loud BEFORE any account steps — this is also the B4 wiring test the Group B batch declared missing). Mutants Y1 (block deleted) + Y2 (order reverted) killed. Declared: a skipped-day gap now files its gap instead of the held-marks retry loop (nothing steps on such a day; no retry can rebuild an RTH snapshot). |
 | C17 | `last_spot=0.0` positions render −100% "ITM" on the dashboard (HAL/WBD, real) | LOW | TODO | filed from the A21 analyst, 2026-08-01; display only |
 | C16b | Escalation for the A3b refusal class: N consecutive `call_gated_unclosable` days on one ticker → email (today it logs daily, forever, and never emails — while A4's floor-above-window class emails daily; same physical condition, two tiers). Needs persisted per-ticker consecutive-day state; owner picks N. | MED | TODO | filed from the A3b skeptic F1, 2026-08-01. Measured: SLV router-BASE(basis) backtest shows 295 gated-warning days (multi-week naked stretches are real, not hypothetical); live book currently has zero CALL-phase holdings so the class is prospective. |
 | E8 | `run_chain_snapshot.main()` wiring tests (zombie wiring, partial-exit-1, save-recheck call site, `--force`) — predicates are tested, the wiring is executed only by the A16 skeptic's S1 run and the C2 dry run | TODO | filed from skeptic F6, 2026-07-31 |
+
+---
+
+## A10 — analyst spec summary (delivered 2026-08-01 session 2)
+
+**In plain language.** When a stock splits 2-for-1, every share turns into two half-price
+shares — nothing is lost, but every number the bot WROTE DOWN yesterday (strike, share count,
+cost basis) is now in the wrong units. The audit showed the bot booking a $42,750 loss that
+never happened, silently. The analyst re-proved that through the real engine (zero warnings),
+then found a clean tell: after a split, the data vendor rewrites HISTORY — yesterday's close
+in today's fresh pull no longer matches the close the bot stored yesterday (off by exactly
+the split ratio). A real crash never rewrites yesterday. So: compare stored-yesterday vs
+pulled-yesterday; mismatch → freeze the position loudly and email until a human restates the
+numbers; match but huge gap → defer settlement one day and re-check (auto-clears on a real
+crash). Entries are safe either way (all fresh same-day data, proven); only HELD positions mix
+old numbers with new data.
+
+**Key measured facts:** ~19 real split fossils in 9y of local history (~0.1-0.2/yr would land
+on a held leg); gap-threshold-only detection is impossible (GL 2024 fraud crash −53.1%
+impersonates a 2:1 split; the restatement check separates them); 25% gap backstop ≈ 0.3 false
+positives/yr on the held book, each costing one auto-cleared day of deferred settlement;
+Schwab restates with zero market noise (XLE/XLK/XLU 2025 splits vs SLV 2026 crash, verified in
+local data both ways). A14 never fires on a split (the close EXISTS, it's just untrusted) —
+A10 needs its own alert kind. Design is capability-gated like A15 (`LiveMarket.prior_close`;
+BatchMarket never grows it → goldens/fingerprints untouched by construction).
+
+**Provisional defaults (owner asleep, veto cheap — bot paused):** D1 gap backstop 25% ·
+D2 restatement confirm band ratio ≤0.80/≥1.25 · D3 freeze clearing MANUAL-only (a sticky wrong
+freeze is loud and cheap; a wrongly-cleared split is the $42,750 class) · D4 no entry-veto on
+ca_suspect (entries proven safe). Full spec + receipts in the analyst report; probes in
+session scratchpad `analyst-a10/`.
+
+**New candidate rows from the analyst (filed below):** A10b (dead-OCC-symbol unquoted legs
+never escalate — C16b class), A10c (B10's nonStandard drop is silent — the one contract-side
+CA signal leaves no trace), A10d (declared assumption: Schwab candles not special-dividend-
+adjusted — verify live), A10e (batch chains may hold more unadjusted CA fossils than the one
+XOP fence — integrity sweep, LOW).
 
 ---
 

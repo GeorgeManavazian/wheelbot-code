@@ -28,6 +28,10 @@ def manage_intraday(state, quotes, cfg, now):
     today = pd.Timestamp(now).normalize()
     trades = []
     for pos in state.positions:
+        if pos.get("ca_frozen"):
+            # A10: every stored number on a frozen position is in unknown
+            # units until a human restates them -- no intraday TP either
+            continue
         short = pos.get("short")
         if short is None:
             continue

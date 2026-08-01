@@ -475,3 +475,60 @@ def test_smoke_run_probes_the_held_leg_merge(tmp_path, monkeypatch):
     assert probes[0]["ticker"] == "GDX"
     assert float(c["strike"]) < 44.0, \
         "the probe must sit BELOW the surveyed bottom strike (splice path)"
+
+
+def test_frozen_leg_surfaces_in_log_and_alert_wiring_exists(tmp_path, capsys):
+    """A10: a ca-frozen day must be loud twice over -- the generic warning
+    printer names it in the run log (behavioral), and main() aggregates
+    ca_confirmed_frozen across accounts into ONE daily FROZEN alert (source
+    pin -- the main() harness cost is the WHEELBOT_STATE_DIR trap, same
+    declared trade as the C13 lint)."""
+    from live.run_daily import paper_step
+    from src.engine_v2.options.chain import Contract
+
+    class _M:
+        universe = ["XYZ"]
+        _obs = OBS
+
+        def chain(self, tk, d):
+            return None
+
+        def spot(self, tk, d, fb):
+            return 52.5
+
+        def settle_price(self, tk, expiry):
+            return 52.5
+
+        def prior_close(self, tk, d):
+            return 52.0                      # stored 104 -> restated x0.5
+
+        def regime_row(self, tk, day):
+            return None
+
+        def eligible(self, tk, day):
+            return True
+
+    c = Contract("XYZ", OBS + pd.Timedelta(days=7), 100.0, "P")
+    state = PortfolioState(cash=100_000.0, positions=[{
+        "ticker": "XYZ", "shares": 0, "phase": "PUT", "basis": None,
+        "premium": 0.0, "campaign": 1, "last_spot": 104.0,
+        "short": {"contract": c, "contracts": 9, "credit": 2.0,
+                  "last_mid": 2.0}}], prev_d=OBS - pd.Timedelta(days=1))
+    cfg = WheelConfig(ticker="XYZ", put_delta=0.30, call_delta=0.50,
+                      target_dte=11, take_profit_pct=0.60,
+                      starting_capital=100_000.0, call_min_strike="basis")
+    r = paper_step(state, _M(), cfg, 1, str(tmp_path / "t.jsonl"),
+                   str(tmp_path / "s.json"))
+    assert any(w[1] == "ca_confirmed_frozen" for w in r.warnings)
+    assert "ca_confirmed_frozen" in capsys.readouterr().out, \
+        "A10: a frozen leg must be visible in the run log"
+
+    import inspect
+    import re
+    import live.run_daily as rd
+    src = inspect.getsource(rd)
+    assert re.search(r'frozen_all \|= \{str\(w\[2\]\) for w in r\.warnings'
+                     r'[\s\S]{0,80}"ca_confirmed_frozen"', src), \
+        "A10: main() no longer aggregates frozen legs across accounts"
+    assert re.search(r'if frozen_all:[\s\S]{0,400}FROZEN', src), \
+        "A10: the daily FROZEN alert wiring is gone"
