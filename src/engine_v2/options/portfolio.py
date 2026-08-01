@@ -7,7 +7,8 @@ TP/expiry/covered-calls and adds ONLY the routing layer."""
 from __future__ import annotations
 from dataclasses import dataclass, field
 import pandas as pd
-from .select import select_contract, option_mark, liquidity_ok
+from .select import (select_contract, option_mark, liquidity_ok,
+                     at_risky_window_edge)
 from .fills import try_take_profit, tp_exit_feasible
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, sell_proceeds,
                     buy_cost, GATE_STALENESS_DAYS)
@@ -177,6 +178,16 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                 # it correctly. (audit 2026-07-31)
                 settle_spot = market.spot(tk, c.expiry, None)
                 if settle_spot is None:
+                    # A15: the batch market (and ONLY the batch market)
+                    # offers a bounded reach-back -- without it the batch
+                    # driver, which has no later run, zombies the leg to the
+                    # residual finalizer. Live falls through to refuse+warn.
+                    bounded = getattr(market, "bounded_settle_price", None)
+                    if bounded is not None:
+                        settle_spot = bounded(tk, c.expiry)
+                        if settle_spot is not None:
+                            warnings.append((d, "expiry_settled_reachback", c))
+                if settle_spot is None:
                     warnings.append((d, "expiry_unsettleable", c))
                     continue
                 if d > c.expiry:
@@ -333,6 +344,10 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                           "short": {"contract": c, "contracts": n,
                                     "credit": mark.bid, "last_mid": mark.mid}})
         trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
+        if at_risky_window_edge(market.chain(tk, d), d, c, cfg.put_delta):
+            # B11: the surveyed window clipped the delta ladder -- this entry
+            # is riskier than configured, loudly
+            warnings.append((d, "strike_window_edge", tk))
         route_events.append((d, [(t_[2], -t_[0]) for t_ in candidates], tk))
         held_tickers.add(tk)
 

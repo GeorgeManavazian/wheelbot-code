@@ -22,7 +22,7 @@ from live.market_live import LiveMarket
 from live.universe import UNIVERSE
 from live.accounts import all_accounts, account_paths, account_label
 from live.alerts import send_alert
-from live.gaps import append_gap
+from live.gaps import append_gap, append_correction
 from live.held_legs import merge_held_legs
 from live.config import load_run_config
 
@@ -468,6 +468,13 @@ def main():
                    chains_ok=market.chains_ok)
         return 1
 
+    # B8: short histories are visible, not silent (per-ticker lines printed by
+    # LiveMarket; one summary here)
+    trunc = getattr(market, "truncated_closes", [])
+    if trunc:
+        print(f"closes truncated for {len(trunc)} ticker(s): "
+              f"{[t for t, _ in trunc[:8]]} -- entry-ineligible, not failures")
+
     if not is_trading_day(market, obs):
         # A holiday (or any weekday the exchange did not open). Nothing to do,
         # and this is NOT a gap -- so we exit 0 and let the tick write the
@@ -559,7 +566,14 @@ def main():
                f"their equity curve will look continuous but is missing a day.")
         print(f"PARTIAL FAILURE -- {msg}")
         send_alert(f"daily run PARTIAL {day} ({len(failed)} accounts)", msg)
-        append_gap(f"{day}#accounts", "accounts_failed", accounts=failed, date=day)
+        # C13: the old call passed date= twice (TypeError -- the hole went
+        # undisclosed AND the exception escaped after the healthy accounts
+        # stepped; post-D9 that meant an all-evening retry loop + a false
+        # no_run gap at 23:45). Key the REAL date; if the day already has a
+        # record (a 17:05 zombie attempt before a 17:35 partial retry), file
+        # a correction -- the day was not fully missed, it partially stepped.
+        if not append_gap(day, "accounts_failed", accounts=failed):
+            append_correction(day, "accounts_failed", accounts=failed)
     return 0
 
 

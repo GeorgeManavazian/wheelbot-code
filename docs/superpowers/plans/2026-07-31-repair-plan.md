@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 22 of 67 done (A2-A7, A11, A12, A14, A16-A19, A22, B1-B5, B7, B9, B10; A21/E8/A18b/A18c/A17b/A3b/A4b/C16/A23 added) · Group B remaining: B6 (owner: universe re-vet), B8, B11 · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 28 of 70 done (A2-A7, A11, A12, A14-A19, A22, B1-B5, B7-B11 minus B6, C13-C15; A21b/A21c/C17 added session 2) · Group B remaining: B6 only (owner: universe re-vet) · A21 BLOCKED on owner D1-D3 · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -186,7 +186,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A18 | One shared fill function across all four engines (seam only, no model choice) | HIGH | **DONE** | see A18 evidence block below. Follow-ups filed: **A18b** (dedupe `_num`, delete dead `live_marks`/`_mark_from_quote`, align `live_asks`' admission or document it), **A18c** (migrate or retire the fifth copy in `scripts/audit_defense_execution.py` — currently kept as an independent referee and it verified the seam with 0 mismatches on 384 intraday + 13 EOD fills). Original note preserved: **Also four ADMISSION rules, measured during A6** on identical payloads — `0.00 x 0.00`: `contract_quotes` skip / `live_asks` skip / `_mark_from_quote` None. bid `None`, ask `0.05`: skip / **admits 0.05** / None. bid `-0.01`, ask `0.05`: skip / **admits 0.05** / **0.02**. So the dashboard prices a liability the intraday manager refuses to act on. Also: `live_marks` and `_mark_from_quote` have **zero production callers** — dead code, tests only. And `_num` still exists twice (`live/marks.py:25`, `live/data.py:32`, byte-identical). |
 | A19 | Capture `openInterest`/`totalVolume`/`bidSize`/`askSize` from the Schwab response | MED | **DONE** | see A19 evidence block below |
 | A23 | `--smoke` isolation imperfect: its zombie path appends to the REAL `gaps.jsonl` and sends a real alert on a pull failure (state/trades/snapshots correctly go to `_smoke`) | LOW | TODO | filed from the A11 skeptic, 2026-08-01 |
-| A21 | `merge_held_legs` quote pull happens at 17:00, post-close (`run_daily.py:192` → `held_legs.py:113`) — same staleness class as A16 but marks/dashboard only, not entries | MED | TODO | Split out of A16 by owner decision 2026-07-31. Affects held-leg marks, snapshot equity (`snapshots.py:26`), and the EOD TP branch (`portfolio.py:94-101`); the intraday TP already runs on RTH quotes. |
+| A21 | `merge_held_legs` quote pull happens at 17:00, post-close (`run_daily.py:192` → `held_legs.py:113`) — same staleness class as A16 but marks/dashboard only, not entries | MED | **BLOCKED (owner)** — analyst spec delivered 2026-08-01 (session 2); see the A21 analyst block below. **The "marks only" framing was WRONG:** the 17:00 held-leg quotes feed the EOD TP branch, so the fix moves a TRADING input to RTH asks (demonstrated: RIG 4.5P credit $0.03, RTH ask $0.01 → TP fills; post-close ask $0.06 → refused). Owner must rule D1/D2/D3 below before any code. | Split out of A16 by owner decision 2026-07-31. Affects held-leg marks, snapshot equity (`snapshots.py:26`), and the EOD TP branch (`portfolio.py:94-101`); the intraday TP already runs on RTH quotes. |
 | A3b | Covered-call unclosability gate (owner 2026-08-01: **middle path** — A3 arithmetic guard extended to calls; calls stay EXEMPT from the A2 liquidity gate) | MED | **DONE** | see A3b evidence block below. Skeptic CORRECT-BUT-INCOMPLETE → 2 amendments same session (router quiet-run pin killing the surviving warn-always mutant; wheel/router uncovered-day pins). **C16b filed** (skeptic F1: a daily-refused call logs but never emails — needs an N-consecutive-days escalation; two-tier vs A4's unreachable email, declared). **F4 declared:** pre-A3b backtest numbers involving calls are non-comparable (SEEN-ticker drift up to ±$10k final cash from removed sub-floor call paths; goldens unaffected — they sell zero calls). |
 | A22 | `chain_frame` stamps `from_date`/`to_date` from the **box (UTC) clock**, not ET | MED | **DONE** | folded with B7 into the Group B batch; both pull functions frozen-clock tested | Found by the A16 analyst. `obs_date` is threaded correctly; only the request dates are wrong. Dormant on the new RTH snapshot path (UTC date == ET date at 15:xx ET) but live on `--smoke` and any manual post-19:00 pull. |
 | A17 | Represent partial fills / working-order state | HIGH | **DONE** | see A17 evidence block below. Follow-up filed: **A17b** — `run_intraday.py` saves state only `if trades`; a working order placed without an immediate fill would not persist. Inert until a fill model creates working orders; must land with that model. |
@@ -205,7 +205,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A12 | Budget allocation must not strand capital at small sizes | MED | **DONE** (+ owner amendment 2026-08-01) | see A12 evidence block below. Skeptic-F3 routing preference resolved by owner 2026-08-01: fallback flipped to **richest-ranked-first at any k**, sized at the largest k (least concentration) that affords it. Fresh skeptic on the flip: **SURVIVES** (4,000-trial differential fuzz vs HEAD, phantom money 0/8,000 runs, fallback n=1 in all 1,286 fallback trials, equal-split path identical in all 2,714 non-fallback trials, gate resurrection impossible, 4 mutants killed incl. exact-old-behavior revert). Declared (skeptic F8): fallback route_events record only the chosen name, so the audit referee cannot detect a wrong fallback pick — the two new tests in `test_budget_split.py` are the defense. |
 | A13 | Model exchange/OCC/regulatory and assignment fees | LOW | TODO | |
 | A14 | Surface `StepResult.warnings`; bound the unsettleable-expiry refusal | HIGH | **DONE** | see A14 evidence block below. **Incident logged there too:** the A14 skeptic's probe wrote test states into the LOCAL frozen archive (`data/live/accounts/100k_N1..N6`) via the WHEELBOT_STATE_DIR import-time trap — self-reported, recovered same session (N6 deleted; N1 byte-exact from `data/live-synced@a8ea1f8`; N2-N5 nearest-frozen, one intraday session off; polluted snapshot rows stripped). Canonical VPS store untouched; Phase F resets all accounts anyway. Process rule saved to memory: main()-touching probes need the env pre-set in a fresh interpreter. |
-| A15 | Restore a bounded reach-back for the batch engine | MED | TODO | |
+| A15 | Restore a bounded reach-back for the batch engine | MED | **DONE** | see the session-2 batch evidence block. `BatchMarket.bounded_settle_price` (≤5 calendar days) + `step_one_day` fall-through only when the market provides it; LiveMarket never grows it (hasattr-pinned, skeptic F2). Real-data C3: SPY has exactly 2 absent expiry dates in 9 years (2018-12-05, 2025-01-09, funeral closures), both now settle at the prior close. |
 
 ### Group B — what the bot SEES
 
@@ -218,10 +218,10 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | B5 | Held ticker outside `UNIVERSE` must be an error, not silence | HIGH | **DONE** | better than an error: the held-outside ticker is PULLED (closes + chain, marks + TP restored); ratio denominators corrected to the pulled population (skeptic F3). `is_trading_day` denominator drift declared (negligible at 542-name scale, zero at smoke scale). |
 | B6 | Re-vet the universe; add a `_RETIRED` frozenset with a test | HIGH | TODO | |
 | B7 | `chain_frame` must use the ET obs date, not the box clock | MED | **DONE** | folded with A22; both pull functions ET-stamped, frozen-clock tested |
-| B8 | Truncated history must be recorded and logged | MED | TODO | |
+| B8 | Truncated history must be recorded and logged | MED | **DONE** | session-2 batch block. `truncated_closes` on LiveMarket + summary prints; skeptic F1 amendment: discriminator is `regime_series(s).empty`, not `len<=WARMUP` — the 201-273-bar band was still silently ineligible (first regime row needs ~273 days). Never joins `skipped_closes` (zombie denominators intact); held+truncated keeps closes/marks/settlement. |
 | B9 | Reject `underlyingPrice <= 0` | MED | **DONE** | Group B evidence block below |
 | B10 | Skip non-standard / `multiplier != 100` contracts | LOW | **DONE** | string-"100" coercion proven safe; `nonStandard="true"`-string hole declared theoretical (Schwab emits real booleans). |
-| B11 | Warn when the selected strike is the extreme of the window | MED | TODO | |
+| B11 | Warn when the selected strike is the extreme of the window | MED | **DONE** | session-2 batch block. `at_risky_window_edge` (bottom strike AND riskier-than-target, put side only) wired in all 3 engines with per-engine warn+quiet pins (A3b lesson); held_only rows excluded (skeptic F3 mutant-killer: a spliced held row below the window must not mask the warning). Audit: fires on ~3.24% of ticker-days, always toward more risk. |
 
 ### Group C — what the OWNER SEES
 
@@ -239,9 +239,9 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | C10 | Drawdown/returns measured from capital, not the first snapshot | MED | TODO | |
 | C11 | Stamp `mark_basis` in every snapshot; annotate the changeover | MED | TODO | |
 | C12 | Deduplicate the equity index | LOW | TODO | |
-| C13 | Fix the `append_gap` kwarg collision on the partial-failure path | HIGH | TODO | |
-| C14 | Fold only `correction: True` records | HIGH | TODO | |
-| C15 | Normalise dates in `append_gap`/`append_correction` | MED | TODO | |
+| C13 | Fix the `append_gap` kwarg collision on the partial-failure path | HIGH | **DONE** | session-2 batch block. Gap keyed on the REAL day; prior-record days file a correction (partially stepped != fully missed). Call-site shape lint-pinned (no main()-harness test; WHEELBOT_STATE_DIR import trap — same defense class as A12-F8, declared). |
+| C14 | Fold only `correction: True` records | HIGH | **DONE** | session-2 batch block. First plain record wins; only corrections supersede; last correction wins among corrections. Declared: `append_correction` non-idempotent (skeptic F7, ledger bloat only). |
+| C15 | Normalise dates in `append_gap`/`append_correction` | MED | **DONE** | session-2 batch block. `_iso_day` at all read/write sites; pre-fix drift-shaped ledgers heal at READ time; folded records carry the normalized date (skeptic F4 amendment — a timestamp-shaped no_run was invisible to the re-alerter). health.py consumers strictly healed. |
 
 ### Group D — whether it RUNS
 
@@ -295,8 +295,95 @@ password would block every push — acceptable, noted.
 | E6 | Rewrite `test_all_modules_follow_the_override` so it stops proving the opposite | TODO | |
 | E7 | Re-run all nine surviving mutations; every one must now be killed | TODO | |
 | C16 | Surface `days_shares_uncovered` per account on the dashboard (incremented + persisted, zero live readers) | MED | TODO | filed from the A4 analyst, 2026-08-01 |
+| A21b | Chain store drops unknown columns on load — flags die on round-trip (from the A21 analyst, 2026-08-01; fix inside A21's implementation) | MED | BLOCKED with A21 | |
+| A21c | `held_marks_failed` judged before holiday/snapshot classification — holiday + dead quote endpoint = all-evening retry spam | MED | TODO | filed from the A21 analyst, 2026-08-01 |
+| C17 | `last_spot=0.0` positions render −100% "ITM" on the dashboard (HAL/WBD, real) | LOW | TODO | filed from the A21 analyst, 2026-08-01; display only |
 | C16b | Escalation for the A3b refusal class: N consecutive `call_gated_unclosable` days on one ticker → email (today it logs daily, forever, and never emails — while A4's floor-above-window class emails daily; same physical condition, two tiers). Needs persisted per-ticker consecutive-day state; owner picks N. | MED | TODO | filed from the A3b skeptic F1, 2026-08-01. Measured: SLV router-BASE(basis) backtest shows 295 gated-warning days (multi-week naked stretches are real, not hypothetical); live book currently has zero CALL-phase holdings so the class is prospective. |
 | E8 | `run_chain_snapshot.main()` wiring tests (zombie wiring, partial-exit-1, save-recheck call site, `--force`) — predicates are tested, the wiring is executed only by the A16 skeptic's S1 run and the C2 dry run | TODO | filed from skeptic F6, 2026-07-31 |
+
+---
+
+## A21 — analyst spec summary (delivered 2026-08-01 session 2; implementation BLOCKED on owner)
+
+**In plain language.** At 5pm the bot asks "what are my held options worth?" — but the options
+market closed at 4:15, so it prices them off the dead board (3-4× wider than real, per A16's
+measurements). The obvious fix — photograph held-leg prices during market hours alongside the
+A16 chain photo — turns out to change TRADING, not just bookkeeping: the 5pm take-profit
+decision reads these same prices, and on the real RIG leg the daytime price fills a buy-back
+the dead board refused. So the owner has to bless it, same class as the A16 decision.
+
+**Analyst findings (receipts in its report, probes in session scratchpad `analyst-a21/`):**
+- F1: the 17:00 quote pull feeds STATE DOLLARS (state.json last_ask/last_mid, snapshots.jsonl
+  equity, trades.jsonl CLOSE prices via the EOD TP) — not just the dashboard.
+- F1b: post-A16 the corruption is only the OUT-of-window legs, so today's equity is
+  mixed-source (in-window legs RTH, drifted legs post-close) — internally inconsistent.
+- F2: the RTH snapshot's 12-strike windows structurally MISS the drifted held contracts (RIG
+  −15.1% of spot, TMO −11% at the real spot; A4's splice covers only calls above the window).
+  Two of four real legs measured outside; HAL/WBD unverifiable locally (OPEN, check on VPS).
+- F3 (**executed**): `held_only=True` does NOT survive a chain-store round trip —
+  `load_chain_snapshot` rebuilds with fixed columns and silently drops the flag. Any design
+  storing held rows inside the chains dict resurrects the cross-account candidate-leak defect.
+- F5 (**executed**): EOD TP on RTH asks fires on fills post-close refused (RIG demonstrated).
+- F6: 3-4× staleness reproducible from recorded receipts (29.8% vs 7.4% median rel-spread);
+  a same-day per-contract 17:00-vs-RTH pair does not exist locally — capture one on resume day.
+
+**Recommended design (option b):** pull held-leg quotes in the RTH snapshot phase
+(run_chain_snapshot already loads every account's state), persist under a separate top-level
+`held_rows` key (never inside chains — F3), force `held_only=True` at LOAD time, split
+`merge_held_legs` into pull-half and merge-from-store-half keeping the exact stats-dict shape,
+17:00 run performs no live get_quotes when a snapshot exists (mirror of the A16 pin),
+`--smoke` keeps the live pull. Failed held pull saves the chain snapshot anyway + exit 1
+(in-window ticks retry). Full test list in the analyst report.
+
+**OWNER DECISIONS REQUIRED (A21-D1/D2/D3):**
+- **D1:** accept "marks + TP both RTH" (consistent with A16 entries + the intraday TP;
+  analyst recommends), or constrain A21 to marks-only (keeps a 17:00 pull alive solely to
+  price the TP off a 3-4× wider book — analyst recommends against)?
+- **D2:** snapshot present but held rows absent (held pull failed all window): step the day
+  with carried marks + suspended TPs + one alert (analyst recommends), or skip the day?
+- **D3:** bless the anchor break — state/snapshot/trade prices become RTH-priced (same
+  declared-break class as mark-at-ask).
+
+**New candidate rows from the analyst (filed):**
+
+| ID | Sev | Defect |
+|---|---|---|
+| A21b | MED | `load_chain_snapshot` silently drops unknown columns (`chain_store.py:82`) — any flagged row loses its flag on round-trip; becomes live the moment held rows touch the store (executed proof). Fix belongs INSIDE A21's implementation. |
+| A21c | MED | `run_daily` judges `held_marks_failed` BEFORE holiday/snapshot classification — a dead quote endpoint on a market holiday exits 1 and retry-alerts all evening for a day that should exit 0 as a holiday. |
+| C17 | LOW | HAL/WBD positions carry `last_spot=0.0` (spot-fallback at entry, never re-marked before the pause) — dashboard renders −100% "ITM" for OTM legs. Display only. |
+
+---
+
+## A15 + B8 + B11 + C13/C14/C15 batch — evidence (completed 2026-08-01, session 2)
+
+**Provenance, disclosed:** this batch was found UNCOMMITTED in the working tree with no plan
+entry — a prior session wrote the B8/B11/C13-15 fixes and the A15 red test, then ended before
+implementing A15 or recording anything. This session verified every inherited piece from
+scratch (red-on-HEAD proofs via a HEAD worktree, mutants, suites) rather than trusting it,
+then implemented A15. One writer throughout.
+
+**In plain language.** Five small honesty fixes and one settlement fix. (A15) When the market
+was closed on an option's expiry day (funeral closures — SPY has exactly two such days in 9
+years, both measured), the backtest engine left the position stuck forever instead of settling
+it at the last real price within 5 days; live behavior unchanged by construction. (B8) A ticker
+with too little price history to judge used to be silently unbuyable forever; now it says so.
+(B11) When the bot's 12-strike shopping window cuts off the strike ladder, the pick at the
+window's edge is riskier than configured — it now warns (all 3 engines). (C13) A crashing
+typo in the partial-failure recorder is fixed and lint-pinned. (C14) Only an explicit
+correction may replace a day's gap record. (C15) All gap dates are normalized to one format so
+the same day can't be recorded twice; pre-fix drift-shaped ledgers heal at read time.
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | A15: `AssertionError: A15: gap-day expiry zombied instead of settling` (this session, pre-fix). Inherited fixes re-proven red on a HEAD worktree with the new tests copied in: B11 `a clipped, riskier-than-target selection went unwarned`; B8 `AttributeError: 'LiveMarket' object has no attribute 'truncated_closes'`; C14/C15 4 failures. 7 reds total; C13-shape tests are pins (pass both trees, as designed). |
+| 2 Minimal fix | A15: `BatchMarket.bounded_settle_price` (≤5 calendar days at/before expiry) + `step_one_day` fall-through ONLY when the market provides the method — LiveMarket does not, so live is byte-identical by construction. Inherited: B8 `truncated_closes` on LiveMarket + 2 summary prints; B11 `at_risky_window_edge` + 3 warn sites; C13 gap-then-correction call shape; C14 first-plain-wins/correction-supersedes fold; C15 `_iso_day` at all 3 ledger read/write sites. |
+| 3 Suites | `550` backtest + `275` live = **825** green (from 796 recorded; +29 batch + amendment tests). |
+| 4 Mutation | **12/12 killed**, size-changing + pycache purged per the stale-pyc rule: A15 bound-dropped · fall-through-removed · reachback-warning-dropped · reachback-primary (killed by a quiet-run pin added this session, A3b-skeptic lesson) · B11 predicate-lobotomized · riskier-clause-dropped · wheel-site-severed · router-site-severed (per-engine warn+quiet pins added this session — the inherited tests covered only the portfolio engine) · B8 record-dropped · skipped_closes-poisoned · C14 last-line-wins-reverted · C15 str()-reverted. Plus M12 C13-revert killed by a new source-lint pin (the PARTIAL branch has no main()-harness test — WHEELBOT_STATE_DIR import trap makes one expensive; declared as the same defense class as A12-F8). |
+| 5 Line audit | +148/−13 over 10 files, all accounted: additive methods/warnings/prints, 3 str→`_iso_day` swaps, 1 fold-rule change, C13's 1→2-line call fix. Declared deltas: (a) A15 changes batch results ONLY where an expiry date is absent from a chain — measured on real SPY data: exactly 2 days in 2017-2026 (2018-12-05, 2025-01-09, both funeral closures, both 1 day inside the bound); portfolio-engine anchor already deliberately broken, solo goldens untouched by A15 (their settlement code is separate). (b) B11 warns on ~3.24% of ticker-days (audit figure), warnings additive, zero trade changes. (c) C14 changes gap_summary DISPLAY semantics: a plain later duplicate no longer supersedes; the only producer of such duplicates was the C15 drift, now closed. |
+| 6 Blast radius | `bounded_settle_price`: 1 caller (step_one_day). `at_risky_window_edge`: 3 callers. `truncated_closes`: 2 consumers, both getattr-guarded. `gap_summary`/`recorded_dates` consumers: `live/health.py` only — both parse via `fromisoformat`+skip-unparseable, so C15 normalization strictly heals them (pre-fix drift-shaped dates were silently SKIPPED by `_scan_start`/`unalerted_gaps`; now they parse). C14×D3 interplay checked: correction-supersedes preserved, `.gapalerted` marker suppression unaffected. |
+| C1 Skeptic | **CORRECT-BUT-INCOMPLETE** → all actionable findings amended + mutant-killed same session (5 amendment mutants AM1-AM5). No wrong-money path found by execution: call-side reachback (CALLED_AWAY at strike, cash exact), A17 partial-fill interplay (1-of-3 fill then reachback assigns the remaining 2, cash $80,950 exact), bound at exactly 5 settles / 6 refuses at both levels, d==expiry via union date settles with no false `expiry_resolved_late`, B11 NaN/None/string-delta/multi-expiry/unsorted/int-strike all clean, held+truncated keeps closes+chain+settle, C13 end-to-end incl. the 17:05-gap→17:35-correction sequence. **F1 (MED, real defect) amended:** B8's `len<=WARMUP` guard missed the 201-273-bar band — the first regime row lands ~273 days in (vol percentile needs 252 rank obs), so the exact defect survived one bar above the check; discriminator now `regime_series(s).empty`, band tests added, stale-long histories proven un-flagged. **F4 (LOW) amended:** fold now stamps the normalized date back onto the record — a timestamp-shaped `no_run` was permanently invisible to the re-alerter (proven via `unalerted_gaps`). **F2/F3/F5/F6 (test gaps) pinned:** LiveMarket-never-grows-`bounded_settle_price` hasattr pin (a one-line alias re-enabled stale live settlement with every test green); held_only-filter mutant-killer (a spliced held row below the window masked the clip warning); F5 subsumed by the F1 band tests (the constant is no longer load-bearing); reachback warning payload pinned to the Contract. **Declared, not fixed:** F7 `append_correction` non-idempotent — a repeatedly-partial evening appends one correction line per retry tick (fold still returns 1 record; ledger bloat only); F8 `_iso_day` accepts `"20260724"` under py3.12's lenient fromisoformat (normalizes, never invents a different day; benign). |
+| C2 Dry run | Not applicable — no market-pull surface changed (A15 is batch-only by construction; B8/B11 consume already-pulled data; C13-15 are ledger-local). |
+| C3 Dollars | Live book: $0.00 (batch-only + display-only fixes; bot paused). Backtest: the two SPY funeral-closure expiries now settle at the prior close instead of being bought back by the residual finalizer at a carried ask; every future gap-day expiry class settles honestly or refuses loudly. |
 
 ---
 
@@ -830,6 +917,8 @@ test (E8).
 
 | Date | Entry |
 |---|---|
+| 2026-08-01 | **SESSION 2 BATCH DONE: A15 + B8 + B11 + C13/C14/C15.** Tree found dirty AGAIN (prior session left the B8/B11/C13-15 fixes + an unimplemented A15 red test, no plan entry) — every inherited piece re-proven from scratch (HEAD-worktree red proofs) rather than trusted, coverage holes plugged (per-engine B11 pins, A15 quiet pin, C13 lint pin), A15 implemented. 12 primary + 5 amendment mutants killed. Skeptic CORRECT-BUT-INCOMPLETE → F1 (B8's 201-273-bar hole — the defect survived one bar above the len<=200 check) and F4 (timestamp-shaped no_run invisible to the re-alerter) amended + mutant-killed same session; F2/F3/F6 pinned; F7/F8 declared. Suites 550+275=**825**. |
+| 2026-08-01 | **A21 analyst spec delivered → A21 BLOCKED (owner).** The "marks only" framing was wrong: the 17:00 held-leg quotes feed the EOD TP branch — moving them to RTH changes TRADING (RIG demonstrated: RTH ask fills what post-close refused). Owner decisions D1 (TP on RTH asks?), D2 (held-pull-failed day: step-with-carried-marks or skip?), D3 (bless the anchor break). Recommended design on file (held rows beside the chain snapshot, never inside — the held_only flag dies on store round-trip, executed proof). New rows: A21b (store drops unknown columns), A21c (held_marks_failed judged before holiday classification — evening retry spam on holidays), C17 (last_spot=0.0 renders −100% ITM). |
 | 2026-08-01 | **GROUP D ALL 14 ROWS DONE** (owner decisions + autonomous grant; commits `f5b8c1c` `2347b2f` `87da10e` `2afc1e8`). Batch 0 enablers (tick env hooks + bash sandbox harness, 14 tick tests); batch 1 alert/health (D3 delivered-only exits + spool, D5 3-day nag/EXPIRED/unreadable, D4 forward scan, D12 real dates + 23:30, D2 holiday email); batch 2 sync/state (D8 shapes/literals/unscannable-=offender, D11 dated day-boundary backups + dir fsync, D13 gitignore + orphan cleanup); batch 3 tick rewrite (D9 FAIL-exit, D1 intraday rc contract + nightly liveness scan, D6 health-first, D10 split markers + sync-only retry, D7 units + tick-failed); batch 4 D14 GitHub robot (heartbeat every tick, self-installed workflow + checker, owner declined dead-man URL). One incident: batch-2 commit briefly landed with a red test (pipe masked pytest's exit); caught same session, harness fixed (D8 collision), commit amended clean — pipefail now used on gated chains. Suites 539+257=**796**. Group skeptic next; Phase-F items filed (D7 semantics, PAT workflow scope, workflow re-enable after long pause). |
 | 2026-08-01 | **A3b DONE** (owner in session — middle path). A3 arithmetic guard extended to covered calls at all 3 engines; calls stay exempt from A2. 8 tests; 7 mutants killed incl. the skeptic-caught router warn-always survivor (amended same session with a router quiet pin + uncovered-day pins). C16b filed (refusal class logs but never emails — escalation needed). F4 declared: pre-A3b call backtests non-comparable (±$10k SEEN-ticker drift from removed sub-floor paths; goldens sell no calls, unaffected). Realized dollars $0.00 both ways (zero SELL_CALL ever live). Suites 539+192=**731**. |
 | 2026-08-01 | **OWNER DECISIONS — GROUP D (ELI10 dialog #2):** (1) **D2 = informational alert** on every holiday-classified weekday, no vendored NYSE calendar. (2) **D5 = warn daily from 3 days runway**, any day/hour; distinct once-daily EXPIRED alert; unreadable-token-file alerts. (3) **D10 = split markers** (`.dailyran` = run completed, `.synced` = mirror updated; sync-only retry each tick). (4) **D14 = GitHub Actions mirror-freshness check ONLY** — owner declined the healthchecks.io dead-man URL (no new accounts); same-day mid-session death detection therefore rests on D1's nightly post-hoc liveness scan + next-morning GitHub check, declared. Group D analyst spec (all rows re-verified against current tree, receipts) delivered 2026-08-01; execution order = enablers → alert/health Python (D3→D12→D4→D2) → sync/state (D8+D13+D11) → tick rewrite (D9+D1+D6+D10+D5+D7 units) → D14+heartbeat. |

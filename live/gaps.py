@@ -17,6 +17,26 @@ import os
 GAPS_PATH = in_state("gaps.jsonl")
 
 
+def _iso_day(d) -> str:
+    """C15: one canonical 'YYYY-MM-DD' per day. Bare str() let pd.Timestamp
+    and the string form record the SAME day twice ('2026-07-24' vs
+    '2026-07-24 00:00:00'), defeating idempotency, breaking correction
+    folding, and silently degrading health's ISO parsing (_scan_start /
+    unalerted_gaps skip unparseable dates). Unparseable input passes through
+    untouched -- this normalizes, it never invents."""
+    if hasattr(d, "date") and callable(getattr(d, "date")):
+        try:
+            d = d.date()          # datetime / pd.Timestamp -> date
+        except TypeError:
+            pass
+    s = str(d)
+    try:
+        import datetime as _dt
+        return _dt.date.fromisoformat(s[:10]).isoformat()
+    except ValueError:
+        return s
+
+
 def recorded_dates(path: str = GAPS_PATH) -> set:
     """Every date already in the ledger. Missing file -> empty set. Corrupt
     lines are skipped, never fatal -- a half-written line must not blind the
@@ -29,7 +49,7 @@ def recorded_dates(path: str = GAPS_PATH) -> set:
                 if not line:
                     continue
                 try:
-                    out.add(json.loads(line)["date"])
+                    out.add(_iso_day(json.loads(line)["date"]))
                 except (ValueError, KeyError, TypeError):
                     continue
     except FileNotFoundError:
@@ -41,7 +61,7 @@ def append_gap(date, reason: str, path: str = GAPS_PATH, **extra) -> bool:
     """Record one missed day. Idempotent PER DATE (not per reason): a day is
     either traded or it isn't, and the health check may run repeatedly on the
     same day. Returns False when the date was already recorded."""
-    date = str(date)
+    date = _iso_day(date)
     if date in recorded_dates(path):
         return False
     rec = {"date": date, "reason": reason}
@@ -66,7 +86,7 @@ def append_correction(date, reason: str, path: str = GAPS_PATH, **extra) -> bool
     in there, as a measurement of nothing. `gap_summary` folds later records over
     earlier ones per date, so the correction is what gets displayed while the
     superseded line stays on disk."""
-    rec = {"date": str(date), "reason": reason, "correction": True}
+    rec = {"date": _iso_day(date), "reason": reason, "correction": True}
     rec.update(extra)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "a") as f:
@@ -96,12 +116,21 @@ def gap_summary(path: str = GAPS_PATH) -> dict:
                     recs.append(r)
     except FileNotFoundError:
         pass
-    # Fold: one record per date, last line wins. Corrections are appended rather
-    # than edited (see append_correction), so without this a corrected day would
-    # be displayed twice -- under both the wrong reason and the right one.
+    # Fold: one record per date. C14: only a `correction: True` record may
+    # supersede -- the old last-line-wins let a plain later duplicate (manual
+    # append, write race, date-type drift) silently replace an earlier RICHER
+    # record with zero disclosure. First plain record wins; corrections
+    # supersede; the last correction wins among corrections.
     latest = {}
     for r in recs:
-        latest[str(r["date"])] = r
+        k = _iso_day(r["date"])
+        # Stamp the normalized day back onto the record (skeptic F4): folding
+        # by the normalized key while returning the raw date left a
+        # timestamp-shaped no_run line permanently unalertable -- health's
+        # fromisoformat skipped it -- and leaked the raw form to the display.
+        r["date"] = k
+        if k not in latest or r.get("correction") is True:
+            latest[k] = r
     recs = list(latest.values())
     recs.sort(key=lambda r: str(r["date"]))
     return {

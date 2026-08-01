@@ -10,7 +10,8 @@ byte-identically (the anchor regression)."""
 from __future__ import annotations
 from dataclasses import dataclass
 import pandas as pd
-from .select import select_contract, option_mark, liquidity_ok
+from .select import (select_contract, option_mark, liquidity_ok,
+                     at_risky_window_edge)
 from .fills import try_take_profit, tp_exit_feasible
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, _state_before,
                     sell_proceeds)
@@ -212,6 +213,9 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                         short = {"contract": c, "contracts": n,
                                  "credit": mark.bid, "last_mid": mark.mid}
                         trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
+                        if at_risky_window_edge(day_chain, d, c, cfg.put_delta):
+                            # B11: clipped window -- riskier than configured
+                            warnings.append((d, "strike_window_edge", cfg.ticker))
             # cell CASH: nothing — counted below
         elif (short is None and shares >= mult and phase == "CALL"
               and cell == "WHEEL" and day_chain is not None):

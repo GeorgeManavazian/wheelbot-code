@@ -30,6 +30,12 @@ class LiveMarket:
         self.skipped_closes = []   # universe tickers whose price history failed
         self.skipped_chains = []   # candidate tickers whose option chain failed
         self.chain_attempts = 0    # how many chains we TRIED to pull
+        # B8: short-but-valid histories (recently listed name, truncated pull)
+        # compute NO regime row -> permanently entry-ineligible. That is
+        # correct behavior but must be VISIBLE: recorded here + logged, never
+        # in skipped_closes (would poison the zombie denominators and drop
+        # closes a held ticker needs for marks/settlement).
+        self.truncated_closes = []  # (ticker, n_bars)
 
         good = set()
         # B5: a held ticker that fell OUT of the universe must still get
@@ -39,12 +45,24 @@ class LiveMarket:
         for tk in list(dict.fromkeys(self._universe + sorted(set(held_tickers)))):
             try:
                 s = closes_fn(tk)
-                row = _row_before(regime_series(s), self._obs)   # regime compute
+                rs = regime_series(s)                            # regime compute
+                row = _row_before(rs, self._obs)
             except Exception as e:   # one bad symbol must not stop the bot
                 self.skipped_closes.append((tk, str(e)))         # (also catches a
                 continue                                          # regime_series raise)
             self._closes[tk] = s
             self._rows[tk] = row
+            if row is None and rs.empty:
+                # rs.empty, NOT len(s) <= WARMUP: the first regime row needs
+                # the vol percentile too and lands ~273 trading days in, so a
+                # length check at WARMUP=200 left the 201-273 band silently
+                # ineligible -- the exact B8 class, one bar above the check
+                # (skeptic F1). A stale-long history has rs non-empty and is
+                # correctly NOT flagged here.
+                self.truncated_closes.append((tk, len(s)))
+                print(f"closes truncated: {tk} has {len(s)} bars -- no regime "
+                      f"state computable yet; entry-ineligible until history "
+                      f"accrues")
             if is_good_renting_weather(row, self._chop_max_ma_spread,
                                        self._chop_max_fast_spread,
                                        self._chop_max_fast_fall):

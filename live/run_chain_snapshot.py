@@ -156,6 +156,10 @@ def main():
                           cfg.chop_max_ma_spread, cfg.chop_max_fast_spread,
                           cfg.chop_max_fast_fall)
 
+    trunc = getattr(market, "truncated_closes", [])
+    if trunc:   # B8: visible, never a failure
+        print(f"closes truncated for {len(trunc)} ticker(s): "
+              f"{[t for t, _ in trunc[:8]]} -- entry-ineligible, not failures")
     thr = load_run_config()["zombie_threshold"]
     if zombie_check(len(market.skipped_closes), len(UNIVERSE),
                     market.chain_attempts, market.chains_ok, thr):

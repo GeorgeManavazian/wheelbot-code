@@ -4,7 +4,8 @@ engine and the gate."""
 from __future__ import annotations
 from dataclasses import dataclass
 import pandas as pd
-from .select import select_contract, select_roll_contract, option_mark, liquidity_ok
+from .select import (select_contract, select_roll_contract, option_mark,
+                     liquidity_ok, at_risky_window_edge)
 from .fills import try_take_profit, tp_exit_feasible
 
 MAX_ROLLS_PER_CAMPAIGN = 2   # then the normal expiry path (assignment) applies
@@ -347,6 +348,9 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                             cash += proceeds; campaign_premium += proceeds
                             short = {"contract": c, "contracts": n, "credit": mark.bid, "last_mid": mark.mid}
                             trades.append(Trade(d, "SELL_PUT", c, n, mark.bid, cash, campaign))
+                            if at_risky_window_edge(day_chain, d, c, cfg.put_delta):
+                                # B11: clipped window -- riskier than configured
+                                warnings.append((d, "strike_window_edge", cfg.ticker))
             elif phase == "CALL" and shares >= mult:
                 floor = None
                 if cfg.call_min_strike == "basis" and basis is not None:

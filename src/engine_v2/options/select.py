@@ -61,6 +61,25 @@ def liquidity_ok(chain, date, contract, cfg):
     return True, ""
 
 
+def at_risky_window_edge(chain, date, contract, target_delta) -> bool:
+    """B11: True when the chosen PUT sits at the BOTTOM strike of its
+    surveyed expiry AND carries a higher |delta| than target -- the signature
+    of a clipped 12-strike window (the true target strike lies below what was
+    pulled), which makes the entry riskier than configured. Strict
+    riskier-than: an edge row at exactly the target delta is not a clip
+    signal (and keeps single-strike synthetic chains quiet). Put side only:
+    post-A4 an at-top call is usually the exchange's real extreme, not a
+    window artifact."""
+    rows = chain[(chain["date"] == date) & (chain["right"] == "P")
+                 & (chain["expiry"] == contract.expiry)]
+    if "held_only" in rows.columns:
+        rows = rows[~rows["held_only"].fillna(False).astype(bool)]
+    if rows.empty or contract.strike != float(rows["strike"].min()):
+        return False
+    sel = rows[rows["strike"] == contract.strike]
+    return abs(float(sel["delta"].iloc[0])) > abs(target_delta)
+
+
 def select_contract(chain, date, right, target_delta, target_dte, root, min_strike=None):
     """Expiry FIRST (nearest target_dte within derived_band, from expiries visible
     on `date` only), THEN strike (nearest |delta| within that one expiry).

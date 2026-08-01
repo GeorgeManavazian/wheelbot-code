@@ -48,6 +48,24 @@ class BatchMarket:
         pre = u[u.index <= pd.Timestamp(expiry)]
         return float(pre.iloc[-1]) if len(pre) else None
 
+    # A15: batch-only bounded settlement fall-back. The refuse-and-warn
+    # settlement rule is correct live (a later run with restored history
+    # settles the leg), but the batch driver HAS no later run -- a ticker
+    # whose history lacks the expiry date zombied the leg to the end of the
+    # backtest and handed it to the residual finalizer at a carried ask.
+    # Last close within SETTLE_REACHBACK_DAYS calendar days at/before expiry;
+    # None beyond the bound (never settle on stale territory). LiveMarket
+    # deliberately does NOT grow this method: step_one_day falls through only
+    # when the market provides it, so live behavior is byte-identical.
+    SETTLE_REACHBACK_DAYS = 5
+
+    def bounded_settle_price(self, ticker, expiry):
+        u = self._und[ticker]
+        exp = pd.Timestamp(expiry)
+        pre = u[(u.index <= exp)
+                & (u.index >= exp - pd.Timedelta(days=self.SETTLE_REACHBACK_DAYS))]
+        return float(pre.iloc[-1]) if len(pre) else None
+
     def regime_row(self, ticker, day):
         return _row_before(self._states[ticker], day)
 
