@@ -235,8 +235,8 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
         committed = sum(p["short"]["contract"].strike * mult * p["short"]["contracts"]
                         for p in positions
                         if p["short"] is not None and p["short"]["contract"].right == "P")
-        budget = (cash - committed) / empty_slots
-        candidates = []
+        available = cash - committed
+        pool = []
         for tk in market.universe:
             if tk in held_tickers:
                 continue
@@ -273,18 +273,36 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                 if (d, "entry_gated_unclosable", tk) not in warnings:
                     warnings.append((d, "entry_gated_unclosable", tk))
                 continue
-            n = int(budget // (c.strike * mult))
-            if n <= 0:
-                continue
             if row is None:
-                warnings.append((d, "route_state_unknown", tk))
+                # deduped (A12 skeptic F4): the pool now includes unaffordable
+                # tickers and rebuilds per while-iteration
+                if (d, "route_state_unknown", tk) not in warnings:
+                    warnings.append((d, "route_state_unknown", tk))
                 pct = -1.0
             else:
                 pct = float(row["vol_pctile"])
-            candidates.append((-pct, market.universe.index(tk), tk, c, mark, n))
+            pool.append((-pct, market.universe.index(tk), tk, c, mark))
+        if not pool:
+            break
+        pool.sort()
+        # A12: equal split FIRST (k == empty_slots is the old budget exactly,
+        # so behavior is byte-identical whenever anything is affordable). When
+        # NOTHING fits, re-split over fewer effective slots down to one --
+        # $5k/N5 offered $1,000/slot, afforded nothing, and sat 82% idle
+        # while a $3k contract was listed; the grid then measured which slots
+        # could buy anything, not N. Concentration only when the alternative
+        # is idleness. (Provisional: audit-prescribed direction.)
+        candidates = []
+        for k in range(empty_slots, 0, -1):
+            budget = available / k
+            candidates = [(negpct, idx, tk_, c_, mk_,
+                           int(budget // (c_.strike * mult)))
+                          for (negpct, idx, tk_, c_, mk_) in pool
+                          if int(budget // (c_.strike * mult)) > 0]
+            if candidates:
+                break
         if not candidates:
             break
-        candidates.sort()
         _, _, tk, c, mark, n = candidates[0]
         campaign += 1
         proceeds = sell_proceeds(mark, n, cfg)

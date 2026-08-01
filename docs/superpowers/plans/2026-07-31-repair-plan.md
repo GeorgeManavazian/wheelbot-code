@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 12 of 67 done (A2, A3, A4, A5, A6, A7, A11, A14, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16/A23 added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 13 of 67 done (A2, A3, A4, A5, A6, A7, A11, A12, A14, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16/A23 added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -202,7 +202,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A9 | Defer the covered call one session after assignment | MED | TODO | |
 | A10 | Corporate actions — at minimum detect and refuse | HIGH | TODO | |
 | A11 | Clock gate inside `run_daily` (refuse before 17:00 ET without `--force`) | MED | **DONE** | see A11 evidence block below. Boundary tightened 16:00→17:00 per its skeptic (Schwab's bar isn't settled until ~17:00 and `already_stepped` locks a half-baked day in). New row filed: **A23** — `--smoke` isolation is imperfect (its zombie path writes the REAL gaps.jsonl + a real email on a pull failure; pre-existing, skeptic F5). Cosmetic: run_health strings still say "20:00 window" (stale, noted). |
-| A12 | Budget allocation must not strand capital at small sizes | MED | TODO | |
+| A12 | Budget allocation must not strand capital at small sizes | MED | **DONE** | see A12 evidence block below. **Owner note (skeptic F3):** at fallback the k-descent prefers LEAST CONCENTRATION, so a tight account buys the cheapest fitting name, not the richest-premium one (measured: $2,000 on the worst-ranked vs a possible $3,000 on the best). Spec-conformant per the audit's framing; flag if you want richest-premium-first-at-any-k instead — one-line reorder. |
 | A13 | Model exchange/OCC/regulatory and assignment fees | LOW | TODO | |
 | A14 | Surface `StepResult.warnings`; bound the unsettleable-expiry refusal | HIGH | **DONE** | see A14 evidence block below. **Incident logged there too:** the A14 skeptic's probe wrote test states into the LOCAL frozen archive (`data/live/accounts/100k_N1..N6`) via the WHEELBOT_STATE_DIR import-time trap — self-reported, recovered same session (N6 deleted; N1 byte-exact from `data/live-synced@a8ea1f8`; N2-N5 nearest-frozen, one intraday session off; polluted snapshot rows stripped). Canonical VPS store untouched; Phase F resets all accounts anyway. Process rule saved to memory: main()-touching probes need the env pre-set in a fresh interpreter. |
 | A15 | Restore a bounded reach-back for the batch engine | MED | TODO | |
@@ -323,6 +323,30 @@ spec; the assertion mis-stated it. Refusal is still asserted for `""`, `None`, `
 
 **Not re-run after the amendment:** a second skeptic pass. The amendment is itself skeptic-derived
 and mutation-tested, but this is declared, not claimed as verified (A1/A5).
+
+---
+
+## A12 — evidence (completed 2026-08-01, overnight autonomous run)
+
+**In plain language.** The bot split its allowance evenly into N piggy banks; if no contract was
+cheap enough for one bank's share it bought NOTHING — $5k/N5 offered $1,000 a slot, afforded
+nothing, and sat 82% idle (one campaign in seven sessions) while the whole pot could buy a $3k
+contract. The capital×N grid was measuring affordability, not N. Now: even split first (byte-
+identical whenever anything fits — that's what the fingerprints and 270 options tests pin),
+and only when NOTHING fits does the money pour into fewer banks, down to one. Concentration
+only when the alternative is idleness.
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | $5k/N5 vs a $30 strike → `AssertionError: A12: $5k sat idle while a $3k contract was listed`. |
+| 2 Minimal fix | Pool-then-size restructure of the routing loop; the k=empty_slots pass IS the old budget; all A2/A3/regime gates untouched; route_events shape unchanged (both consumers verified). |
+| 3 Suites | `529` backtest + `182` live = **711**; fingerprints identical. |
+| 4 Mutation | 2 mutants killed (no-fallback · always-concentrate), independently re-killed by the skeptic. |
+| 5 Line audit | Committed formula untouched (PUT collateral only — pre-existing semantics). Warning dedup added post-skeptic (F4). |
+| 6 Blast radius | route_events consumers: audit referee + one test, both shape-compatible; fallback events record the affordable subset (observability note, declared). |
+| C1 Skeptic | **SURVIVES.** Head-to-head vs HEAD across 5 scenarios: no phantom money (collateral ≤ cash in every scenario, premium-crediting matches old semantics); best-AFFORDABLE wins under sort; audit-shape day goes 0% → 72% deployed; oversizing impossible at fallback (proved n=1 bound); CALL-phase shares correctly outside `committed` both versions; byte-identical when affordable. F3 recorded as the owner note above; F4 deduped. |
+| C2 Dry run | Not a market-data fix. The four $5k accounts are the live population this activates for on resume. |
+| C3 Dollars | Historical: 5k_N5 ran 18.0% mean utilization with $4,105 idle — the grid's N-comparison was confounded for every $5k tier. Prospective: small tiers deploy or honestly idle, never fake-idle. |
 
 ---
 
@@ -733,6 +757,7 @@ test (E8).
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
 | 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |
+| 2026-08-01 | **A12 DONE** (overnight). Equal split first, k-descent to concentration only when the alternative is idleness; skeptic SURVIVES (5-scenario head-to-head vs HEAD; audit-shape day 0%→72% deployed; no phantom money) with F3 recorded as an owner routing-preference note and F4 deduped. Suites 529+182=**711**. |
 | 2026-08-01 | **A14 DONE** (overnight). Every warning kind now reaches the log; stuck expiries escalate via one daily alert. Skeptic SURVIVES + F1 formatting amended. **Skeptic pollution incident on the local frozen archive disclosed + remediated in the A14 evidence block** (canonical VPS store untouched); WHEELBOT_STATE_DIR import-trap rule saved to memory. Suites 526+182=**708**. |
 | 2026-08-01 | **A11 DONE** (overnight). Clock gate ≥17:00 (skeptic-tightened from 16:00: settled-close semantics + already_stepped lock-in hazard), frozen-clock boundary tests, real 04:26 refusal observed. A23 filed (smoke gaps leak). Suites 526+180=**706**. |
 | 2026-08-01 | **A7 DONE** (overnight). Parameter-free session-date gate on live quotes (no holiday calendar to rot); skeptic CORRECT-BUT-INCOMPLETE → 3 amendments same session (pathological-timestamp per-leg refusal; three vacated fixtures re-stamped + mutant re-killed; test-double unshadowed). Suites 526+178=**704**. |
