@@ -45,6 +45,14 @@ def manage_intraday(state, quotes, cfg, now):
             # shared close bookkeeping (A17): books the Trade, decrements the
             # live size, normalizes an emptied leg to short=None
             state.cash, _fully = close_short_fill(pos, dec, state.cash, trades)
+            # A5: record the close so the 17:00 step's same-day anti-churn
+            # guard can see it (state is saved by run_intraday whenever
+            # trades were booked, so this survives to the EOD reload). Stale
+            # entries pruned here to keep the list one-day-sized.
+            state.intraday_closed = (
+                [e for e in state.intraday_closed
+                 if pd.Timestamp(e["date"]).normalize() == today]
+                + [{"date": today, "contract": c}])
     # drop positions emptied down to a bare PUT slot (same rule as step_one_day)
     state.positions[:] = [p for p in state.positions
                           if not (p["short"] is None and p.get("shares", 0) == 0

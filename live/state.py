@@ -70,13 +70,22 @@ def _pos_from_dict(d):
 
 
 def state_to_dict(state) -> dict:
-    return {
+    d = {
         "cash": state.cash, "campaign": state.campaign,
         "days_flat": state.days_flat,
         "days_shares_uncovered": state.days_shares_uncovered,
         "prev_d": None if state.prev_d is None else pd.Timestamp(state.prev_d).isoformat(),
         "positions": [_pos_to_dict(p) for p in state.positions],
     }
+    # A5: intraday closes must survive to the 17:00 reload or the same-day
+    # anti-churn guard evaporates. Written only when non-empty (last_ask
+    # precedent: existing files stay byte-identical).
+    closed = getattr(state, "intraday_closed", None)
+    if closed:
+        d["intraday_closed"] = [
+            {"date": pd.Timestamp(e["date"]).isoformat(),
+             "contract": _contract_to_dict(e["contract"])} for e in closed]
+    return d
 
 
 def state_from_dict(d) -> PortfolioState:
@@ -84,7 +93,10 @@ def state_from_dict(d) -> PortfolioState:
         cash=d["cash"], positions=[_pos_from_dict(p) for p in d["positions"]],
         campaign=d["campaign"], days_flat=d["days_flat"],
         days_shares_uncovered=d["days_shares_uncovered"],
-        prev_d=None if d["prev_d"] is None else pd.Timestamp(d["prev_d"]))
+        prev_d=None if d["prev_d"] is None else pd.Timestamp(d["prev_d"]),
+        intraday_closed=[{"date": pd.Timestamp(e["date"]),
+                          "contract": _contract_from_dict(e["contract"])}
+                         for e in d.get("intraday_closed", [])])
 
 
 def save_state(state, path):

@@ -44,6 +44,13 @@ class PortfolioState:
     days_flat: int = 0
     days_shares_uncovered: int = 0
     prev_d: object = None
+    # A5: contracts the INTRADAY manager closed, date-stamped
+    # [{"date": Timestamp, "contract": Contract}]. Seeds step_one_day's
+    # closed_today so the 17:00 run cannot re-sell a contract bought back at
+    # 10:00 -- the guard used to be rebuilt empty every step while
+    # manage_intraday persisted nothing, and A6/A16 exist to increase
+    # intraday closes. Stale (non-today) entries are pruned on append.
+    intraday_closed: list = field(default_factory=list)
 
 
 @dataclass
@@ -120,6 +127,12 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
 
     # 1) manage every held position (TP -> expiry -> covered call)
     closed_today = set()
+    # A5: seed with today's intraday closes -- same-day anti-churn must see
+    # what the 10:00 manager did, not just what this step does
+    day_norm = pd.Timestamp(d).normalize()
+    for e in state.intraday_closed:
+        if pd.Timestamp(e["date"]).normalize() == day_norm:
+            closed_today.add(e["contract"])
     for pos in positions:
         tk = pos["ticker"]
         day_chain = market.chain(tk, d)
@@ -136,6 +149,15 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                 short = pos["short"]
                 if fully:
                     closed_today.add(c)
+                    # A5 skeptic F1: the step must leave a note for ITSELF
+                    # too -- in the save-succeeded/snapshot-failed retry
+                    # window the same day is re-stepped and this exact
+                    # contract would be re-sold. Same date-stamped list the
+                    # intraday manager writes; stale entries pruned.
+                    state.intraday_closed = (
+                        [e for e in state.intraday_closed
+                         if pd.Timestamp(e["date"]).normalize() == day_norm]
+                        + [{"date": day_norm, "contract": c}])
             if short is not None and d >= c.expiry:
                 # re-read the size: a partial TP fill above shrank the leg, and
                 # settling the stale pre-fill `n` would assign contracts that

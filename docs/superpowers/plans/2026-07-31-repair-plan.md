@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 8 of 66 done (A2, A3, A4, A6, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16 added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 9 of 66 done (A2, A3, A4, A5, A6, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16 added) · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -194,9 +194,9 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A3 | Minimum credit / maximum spread / unclosable-by-construction guard | HIGH | **DONE** | see A3 evidence block below. Max-spread clause **discharged by A2** (no parameter-free residual). The RIG 70.2%/VALE 26.0%/AGNC 22.4% surrender evidence is the TP policy on a micro-credit population → **moved to A20** (percentage cut = strategy). New row **A3b**: covered-call side (22.6% of backtest call entries sell at ≤ $0.02 vs 1.05% of puts; refusing one leaves shares naked → owner decision, not guessed overnight). | **Sized during A6** (skeptic, real trade log, 145 SELL_PUTs, `commission_per_contract=0.65`): on micro-credit names a leg that used to expire free is now bought back at the $0.01 tick, surrendering **RIG 70.2% / VALE 26.0% / AGNC 22.4%** of banked premium (RIG: $6.60 to close $9.40 banked). 144 of 145 entries have a TP trigger reachable at the minimum tick. This is the minimum-credit case in dollars. |
 | A20 | **TP=0.60 is out of sample on the population A6 admits** | HIGH | **BLOCKED (owner)** — this IS the deferred "should TP=0.60 exist" strategy question; not decidable in the overnight run. Skipped 2026-08-01, not forgotten. | **+ evidence moved from A3 (2026-08-01):** the tick-close surrender fraction (t*m+c)/(credit*m−c) is a pure per-contract credit curve — 122% @ $0.02, 89% @ $0.025, 70.2% @ $0.03 (RIG), 22.4% @ $0.08 (AGNC), 18.6% @ $0.095 (the A2-implied floor), 4.2% @ $0.40. Any cut other than the 100% crossing ($0.023, now enforced by A3) is a strategy parameter and belongs to this row's TP decision. Realized: cheapest close ever printed $0.03; AGNC legs kept only 50.3% of banked. Found by the A6 skeptic. `src/engine_v2/options/chain.py:42` and `live/data.py:66-67` both filter `bid > 0`, so a `0.00 x 0.01` row is **unrepresentable in the backtest chain** — the frozen TP policy was never measured over it. Not created by A6 (`rows_from_quotes` opened it for EOD on 07-31), but A6 extends it to the path producing 100% of realized P&L. |
 | A4 | Covered-call window — reach the basis floor | HIGH | **DONE** | see A4 evidence block below. Follow-ups: **A4b** (solo backtest engines keep the silent covered-call no-op — warning is live-path only), **C16** filed (surface `days_shares_uncovered` on the dashboard — it still has no live reader). **A3b now urgent** (skeptic F4): the splice converts "unreachable" days into deep-OTM micro-credit call sales with NO liquidity/unclosability gating — the exact population A3b asks about, now growing. Answer A3b soon. |
-| A5 | Same-day re-entry guard must see intraday closes | HIGH | TODO | **A6 is an amplifier for this** — `portfolio.py:84` rebuilds `closed_today = set()` inside `step_one_day` and `manage_intraday` persists nothing, so every intraday close is invisible to the guard, and A6 exists to increase intraday closes. Bound: the newly-admitted population is deep-OTM/near-worthless, least likely to be re-selected at 0.30 delta, so the marginal exposure from A6 alone is probably small. |
+| A5 | Same-day re-entry guard must see intraday closes | HIGH | **DONE** | see A5 evidence block below. Skeptic-found sibling gap (EOD closes left no self-note for the crash-retry window) amended in the same fix. | **A6 is an amplifier for this** — `portfolio.py:84` rebuilds `closed_today = set()` inside `step_one_day` and `manage_intraday` persists nothing, so every intraday close is invisible to the guard, and A6 exists to increase intraday closes. Bound: the newly-admitted population is deep-OTM/near-worthless, least likely to be re-selected at 0.30 delta, so the marginal exposure from A6 alone is probably small. |
 | A6 | Intraday must see a 0.00 bid (align with `rows_from_quotes`) | HIGH | **DONE** | see A6 evidence block below |
-| A7 | Intraday holiday + quote-freshness gate | MED | TODO | |
+| A7 | Intraday holiday + quote-freshness gate | MED | WIP | overnight 2026-08-01 |
 | A8 | Early assignment modelling | MED | TODO | |
 | A9 | Defer the covered call one session after assignment | MED | TODO | |
 | A10 | Corporate actions — at minimum detect and refuse | HIGH | TODO | |
@@ -322,6 +322,32 @@ spec; the assertion mis-stated it. Refusal is still asserted for `""`, `None`, `
 
 **Not re-run after the amendment:** a second skeptic pass. The amendment is itself skeptic-derived
 and mutation-tested, but this is declared, not claimed as verified (A1/A5).
+
+---
+
+## A5 — evidence (completed 2026-08-01, overnight autonomous run)
+
+**In plain language.** The bot has a morning robot (intraday manager) and a 5pm robot (EOD
+step). The morning robot could buy a position back to lock profit, and the 5pm robot — with no
+memory of the morning — would sell the *exact same contract* again the same day. Worse every
+day, because A6/A16 exist to increase morning closes. Now every close leaves a date-stamped
+sticky note on the account (`intraday_closed`, round-tripped through the state file), the 5pm
+robot reads today's notes into its anti-churn set, and yesterday's notes correctly stop
+counting. The skeptic then proved the 5pm robot didn't leave notes for ITSELF either (a
+crash-between-save-and-snapshot retry re-sold its own close) — amended: EOD closes are recorded
+in the same list.
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | Intraday close at 10:00 → same-day step → `AssertionError: A5: EOD step re-sold the contract the intraday manager closed today`; plus the round-trip variant (guard evaporated on reload). |
+| 2 Minimal fix | `PortfolioState.intraday_closed` (default-empty; optional in the state file — last_ask precedent, legacy files byte-identical) · append-with-prune in `manage_intraday` and (amendment) the EOD TP branch · seed `closed_today` from today's entries in `step_one_day` · round-trip in `state.py`. |
+| 3 Suites | `526` backtest + `174` live = **700** (final post-amendment run). |
+| 4 Mutation | 4 mutants killed cache-safe: seeding removed · stale dates seed too · never persisted · EOD self-note dropped. |
+| 5 Line audit | All additive. Declared: the list carries stale entries indefinitely when no new close prunes them (harmless — date check; cosmetic). Partial fills append `c` while the leg lives (A17 interplay) — probed harmless: TP/expiry are structurally ungated by `closed_today`, only entry/covered-call read it. |
+| 6 Blast radius | `intraday_closed` touched only by `portfolio.py`, `live/intraday.py`, `live/state.py` (repo-wide grep). Backtest engines never touch `PortfolioState`. Snapshots unaffected. Fingerprints byte-identical — **declared trivially so** (every harness scenario runs the seed over an empty list); the proof is the 5 tests + the skeptic's mutant-equivalent probes. |
+| C1 Skeptic | **COULD-NOT-BREAK.** Contract equality across the JSON round trip holds under adversarial variants (int strike, np.float64, isoformat); a time-component expiry would break set membership but is unreachable (every chain expiry is normalized; every real state file carries midnight expiries — grepped). No unintended blocking: PUT close doesn't block same-strike CALL; other tickers unaffected; partial-close interplay harmless; 23:30 same-day retry holds, next-day releases; tick window confirmed never midnight-crossing. Its F1 (EOD self-note) **amended + mutant-killed**; F2 (stale entries persist) cosmetic, declared. |
+| C2 Dry run | Not a market-data fix. The live book's four held legs are all PUT-phase with no intraday closes recorded — the guard activates the first day the intraday manager closes anything after resume. |
+| C3 Dollars | $0 today (bot paused). Historical shape: every same-day churn pair was sell-at-bid + buy-at-ask on the same contract — paying the full spread twice for nothing; frequency scales with intraday TP activity, which A6/A16 deliberately increased. |
 
 ---
 
@@ -624,6 +650,7 @@ test (E8).
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
 | 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |
+| 2026-08-01 | **A5 DONE** (overnight). Date-stamped close notes on the state seed the anti-churn set; skeptic COULD-NOT-BREAK (adversarial round-trip equality, retry windows, partial-close interplay all held) and its one real finding — the EOD step left no note for itself in the crash-retry window — amended + mutant-killed same session. Suites 526+174=**700**. |
 | 2026-08-01 | **A4 DONE** (overnight). OTM-call splice for CALL-phase holdings (no width guess; live-verified +43% reach vs +3.9%) + loud warnings + one deduped alert. Skeptic CORRECT-BUT-INCOMPLETE → 3 amendments same session (delta-sanity guard, per-position crash isolation, dead branch deleted). Fingerprint-caveat disclosed (harness never executes the branch — proof is tests+probes). **A3b escalated:** splice grows the ungated micro-credit call population; owner should rule soon. A4b + C16 filed. Suites 521+174=**695**. |
 | 2026-08-01 | **A3 DONE** (overnight run). Analyst found the parameter-free core (TP-exit feasibility: reachable at the tick AND not net-negative at the worst accepted fill) and proved A2 subsumes it 3.8× in production — its value is invariance + backtest coverage. Skeptic **COULD-NOT-BREAK** (370,800-point brute force, 0 violations); F1/F4 amended same session (tp=0 refuse-all; loud roll vetoes). Max-spread clause discharged by A2; surrender curve moved to A20; **A3b** filed (covered-call side, owner decision). Suites 517+170=**687**. |
 | 2026-08-01 | **A2 DONE.** Owner rulings: 25 accounts = alternate universes (size judged per account, never aggregated); 3 provisional decisions (covered calls ungated, midpoint denominator @0.10, ON-in-FROZEN idiom) — dialog declined, veto cheap. Analyst spec (veto-not-filter proven by measured delta drift; backtest parquets have NO OI/volume) → predicate + 4 veto sites + observability. Skeptic CORRECT-BUT-INCOMPLETE → both gaps amended (5 body-mutant killers, solo-engine warnings). **Stale-pyc incident** during gate 4 disclosed in the evidence block; process rule adopted. Suites 509+170=**679** on fresh bytecode. |
