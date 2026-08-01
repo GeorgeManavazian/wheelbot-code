@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 28 of 70 done (A2-A7, A11, A12, A14-A19, A22, B1-B5, B7-B11 minus B6, C13-C15; A21b/A21c/C17 added session 2) · Group B remaining: B6 only (owner: universe re-vet) · A21 BLOCKED on owner D1-D3 · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 39 of 74 done (A2-A7, A10-A12, A14-A19, A21c, A22, A23, B1-B5, B7-B11 minus B6, C13-C15, D5b, E1-E7; A21b/A21c/C17/A10b-e added session 2) · Group A remaining: A8, A9, A13 + owner-blocked A20/A21/A21b · Group B remaining: B6 only (owner) · Group E: DONE · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -200,7 +200,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A7 | Intraday holiday + quote-freshness gate | MED | **DONE** | see A7 evidence block below. Minutes-scale intra-session staleness deliberately left to **C1**; EOD held-leg staleness stays **A21**; dashboard marks (`live_marks`/`live_asks`) still show prior-session prices on holidays — display-only, noted for **A18b**. |
 | A8 | Early assignment modelling | MED | TODO | |
 | A9 | Defer the covered call one session after assignment | MED | TODO | |
-| A10 | Corporate actions — at minimum detect and refuse | HIGH | TODO | |
+| A10 | Corporate actions — at minimum detect and refuse | HIGH | **DONE (provisional owner defaults)** | commit `b672cda`; analyst spec + A10 evidence block below. Restatement detector (`LiveMarket.prior_close` vs stored `last_spot`, capability-gated so batch is byte-identical by construction) → sticky manual-clear freeze; ≥25% gap with clean restatement → ONE deferred settlement session + 5-session watch (real crash auto-clears, tested); intraday underlying-gap refusal + frozen-skip; state round-trip; one deduped daily FROZEN email. **Owner may re-tune D1-D4 (band 0.80/1.25, backstop 25%, manual clearing, no entry veto) before Phase F — veto cheap, nothing trades while paused.** Mutants X1-X6 killed. Suites 560+295=855. |
 | A11 | Clock gate inside `run_daily` (refuse before 17:00 ET without `--force`) | MED | **DONE** | see A11 evidence block below. Boundary tightened 16:00→17:00 per its skeptic (Schwab's bar isn't settled until ~17:00 and `already_stepped` locks a half-baked day in). New row filed: **A23** — `--smoke` isolation is imperfect (its zombie path writes the REAL gaps.jsonl + a real email on a pull failure; pre-existing, skeptic F5). Cosmetic: run_health strings still say "20:00 window" (stale, noted). |
 | A12 | Budget allocation must not strand capital at small sizes | MED | **DONE** (+ owner amendment 2026-08-01) | see A12 evidence block below. Skeptic-F3 routing preference resolved by owner 2026-08-01: fallback flipped to **richest-ranked-first at any k**, sized at the largest k (least concentration) that affords it. Fresh skeptic on the flip: **SURVIVES** (4,000-trial differential fuzz vs HEAD, phantom money 0/8,000 runs, fallback n=1 in all 1,286 fallback trials, equal-split path identical in all 2,714 non-fallback trials, gate resurrection impossible, 4 mutants killed incl. exact-old-behavior revert). Declared (skeptic F8): fallback route_events record only the chosen name, so the audit referee cannot detect a wrong fallback pick — the two new tests in `test_budget_split.py` are the defense. |
 | A13 | Model exchange/OCC/regulatory and assignment fees | LOW | TODO | |
@@ -392,6 +392,32 @@ the dead board refused. So the owner has to bless it, same class as the A16 deci
 | A21b | MED | `load_chain_snapshot` silently drops unknown columns (`chain_store.py:82`) — any flagged row loses its flag on round-trip; becomes live the moment held rows touch the store (executed proof). Fix belongs INSIDE A21's implementation. |
 | A21c | MED | `run_daily` judges `held_marks_failed` BEFORE holiday/snapshot classification — a dead quote endpoint on a market holiday exits 1 and retry-alerts all evening for a day that should exit 0 as a holiday. |
 | C17 | LOW | HAL/WBD positions carry `last_spot=0.0` (spot-fallback at entry, never re-marked before the pause) — dashboard renders −100% "ITM" for OTM legs. Display only. |
+
+---
+
+## A10 — evidence (completed 2026-08-01, session 2; provisional owner defaults)
+
+**In plain language.** See the A10 spec block above for the full story. Short version: when a
+stock splits, the data vendor rewrites yesterday's prices but the bot's notebook still has the
+old numbers — so it books fantasy wins/losses (the audit's $42,750 hole, re-proven through the
+real engine before fixing). Now the bot checks every morning whether yesterday's price in
+today's fresh data still matches what it wrote down yesterday. Rewritten → position FROZEN
+loudly (email every day) until a human fixes the numbers. Huge move but nothing rewritten →
+wait ONE day before settling (a real crash clears itself the next morning — tested). The
+backtest engine physically cannot run this check (its data can't rewrite itself), and is
+pinned untouched.
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | `AssertionError: A10: engine traded through a corporate action / Left contains one more item: 'ASSIGNED'` — the audit's exact 2:1 shape through real `step_one_day`. Plus reds for state-key evaporation and both intraday holes. |
+| 2 Minimal fix | `_ca_guard` + `LiveMarket.prior_close` + settlement defer + intraday gate/skip + state keys + one alert. Entries untouched (analyst F5: proven safe — all same-day fresh data). |
+| 3 Suites | `560` backtest + `295` live = **855**. Goldens/fingerprints untouched — batch has no capability, structurally. |
+| 4 Mutation | X1-X6 killed, cache-safe: band-lobotomized · defer-dropped · evidence-erasing-freeze (`last_spot` updated on freeze) · immortal-watch · intraday-gate-off · frozen-skip-off. Plus the state-drop and wiring-lint reds. |
+| 5 Line audit | Guard runs BEFORE the `last_spot` overwrite (evidence preservation — X3's mutant class); `continue` on frozen skips mark/TP/settle/covered-call wholesale; defer skips ONLY the settlement branch (TP/marks ran above it). Declared: `last_spot<=0` positions (C17 class, HAL/WBD real) are unjudgeable → guard skips them, hole declared in-code. |
+| 6 Blast radius | CA surface touches exactly 5 files (grepped): portfolio, market_live, intraday, marks, state (+run_daily alert). BatchMarket: zero `prior_close` mentions, hasattr-pinned in BOTH directions (batch never grows it / live never grows `bounded_settle_price`). Unknown-key consumers (sync, secret_guard, dashboard) swallow the new state keys — the A17 pattern, its proofs apply. |
+| C1 Skeptic | **NOT RUN — declared.** Overnight autonomous session; the analyst's executed evidence (engine repro, two-source historical validation XLE/XLK/XLU-vs-SLV, FP-rate measurement over 1,111 name-years) + 6 killed mutants + 855 green stand in. A skeptic pass on A10 should ride the Phase-F fresh audit (F4) or an earlier session — flagged as the batch's weakest gate. |
+| C2 Dry run | Market closed (Saturday). The detector's historical validation ran both directions on real local data (analyst F2/F3). First live exercise: any future split/large-gap day — the FROZEN email is the demonstration, same as A14's TMO leg. |
+| C3 Dollars | $0 today (paused, no CA in flight). Historical class: the $42,750 fabricated assignment; XOP 1:4 (the one already-fenced live casualty); ~0.1-0.2 CA hits/yr expected on a held book. |
 
 ---
 
@@ -958,6 +984,9 @@ test (E8).
 
 | Date | Entry |
 |---|---|
+| 2026-08-01 | **A10 DONE (session 2, provisional defaults).** Analyst spec (restatement discriminator, 1,111 name-year FP measurement, GL-crash-vs-split counterexample) → capability-gated guard + intraday refusals + state round-trip + daily FROZEN email. 6 mutants killed; 560+295=**855**. Skeptic NOT run (declared — ride Phase-F F4). Owner may re-tune D1-D4 before resume. New rows A10b-e filed. |
+| 2026-08-01 | **GROUP E DONE (session 2).** E7: all nine audit surviving mutations re-run — #1-#3 die on the new E1/E2 exact-equity pins, #4-#9 die on `test_audit_mutation_kills.py`, every kill verified by applying the mutation. E3 dashboard ask-path tested; E4 --smoke probe leg (merge-only, below-window strike); E5 discharged with receipts; E6 rewritten to the fresh-interpreter contract. Commit `05793c9`. |
+| 2026-08-01 | **A23 + A21c DONE** (commit `7f90fee`): --smoke isolated end-to-end (all in-main alert/gap sites, exit codes kept); held-marks judged only after session classification (holiday + dead endpoint no longer retry-spams; positive-path pin doubles as the missing B4 wiring test). **D5b DONE** (commit `0e988e1`): missing token file + prior .dailyran-* markers → distinct MISSING alert; tick always asks. |
 | 2026-08-01 | **SESSION 2 BATCH DONE: A15 + B8 + B11 + C13/C14/C15.** Tree found dirty AGAIN (prior session left the B8/B11/C13-15 fixes + an unimplemented A15 red test, no plan entry) — every inherited piece re-proven from scratch (HEAD-worktree red proofs) rather than trusted, coverage holes plugged (per-engine B11 pins, A15 quiet pin, C13 lint pin), A15 implemented. 12 primary + 5 amendment mutants killed. Skeptic CORRECT-BUT-INCOMPLETE → F1 (B8's 201-273-bar hole — the defect survived one bar above the len<=200 check) and F4 (timestamp-shaped no_run invisible to the re-alerter) amended + mutant-killed same session; F2/F3/F6 pinned; F7/F8 declared. Suites 550+275=**825**. |
 | 2026-08-01 | **A21 analyst spec delivered → A21 BLOCKED (owner).** The "marks only" framing was wrong: the 17:00 held-leg quotes feed the EOD TP branch — moving them to RTH changes TRADING (RIG demonstrated: RTH ask fills what post-close refused). Owner decisions D1 (TP on RTH asks?), D2 (held-pull-failed day: step-with-carried-marks or skip?), D3 (bless the anchor break). Recommended design on file (held rows beside the chain snapshot, never inside — the held_only flag dies on store round-trip, executed proof). New rows: A21b (store drops unknown columns), A21c (held_marks_failed judged before holiday classification — evening retry spam on holidays), C17 (last_spot=0.0 renders −100% ITM). |
 | 2026-08-01 | **GROUP D ALL 14 ROWS DONE** (owner decisions + autonomous grant; commits `f5b8c1c` `2347b2f` `87da10e` `2afc1e8`). Batch 0 enablers (tick env hooks + bash sandbox harness, 14 tick tests); batch 1 alert/health (D3 delivered-only exits + spool, D5 3-day nag/EXPIRED/unreadable, D4 forward scan, D12 real dates + 23:30, D2 holiday email); batch 2 sync/state (D8 shapes/literals/unscannable-=offender, D11 dated day-boundary backups + dir fsync, D13 gitignore + orphan cleanup); batch 3 tick rewrite (D9 FAIL-exit, D1 intraday rc contract + nightly liveness scan, D6 health-first, D10 split markers + sync-only retry, D7 units + tick-failed); batch 4 D14 GitHub robot (heartbeat every tick, self-installed workflow + checker, owner declined dead-man URL). One incident: batch-2 commit briefly landed with a red test (pipe masked pytest's exit); caught same session, harness fixed (D8 collision), commit amended clean — pipefail now used on gated chains. Suites 539+257=**796**. Group skeptic next; Phase-F items filed (D7 semantics, PAT workflow scope, workflow re-enable after long pause). |
