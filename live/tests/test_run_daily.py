@@ -84,6 +84,13 @@ def test_incomplete_snapshot_skips_day_instead_of_retry_spam(tmp_path, monkeypat
     save_chain_snapshot(obs, {}, pulled_at="t")   # present but missing GDX
     alerts, gaps = [], []
     monkeypatch.setattr(run_daily, "send_alert", lambda *a: alerts.append(a))
+    # isolate from the real archive's held legs (accounts.py binds the store
+    # at import time) and from B4's wholesale-failure gate -- neither is this
+    # test's subject
+    monkeypatch.setattr(run_daily, "merge_held_legs",
+                        lambda *a, **k: {"requested": 0, "merged": 0,
+                                         "unquoted": [], "no_chain": [],
+                                         "error": None})
     monkeypatch.setattr(run_daily, "append_gap",
                         lambda date, reason, **kw: gaps.append((str(date), reason)))
     fake = types.ModuleType("schwab_client")

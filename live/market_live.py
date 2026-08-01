@@ -32,7 +32,11 @@ class LiveMarket:
         self.chain_attempts = 0    # how many chains we TRIED to pull
 
         good = set()
-        for tk in self._universe:
+        # B5: a held ticker that fell OUT of the universe must still get
+        # closes (marks, settlement) and a chain (take-profit) -- otherwise
+        # the position freezes silently forever. Universe order first, held
+        # extras after (stable, deduped).
+        for tk in list(dict.fromkeys(self._universe + sorted(set(held_tickers)))):
             try:
                 s = closes_fn(tk)
                 row = _row_before(regime_series(s), self._obs)   # regime compute

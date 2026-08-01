@@ -113,7 +113,7 @@ def merge_held_legs(market, client, position_lists, obs) -> dict:
     # when the leg is already inside the window. Without this the two are
     # indistinguishable and the run prints a success line either way.
     stats = {"requested": len(contracts), "merged": 0, "unquoted": [],
-             "no_chain": [], "error": None}
+             "no_chain": [], "error": None, "answered": 0}
     if not contracts:
         return stats
     try:
@@ -126,6 +126,12 @@ def merge_held_legs(market, client, position_lists, obs) -> dict:
         stats["error"] = f"quote payload was {type(data).__name__}, not a dict"
         return stats
 
+    # B4 amendment (group skeptic F2): count legs the endpoint ANSWERED for
+    # (a dict payload entry), separately from legs it could quote. A worthless
+    # 0.00x0.00 book is ANSWERED-but-refused -- the endpoint is alive and the
+    # book is real; only zero answers is a wholesale endpoint failure.
+    stats["answered"] = sum(1 for c in contracts
+                            if isinstance(data.get(c["symbol"]), dict))
     rows_by_ticker = rows_from_quotes(data, contracts, obs)
     quoted = {(r["ticker"], row["expiry"], row["strike"], row["right"])
               for r in contracts

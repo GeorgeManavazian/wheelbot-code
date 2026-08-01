@@ -127,6 +127,24 @@ def _trade_row(t):
             "campaign": t.campaign_id}
 
 
+def held_marks_failed(merged: dict) -> bool:
+    """B4: the zombie gate judges closes and chains but not held-leg marks --
+    the third population, and the one carrying 100%% of realized P&L. True
+    when held legs were requested and NONE could be marked (endpoint error or
+    every leg unquoted): every take-profit is suspended, which is a FAILED
+    run (retry), not a quiet one."""
+    if not merged.get("requested"):
+        return False
+    if merged.get("error"):
+        return True
+    # group-skeptic F2: a 0.00x0.00 book on every held leg is ANSWERED but
+    # unquotable -- the endpoint is alive and retrying cannot change the
+    # book; wedging the whole night (78 retry alerts, zero accounts stepped)
+    # over a worthless-but-real book was the snapshot-retry bug through the
+    # quote door. Wholesale failure = the endpoint answered for NOTHING.
+    return merged.get("answered", 0) == 0
+
+
 def collect_unsettled(warnings) -> dict:
     """A14: {leg label -> days past expiry} for every unsettleable-expiry
     warning. The 'bound' on the refusal is escalation -- these feed one loud
@@ -332,10 +350,25 @@ def main():
         print(f"skipped {len(market.skipped)} tickers (pull failures): "
               f"{[s[0] for s in market.skipped][:8]}")
 
+    if held_marks_failed(merged):
+        day = str(obs.date())
+        msg = (f"{day}: held-leg quote pull failed WHOLESALE "
+               f"({merged['requested']} leg(s) requested, error="
+               f"{merged['error']!r}, unquoted={merged['unquoted'][:6]}). "
+               f"Every take-profit is suspended -- that is a failed run, not "
+               f"a quiet one. No marker written; the next tick retries.")
+        print(f"HELD MARKS FAILED -- {msg}")
+        send_alert(f"daily run FAILED {day} (held-leg marks)", msg)
+        return 1
+
     run_cfg = load_run_config()
+    # group-skeptic F3: B5 widened the closes population to universe UNION
+    # held -- ratios must divide by what was actually PULLED or a handful of
+    # dead held-outside tickers inflates the ratio (and can exceed 100%).
+    pulled_n = len(market.skipped_closes) + len(getattr(market, "_closes", {}))
 
     if not args.smoke and snap is None:
-        outcome = snapshot_missing_outcome(market, universe, obs,
+        outcome = snapshot_missing_outcome(market, range(pulled_n), obs,
                                            run_cfg["zombie_threshold"])
         if outcome == "holiday":
             print(f"{obs.date()}: not a trading session and no RTH chain "
@@ -359,7 +392,7 @@ def main():
         # the zombie check below, which exits 1 so the tick retries.
 
     if (not args.smoke and snap is not None
-            and zombie_check(len(market.skipped_closes), len(universe),
+            and zombie_check(len(market.skipped_closes), pulled_n,
                              market.chain_attempts, market.chains_ok,
                              run_cfg["zombie_threshold"])):
         # A16 skeptic F2: with a snapshot present, chain_fn never touches the
@@ -369,7 +402,7 @@ def main():
         # with a wrong diagnosis ("lapsed token"). Classify like the missing-
         # snapshot case instead: dead closes still retry, a holiday stays
         # quiet, and a real day is skipped once, truthfully labelled.
-        outcome = snapshot_missing_outcome(market, universe, obs,
+        outcome = snapshot_missing_outcome(market, range(pulled_n), obs,
                                            run_cfg["zombie_threshold"])
         if outcome == "holiday":
             print(f"{obs.date()}: not a trading session — holiday. No paper "
@@ -392,7 +425,7 @@ def main():
             return 0
         # outcome == "retry": closes feed dead -- fall through, exit 1.
 
-    if zombie_check(len(market.skipped_closes), len(universe),
+    if zombie_check(len(market.skipped_closes), pulled_n,
                     market.chain_attempts, market.chains_ok,
                     run_cfg["zombie_threshold"]):
         day = str(obs.date())

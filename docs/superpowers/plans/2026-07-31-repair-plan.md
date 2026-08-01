@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 13 of 67 done (A2, A3, A4, A5, A6, A7, A11, A12, A14, A16, A17, A18, A19; A21/A22/E8/A18b/A18c/A17b/A3b/A4b/C16/A23 added) · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 22 of 67 done (A2-A7, A11, A12, A14, A16-A19, A22, B1-B5, B7, B9, B10; A21/E8/A18b/A18c/A17b/A3b/A4b/C16/A23 added) · Group B remaining: B6 (owner: universe re-vet), B8, B11 · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -188,7 +188,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A23 | `--smoke` isolation imperfect: its zombie path appends to the REAL `gaps.jsonl` and sends a real alert on a pull failure (state/trades/snapshots correctly go to `_smoke`) | LOW | TODO | filed from the A11 skeptic, 2026-08-01 |
 | A21 | `merge_held_legs` quote pull happens at 17:00, post-close (`run_daily.py:192` → `held_legs.py:113`) — same staleness class as A16 but marks/dashboard only, not entries | MED | TODO | Split out of A16 by owner decision 2026-07-31. Affects held-leg marks, snapshot equity (`snapshots.py:26`), and the EOD TP branch (`portfolio.py:94-101`); the intraday TP already runs on RTH quotes. |
 | A3b | Gate the covered-call side for liquidity/unclosability? 22.6% of backtest CALL entries (1,073/4,757) sell at bid ≤ $0.02 vs 1.05% of puts — but refusing a call leaves shares NAKED and re-attempts daily (measured 2,611 vetoes). Owner decision: gate calls, or accept micro-credit calls as closing-risk-on-owned-shares | MED | TODO | filed from the A3 analyst, 2026-08-01 |
-| A22 | `chain_frame` stamps `from_date`/`to_date` from the **box (UTC) clock**, not ET (`live/data.py:81 dt.date.today()`) — on the UTC VPS any retry from 19:00-20:00 ET onward requests **tomorrow's** expiry window, shifting the DTE band the selector uses | MED | TODO | Found by the A16 analyst. `obs_date` is threaded correctly; only the request dates are wrong. Dormant on the new RTH snapshot path (UTC date == ET date at 15:xx ET) but live on `--smoke` and any manual post-19:00 pull. |
+| A22 | `chain_frame` stamps `from_date`/`to_date` from the **box (UTC) clock**, not ET | MED | **DONE** | folded with B7 into the Group B batch; both pull functions frozen-clock tested | Found by the A16 analyst. `obs_date` is threaded correctly; only the request dates are wrong. Dormant on the new RTH snapshot path (UTC date == ET date at 15:xx ET) but live on `--smoke` and any manual post-19:00 pull. |
 | A17 | Represent partial fills / working-order state | HIGH | **DONE** | see A17 evidence block below. Follow-up filed: **A17b** — `run_intraday.py` saves state only `if trades`; a working order placed without an immediate fill would not persist. Inert until a fill model creates working orders; must land with that model. |
 | A1 | ~~Intraday fill realism~~ **DEFERRED — strategy decision, see owner decision above** | CRIT | DEFERRED (owner) | resting limit and next-poll both rejected on evidence; spread-fraction k≈0.5 is the supported candidate |
 | A2 | Liquidity gate (rel-spread/OI/volume) — **gate yes, cap parameter DEFERRED** | CRIT | **DONE** | see A2 evidence block below. Cap parameter still deferred (per-account per the 2026-08-01 alternate-universes ruling). **Provisional owner decisions (dialog declined; veto cheap):** covered calls NOT gated · rel-spread = (ask−bid)/computed midpoint @ 0.10 · gate ON in FROZEN, dataclass defaults OFF. |
@@ -211,16 +211,16 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 
 | ID | Fix | Sev | Status | Evidence |
 |---|---|---|---|---|
-| B1 | Drop non-positive/non-finite closes; report them; alert if recent | CRIT | TODO | |
-| B2 | Empty/stale payload is a failure, not a holiday | CRIT | TODO | |
-| B3 | One malformed contract must not discard the ticker | MED | TODO | |
-| B4 | `zombie_check`: held legs as a third, fully-required population | HIGH | TODO | |
-| B5 | Held ticker outside `UNIVERSE` must be an error, not silence | HIGH | TODO | |
+| B1 | Drop non-positive/non-finite closes; report them; alert if recent | CRIT | **DONE** | Group B evidence block below. "Alert if recent" satisfied via B2 (an all-garbage feed raises) + the F5 declared degrade. |
+| B2 | Empty/stale payload is a failure, not a holiday | CRIT | **DONE** | Group B evidence block below |
+| B3 | One malformed contract must not discard the ticker | MED | **DONE** | per-contract AND per-expiry-group containment (skeptic F1 amendment) |
+| B4 | `zombie_check`: held legs as a third, fully-required population | HIGH | **DONE** | `held_marks_failed`: wholesale = endpoint ANSWERED for nothing (skeptic F2: a 0×0-but-answered book must not wedge the night). `no_chain`-wholesale hole declared (F8, matches stated scope). Wiring untested (declared, E8-class). |
+| B5 | Held ticker outside `UNIVERSE` must be an error, not silence | HIGH | **DONE** | better than an error: the held-outside ticker is PULLED (closes + chain, marks + TP restored); ratio denominators corrected to the pulled population (skeptic F3). `is_trading_day` denominator drift declared (negligible at 542-name scale, zero at smoke scale). |
 | B6 | Re-vet the universe; add a `_RETIRED` frozenset with a test | HIGH | TODO | |
-| B7 | `chain_frame` must use the ET obs date, not the box clock | MED | TODO | |
+| B7 | `chain_frame` must use the ET obs date, not the box clock | MED | **DONE** | folded with A22; both pull functions ET-stamped, frozen-clock tested |
 | B8 | Truncated history must be recorded and logged | MED | TODO | |
-| B9 | Reject `underlyingPrice <= 0` | MED | TODO | |
-| B10 | Skip non-standard / `multiplier != 100` contracts | LOW | TODO | |
+| B9 | Reject `underlyingPrice <= 0` | MED | **DONE** | Group B evidence block below |
+| B10 | Skip non-standard / `multiplier != 100` contracts | LOW | **DONE** | string-"100" coercion proven safe; `nonStandard="true"`-string hole declared theoretical (Schwab emits real booleans). |
 | B11 | Warn when the selected strike is the extreme of the window | MED | TODO | |
 
 ### Group C — what the OWNER SEES
@@ -323,6 +323,33 @@ spec; the assertion mis-stated it. Refusal is still asserted for `""`, `None`, `
 
 **Not re-run after the amendment:** a second skeptic pass. The amendment is itself skeptic-derived
 and mutation-tested, but this is declared, not claimed as verified (A1/A5).
+
+---
+
+## Group B batch — evidence (B1 B2 B3 B4 B5 B7 B9 B10 + A22, completed 2026-08-01, overnight)
+
+**In plain language.** The bot's data intake believed everything it was handed. Now: fake prices
+(zero/negative/NaN/infinite closes) are thrown out loudly (B1); a blank or all-garbage price
+feed RAISES instead of impersonating a holiday (B2); one scribbled contract — or a scribbled
+expiry heading — skips that line/group, never the whole ticker (B3+F1); an impossible underlying
+price is refused (B9); split-adjusted/non-standard contracts and wrong multipliers are skipped
+(B10); a ticker the bot still HOLDS but dropped from its shopping list keeps getting prices and
+a chain, so its marks and take-profit never freeze (B5); a wholesale held-book quote failure is
+a FAILED run that retries — but a worthless-yet-answered 0×0 book is not mistaken for an outage
+(B4+F2); and both chain requests stamp their date window from Eastern time, never the UTC box
+clock that is already "tomorrow" from 19:00-20:00 ET (A22/B7).
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | 10 red tests, one per defect (garbage closes leaked · empty payload quiet · malformed contract killed the ticker · garbage expiry group killed the ticker · und≤0 admitted · nonStandard admitted · held-outside frozen · wholesale-failure predicate absent · UTC-tomorrow request window). |
+| 2 Minimal fix | `data.py` (filters/raises/ET dates), `market_live.py` (universe∪held pull), `run_daily.py` (`held_marks_failed` + wiring + pulled-population denominators). |
+| 3 Suites | `529` backtest + `192` live = **721**. |
+| 4 Mutation | 7 mutants killed cache-safe (keep-everything closes · empty-is-quiet · und<0-only · rows-raise-again · box-clock · B4-never-fails · held-extras-dropped · nonstandard-admitted) + 2 amendment mutants (unquoted-counts-as-failure · expiry-group-unguarded). |
+| 5 Line audit | All fail-loud or fail-clean conversions; no admission loosened anywhere (B10/B3 only tighten). One pre-existing test gained a `merge_held_legs` stub — group skeptic verified it was REQUIRED isolation (the import-time store trap) and its original assertions are intact. |
+| 6 Blast radius | `closes_from_json`/`chain_from_json` consumers: LiveMarket, snapshot runner, smoke tool — all verified. `zombie_check` signature untouched; three run_daily call sites now pass the pulled population. |
+| C1 Skeptic (group) | **CORRECT-BUT-INCOMPLETE** → all three findings **amended + mutant-killed**: F1 per-expiry-group containment · F2 answered-vs-quoted distinction (the 0×0 night-wedge killed) · F3 ratio denominators. Declared: F5 mass today-bar corruption reads as a quiet holiday (strict improvement over booking marks at 0.0; misclassification is silent — noted); F8 `no_chain`-wholesale stays print-only per B4's scope; `is_trading_day` denominator drift negligible at production scale. Verified clean: B5 end-to-end through step + RTH snapshot phase; A22 on BOTH pull functions under frozen UTC-tomorrow clocks; suites re-run independently. |
+| C2 Dry run | Not applicable (pure data-shape fixes; the live pulls already run through these functions daily — C2 for A16/A19/A4 exercised the same paths against live Schwab). |
+| C3 Dollars | Prevention-class. Historicals from the audit: 2026-07-24 (an outage stamped as a completed day) is B2's class; the TMO frozen-mark $153k-divergence lesson is B5's class for retired-but-held names. |
 
 ---
 
@@ -757,6 +784,7 @@ test (E8).
 | 2026-07-31 | Note: today's 9 expiring legs (TMO 512.5P ×9, RIG 4.5P ×8) are **unsettled** because the bot was paused before the EOD run. They settle correctly on resume via the late-expiry path at the expiry day's own close. Not a lost day. |
 | 2026-07-31 | **A16 DONE** (laptop restarted mid-session first; tree was clean, nothing lost). Analyst spec → 3 owner decisions → all 7 gates + C1/C2/C3 recorded above. Skeptic (CORRECT-BUT-INCOMPLETE) forced 4 amendments, each tested + mutation-killed. New rows filed: **A21** (held-leg quotes post-close), **A22** (UTC `from_date` in `chain_frame`), **E8** (runner-main wiring tests). Suites 484+166=**650**. Nothing deployed — bot stays paused; the tick-script window block reaches the VPS only at Phase F. |
 | 2026-07-31 | **A18 DONE.** Analyst spec (4-engine map, 12 named silent-change risks) → seam `fills.py` → 4 TP call-sites migrated, zero behavior change proven by pre/post fingerprints (byte-identical, all 4 engines) + skeptic old-vs-new tree differential (**COULD-NOT-BREAK**, 29 adversarial scenarios + real-chain roll/stop/gates runs + the unmigrated fifth copy as referee: 0 mismatches on 384+13 real fills). Follow-ups filed: **A18b** (marks cleanup), **A18c** (fifth copy). Suites 495+166=**661**. Bot stays paused. |
+| 2026-08-01 | **GROUP B BATCH DONE** (B1 B2 B3 B4 B5 B7 B9 B10 + A22, overnight). 10 red tests → fixes → 9 mutants killed → group skeptic CORRECT-BUT-INCOMPLETE → 3 amendments same session (expiry-group containment; answered-vs-quoted so a worthless 0×0 held book cannot wedge the night; pulled-population denominators). B6 left for the owner (universe re-vet is judgment); B8/B11 remain. Suites 529+192=**721**. |
 | 2026-08-01 | **A12 DONE** (overnight). Equal split first, k-descent to concentration only when the alternative is idleness; skeptic SURVIVES (5-scenario head-to-head vs HEAD; audit-shape day 0%→72% deployed; no phantom money) with F3 recorded as an owner routing-preference note and F4 deduped. Suites 529+182=**711**. |
 | 2026-08-01 | **A14 DONE** (overnight). Every warning kind now reaches the log; stuck expiries escalate via one daily alert. Skeptic SURVIVES + F1 formatting amended. **Skeptic pollution incident on the local frozen archive disclosed + remediated in the A14 evidence block** (canonical VPS store untouched); WHEELBOT_STATE_DIR import-trap rule saved to memory. Suites 526+182=**708**. |
 | 2026-08-01 | **A11 DONE** (overnight). Clock gate ≥17:00 (skeptic-tightened from 16:00: settled-close semantics + already_stepped lock-in hazard), frozen-clock boundary tests, real 04:26 refusal observed. A23 filed (smoke gaps leak). Suites 526+180=**706**. |
