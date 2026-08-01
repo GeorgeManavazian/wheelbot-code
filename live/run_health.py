@@ -16,18 +16,24 @@ from live.alerts import send_alert
 ET = ZoneInfo("America/New_York")
 
 
-def run_check(now_et, logs_dir=None, gaps_path=None, send=send_alert) -> str:
+def run_check(now_et, logs_dir=None, gaps_path=None, send=send_alert):
     """One health pass: scan + record missed days (check_day), then alert
     every recorded-but-undelivered day, naming the ACTUAL dates (D12) and
     suppressing on a .gapalerted delivered-marker per day (D3) -- a failed
-    send retries on the next tick instead of losing the alarm forever."""
+    send retries on the next tick instead of losing the alarm forever.
+
+    Returns (status, undelivered): undelivered counts alert attempts that
+    FAILED delivery this pass, so main() can exit nonzero and the tick's
+    FAIL/OnFailure machinery sees a gap-found-but-unalerted night (group
+    skeptic F3 -- it used to be an exit-0 night)."""
     from live.health import LOGS_DIR
     from live.gaps import GAPS_PATH
     ldir = logs_dir or LOGS_DIR
     gpath = gaps_path or GAPS_PATH
     status, _missed = check_day(now_et, ldir, gpath)
+    undelivered = 0
     if status in ("not_weekday", "too_early"):
-        return status
+        return status, undelivered
     # D1: nightly post-hoc intraday liveness. Only on a day whose EOD
     # completed (VPS provably alive in the evening) -- a fully-dead day is
     # the missed-day alert's job, not a duplicate email.
@@ -47,11 +53,13 @@ def run_check(now_et, logs_dir=None, gaps_path=None, send=send_alert) -> str:
             print(f"INTRADAY DEAD -- {body}")
             if send(f"intraday manager died mid-session {today}", body):
                 open(imarker, "w").close()
+            else:
+                undelivered += 1
 
     days = unalerted_gaps(gpath, ldir, now_et.date())
     if not days:
         print(f"health {now_et:%Y-%m-%d %H:%M}: {status}")
-        return status
+        return status, undelivered
     names = ", ".join(days)
     msg = (f"No successful daily run for: {names} -- the retry window closed "
            f"at {EOD_WINDOW_CLOSE} ET with no completion marker.\n\n"
@@ -64,12 +72,14 @@ def run_check(now_et, logs_dir=None, gaps_path=None, send=send_alert) -> str:
     if send(f"MISSED TRADING DAY(S) {names}", msg):
         for day in days:
             open(os.path.join(ldir, f".gapalerted-{day}"), "w").close()
-    return status
+    else:
+        undelivered += 1
+    return status, undelivered
 
 
 def main() -> int:
-    run_check(dt.datetime.now(ET).replace(tzinfo=None))
-    return 0
+    _status, undelivered = run_check(dt.datetime.now(ET).replace(tzinfo=None))
+    return 1 if undelivered else 0
 
 
 if __name__ == "__main__":

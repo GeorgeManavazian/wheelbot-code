@@ -284,3 +284,18 @@ def test_holiday_note_names_day_and_warns_about_stale_feeds(monkeypatch):
     assert "2026-11-26" in subject
     assert "holiday" in (subject + body).lower()
     assert "stale" in body.lower()
+
+
+def test_holiday_note_quiet_on_smoke_and_weekends(monkeypatch):
+    """Group skeptic F5: a --smoke connectivity check and a manual weekend
+    run both hit the holiday paths -- neither is a real holiday signal and
+    neither may email."""
+    import live.run_daily as rd
+    calls = []
+    monkeypatch.setattr(rd, "send_alert",
+                        lambda s, b, **kw: calls.append(s) or True)
+    rd.holiday_note(pd.Timestamp("2026-11-26"), smoke=True)     # Thu, smoke
+    rd.holiday_note(pd.Timestamp("2026-07-25"))                 # Saturday
+    assert calls == []
+    rd.holiday_note(pd.Timestamp("2026-11-26"))                 # real weekday
+    assert len(calls) == 1

@@ -133,3 +133,20 @@ def test_vps_down_day_defers_to_missed_day_alert(tmp_path):
     run_check(_et(2026, 7, 24, 23, 50), str(tmp_path), g, send=send)
     intraday_alerts = [c for c in calls if "intraday" in c[0].lower()]
     assert intraday_alerts == []
+
+
+# ---- Group D skeptic F3: undelivered alerts must surface in the exit code ----
+
+def test_undelivered_alert_reported_in_return(tmp_path):
+    """'Gap found, alert undelivered' was an exit-0 night -- D9's FAIL and
+    D7's OnFailure backstop never saw it. run_check must report undelivered
+    attempts so main() can exit nonzero."""
+    g = str(tmp_path / "g.jsonl")
+    send_bad, _ = _sender(ok=False)
+    status, undelivered = run_check(_et(2026, 7, 24, 23, 50), str(tmp_path), g,
+                                    send=send_bad)
+    assert undelivered > 0
+    send_good, _ = _sender(ok=True)
+    status, undelivered = run_check(_et(2026, 7, 24, 23, 55), str(tmp_path), g,
+                                    send=send_good)
+    assert undelivered == 0

@@ -67,6 +67,15 @@ def test_corrupt_heartbeat_fails(check, tmp_path):
 
 # ---- the workflow + checker ride every sync (self-install) ----
 
+def test_workflow_step_has_pipefail_shell():
+    """Group skeptic F1: without an explicit `shell: bash`, Actions runs
+    `bash -e` WITHOUT pipefail, the tee eats the checker's exit code, and
+    `if: failure()` can never fire -- the whole off-VPS watcher is inert."""
+    wf = os.path.join(os.path.dirname(_CHECKER), "mirror-freshness.yml")
+    body = open(wf).read()
+    assert "| tee" not in body or "shell: bash" in body
+
+
 def test_sync_installs_the_watcher(tmp_path, monkeypatch):
     import live.sync as sync_mod
     cfg = tmp_path / "git.json"

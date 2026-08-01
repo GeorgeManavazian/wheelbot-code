@@ -241,13 +241,17 @@ def _live_market(universe, held, obs, client, target_dte, chains,
                       chop_max_fast_fall=chop_max_fast_fall)
 
 
-def holiday_note(obs) -> None:
+def holiday_note(obs, smoke: bool = False) -> None:
     """D2 (owner 2026-08-01): a weekday the bot classifies as a holiday gets
     ONE informational email. On a real NYSE holiday (~9/yr) it is benign; on a
     trading day it is the only signal that the feed served stale bars and the
     day is being lost (the 2026-07-24 class) -- is_trading_day cannot tell
     those apart from inside. Delivery failure is tolerated (exit stays 0, the
-    day is genuinely not a gap on a real holiday); the alerts spool retries."""
+    day is genuinely not a gap on a real holiday); the alerts spool retries.
+    Quiet on --smoke (a connectivity check is not a holiday signal) and on
+    weekend obs dates (manual runs; group skeptic F5)."""
+    if smoke or pd.Timestamp(obs).weekday() >= 5:
+        return
     day = str(pd.Timestamp(obs).date())
     send_alert(
         f"no session {day} -- holiday?",
@@ -392,7 +396,7 @@ def main():
             print(f"{obs.date()}: not a trading session and no RTH chain "
                   f"snapshot — holiday. No paper day was stepped; this is "
                   f"not a gap.")
-            holiday_note(obs)
+            holiday_note(obs, smoke=args.smoke)
             return 0
         if outcome == "gap":
             day = str(obs.date())
@@ -426,7 +430,7 @@ def main():
         if outcome == "holiday":
             print(f"{obs.date()}: not a trading session — holiday. No paper "
                   f"day was stepped; this is not a gap.")
-            holiday_note(obs)
+            holiday_note(obs, smoke=args.smoke)
             return 0
         if outcome == "gap":
             day = str(obs.date())
@@ -471,7 +475,7 @@ def main():
         print(f"{obs.date()}: not a trading session (no bar dated today for the "
               f"universe) — holiday or early close with no print. No paper day "
               f"was stepped; this is not a gap.")
-        holiday_note(obs)
+        holiday_note(obs, smoke=args.smoke)
         return 0
 
     print(f"\n=== paper day {obs.date()} — {len(accounts)} account(s), down-only gate ===")

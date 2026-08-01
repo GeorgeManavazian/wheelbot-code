@@ -47,11 +47,17 @@ def _scan_start(logs_dir, gaps_path, today, lookback_days):
     except OSError:
         pass
     fallback = today - _dt.timedelta(days=lookback_days)
-    if not dates:
-        return fallback
-    try:
-        last = _dt.date.fromisoformat(max(dates))
-    except ValueError:
+    # newest PARSEABLE evidence (skeptic F9: a regex-shaped but invalid name
+    # like 2026-99-99 string-sorts above real dates; a blind max() would then
+    # silently degrade the whole scan to the fallback window)
+    last = None
+    for cand in sorted(dates, reverse=True):
+        try:
+            last = _dt.date.fromisoformat(cand)
+            break
+        except ValueError:
+            continue
+    if last is None:
         return fallback
     # never past today (a future-dated marker from clock skew must not blind
     # the scan to today), never a negative scan

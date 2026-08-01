@@ -16,7 +16,8 @@ def test_missing_config_returns_none(tmp_path):
 
 
 def test_send_alert_without_config_returns_false_and_does_not_raise(tmp_path):
-    assert alerts.send_alert("subj", "body", path=str(tmp_path / "nope.json")) is False
+    assert alerts.send_alert("subj", "body", path=str(tmp_path / "nope.json"),
+                             spool_path=str(tmp_path / "sp.jsonl")) is False
 
 
 def test_send_alert_success(tmp_path, monkeypatch):
@@ -50,7 +51,8 @@ def test_smtp_failure_is_swallowed(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise OSError("network unreachable")
     monkeypatch.setattr(alerts.smtplib, "SMTP", boom)
-    assert alerts.send_alert("subj", "body", path=_cfg(tmp_path)) is False
+    assert alerts.send_alert("subj", "body", path=_cfg(tmp_path),
+                             spool_path=str(tmp_path / "sp.jsonl")) is False
 
 
 def test_malformed_config_returns_none(tmp_path):

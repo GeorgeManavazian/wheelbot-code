@@ -246,8 +246,24 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 ### Group D — whether it RUNS
 
 All 14 rows landed 2026-08-01 (owner decisions + autonomous grant, four commits
-`f5b8c1c` `2347b2f` `87da10e` `2afc1e8`); group evidence block below. Group
-skeptic pending at the boundary.
+`f5b8c1c` `2347b2f` `87da10e` `2afc1e8`). **Group skeptic: CORRECT-BUT-INCOMPLETE
+(85 adversarial scratch tests; core logic survived everything) → 5 amendments
+same session:** F1 CRITICAL `shell: bash` on the workflow step (Actions' default
+shell has no pipefail — tee ate the checker's exit code and the whole off-VPS
+watcher could never alert; now pinned by a lint test); F2 HIGH the repo's own
+alert tests wrote junk into the REAL local archive via the spool default
+(`data/live/alerts-failed.jsonl` — deleted after inspection, both tests now pass
+explicit spool paths, full-suite checksum clean); F3 MED run_health.main now
+exits nonzero on gap-found-but-alert-undelivered nights (was unconditionally 0 —
+D9/D7 blind to a dead mailer); F5 LOW holiday note quiet on --smoke and weekend
+obs; F9 LOW forward scan keys on newest PARSEABLE marker (garbage name no longer
+degrades to the fallback window). **Declared, not fixed:** F4 MED resume-day
+flood (see Phase F items + owner decision); F6 LOW = D5b below; F7 mirror
+heartbeat's `synced` field is always false in the pushed copy (checker ignores
+it — never read it off the mirror); F8 retry_spool read-rewrite race (tick is
+serial; bites only concurrent manual runs); F10 secret-guard prose-FP surface
+("Bearer certificate-rotation" style text trips it) + a numeric-6-char mail
+password would block every push — acceptable, noted.
 
 | ID | Fix | Sev | Status | Evidence |
 |---|---|---|---|---|
@@ -264,6 +280,7 @@ skeptic pending at the boundary.
 | D11 | `.prev` only on the EOD write, or dated backups; fsync the directory | MED | **DONE** | First save of each ET day keeps `state.json.bak-<date>` (pruned at 7 days, synced — recovery artifacts); `.prev` semantics unchanged; directory fsync after `os.replace` (durable rename); mechanism test declared as such. |
 | D12 | Missed-day email must name the missed date and the real deadline | MED | **DONE** | `check_day` returns `(status, missed_days)`; the alert names every missed date; `EOD_WINDOW_CLOSE = "23:30"` constant (cross-pinned by comment to the tick's 2330); both stale 20:00 docstrings fixed. |
 | D13 | `.gitignore` in the synced tree; clean up orphaned `.tmp` | LOW | **DONE** | Self-healing `.gitignore` (`*.tmp` ONLY — spool + `.bak-*` stay synced); day-old orphaned tmp deleted before staging; in-flight tmp survives. |
+| D5b | A MISSING token file is silent forever (tick gates on `[ -f ]`, token_age treats absence as fresh-install). A deleted/moved token.json never nags; surfaces only when pulls fail. Fix sketch: absence + any `.dailyran-*` marker existing (bot has run before) → alert. | LOW | TODO | filed from the Group D skeptic F6, 2026-08-01 |
 | D14 | **External heartbeat off the VPS** | HIGH | **DONE** (owner: GitHub robot ONLY, dead-man URL declined) | Atomic `heartbeat.json` every tick (written before the EOD sync so the push carries today's truth); standalone stdlib checker + Actions workflow (01:30 UTC Tue-Sat) self-installed into the mirror's `.github/` by sync.py; stale/absent/incomplete heartbeat → failed-run email + auto-filed issue. Declared: PAT needs `workflow` scope (Phase-F check); cron best-effort; 60-day auto-disable irrelevant while pushes are daily but a resume-day re-enable check after any long pause; same-day death detection intentionally absent. |
 
 ### Group E — test hardening
@@ -790,6 +807,8 @@ test (E8).
 | F5 | Deploy; verify Mac/VPS byte-identical by checksum | TODO |
 | F6 | Re-enable timer; run the service once to re-anchor; confirm `NEXT` exists | TODO |
 | F7 | Reset all 25 accounts; day 1 begins | TODO |
+| F8 | **Group D deploy checks:** timer semantics (`list-timers` NEXT populated; stop/start restores trigger; forced nonzero tick fires wheelbot-alert), PAT carries `workflow` scope (the mirror push now includes .github/workflows/), mirror-freshness workflow enabled + one `workflow_dispatch` test run, re-enable check after any >60-day pause | TODO |
+| F9 | **Resume-day alert flood (owner decision, skeptic F4):** on resume night the forward scan will record EVERY paused weekday since 07-31 as a permanent `no_run` gap and email them all; old gaps 07-21/07-23 also re-email if resume ≤ 08-04/08-06 (no `.gapalerted` markers exist). Owner picks: accept the honest flood, or pre-seed `.dailyran`/`.gapalerted` markers (or a `paused` correction) for the deliberate-pause days before re-enabling the timer. | TODO — owner |
 
 ---
 

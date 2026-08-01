@@ -98,3 +98,17 @@ def test_scan_starts_after_newest_recorded_gap(tmp_path):
     append_gap("2026-07-22", "no_run", path=g)
     r, missed = check_day(_et(2026, 7, 24, 23, 50), str(tmp_path), g)
     assert missed == ["2026-07-23", "2026-07-24"]
+
+
+def test_garbage_marker_does_not_blind_the_scan(tmp_path):
+    """Group skeptic F9: a regex-shaped but unparseable marker name
+    (.dailyran-2026-99-99) string-sorts above every real date; a blind
+    max() then fails to parse and silently falls back to the 10-day
+    window, under-recording a longer outage. The scan must key on the
+    newest PARSEABLE evidence instead."""
+    g = str(tmp_path / "g.jsonl")
+    open(marker_path("2026-07-03", str(tmp_path)), "w").close()
+    open(marker_path("2026-99-99", str(tmp_path)), "w").close()   # garbage
+    r, missed = check_day(_et(2026, 7, 24, 23, 50), str(tmp_path), g)
+    assert len(missed) == 15, \
+        "garbage marker degraded the forward scan to the fallback window"

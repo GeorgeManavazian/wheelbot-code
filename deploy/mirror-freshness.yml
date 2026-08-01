@@ -23,6 +23,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: freshness
+        # shell: bash is LOAD-BEARING (group skeptic F1): Actions' default
+        # Linux shell is `bash -e {0}` WITHOUT pipefail, so the step's exit
+        # code would be tee's (always 0) and `if: failure()` could never
+        # trigger -- the whole watcher silently inert. Explicit `shell: bash`
+        # runs `bash --noprofile --norc -eo pipefail`.
+        shell: bash
         run: python3 .github/check_mirror_freshness.py --root . 2>&1 | tee freshness.txt
       - name: file issue
         if: failure()
