@@ -267,3 +267,20 @@ def test_collect_unsettled_names_the_leg_and_the_lateness():
          (pd.Timestamp("2026-07-17"), "route_state_unknown", "GDX")]
     got = collect_unsettled(w)
     assert got == {"TMO 512.5P 2026-07-10": 7}   # max lateness wins
+
+
+def test_holiday_note_names_day_and_warns_about_stale_feeds(monkeypatch):
+    """D2 (owner 2026-08-01): a weekday classified as a holiday must EMAIL,
+    not just print -- a stale-but-well-formed feed on a real trading day is
+    indistinguishable from a holiday to the bot, and before this note the
+    day was silently lost (the 2026-07-24 class). ~9 benign emails/yr."""
+    import live.run_daily as rd
+    calls = []
+    monkeypatch.setattr(rd, "send_alert",
+                        lambda s, b, **kw: calls.append((s, b)) or True)
+    rd.holiday_note(pd.Timestamp("2026-11-26"))
+    assert len(calls) == 1
+    subject, body = calls[0]
+    assert "2026-11-26" in subject
+    assert "holiday" in (subject + body).lower()
+    assert "stale" in body.lower()

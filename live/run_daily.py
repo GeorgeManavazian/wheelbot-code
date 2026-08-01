@@ -241,6 +241,24 @@ def _live_market(universe, held, obs, client, target_dte, chains,
                       chop_max_fast_fall=chop_max_fast_fall)
 
 
+def holiday_note(obs) -> None:
+    """D2 (owner 2026-08-01): a weekday the bot classifies as a holiday gets
+    ONE informational email. On a real NYSE holiday (~9/yr) it is benign; on a
+    trading day it is the only signal that the feed served stale bars and the
+    day is being lost (the 2026-07-24 class) -- is_trading_day cannot tell
+    those apart from inside. Delivery failure is tolerated (exit stays 0, the
+    day is genuinely not a gap on a real holiday); the alerts spool retries."""
+    day = str(pd.Timestamp(obs).date())
+    send_alert(
+        f"no session {day} -- holiday?",
+        f"The bot classified {day} as a market holiday (no bar dated today "
+        f"across the universe) and stepped nothing.\n\n"
+        f"Expected only on real NYSE holidays (~9/yr). If the market WAS "
+        f"open today, the price feed served stale bars and this day is being "
+        f"silently lost -- check the feed and the VPS clock.",
+    )
+
+
 def snapshot_missing_outcome(market, universe, obs, threshold) -> str:
     """A16: classify a decision run whose RTH chain snapshot is absent.
 
@@ -374,6 +392,7 @@ def main():
             print(f"{obs.date()}: not a trading session and no RTH chain "
                   f"snapshot — holiday. No paper day was stepped; this is "
                   f"not a gap.")
+            holiday_note(obs)
             return 0
         if outcome == "gap":
             day = str(obs.date())
@@ -407,6 +426,7 @@ def main():
         if outcome == "holiday":
             print(f"{obs.date()}: not a trading session — holiday. No paper "
                   f"day was stepped; this is not a gap.")
+            holiday_note(obs)
             return 0
         if outcome == "gap":
             day = str(obs.date())
@@ -451,6 +471,7 @@ def main():
         print(f"{obs.date()}: not a trading session (no bar dated today for the "
               f"universe) — holiday or early close with no print. No paper day "
               f"was stepped; this is not a gap.")
+        holiday_note(obs)
         return 0
 
     print(f"\n=== paper day {obs.date()} — {len(accounts)} account(s), down-only gate ===")

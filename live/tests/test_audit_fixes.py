@@ -72,7 +72,7 @@ def test_health_backfills_a_multi_day_outage(tmp_path):
     """Thu 2026-07-30 20:30 ET after an outage since Mon: Mon/Tue/Wed must all
     be recorded, not just today."""
     g = str(tmp_path / "g.jsonl")
-    r = check_day(dt.datetime(2026, 7, 30, 23, 50), str(tmp_path), g)
+    r, _missed = check_day(dt.datetime(2026, 7, 30, 23, 50), str(tmp_path), g)
     assert r == "gap_recorded"
     got = recorded_dates(g)
     for d in ("2026-07-27", "2026-07-28", "2026-07-29", "2026-07-30"):

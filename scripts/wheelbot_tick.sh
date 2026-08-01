@@ -11,7 +11,10 @@
 # alerting is the code that has to work on the worst day, so it gets to be
 # readable and testable.
 set -uo pipefail
-REPO="/home/ubuntu/etf-bot"
+# WHEELBOT_REPO / WHEELBOT_FAKE_* / WHEELBOT_TOKEN_PATH are testability hooks
+# (live/tests/test_tick_script.py) -- unset in production, so every default
+# below is byte-identical to the deployed behavior.
+REPO="${WHEELBOT_REPO:-/home/ubuntu/etf-bot}"
 cd "$REPO" || exit 1
 PY="$REPO/.venv-live/bin/python"
 LOGDIR="$REPO/data/live/logs"
@@ -21,9 +24,9 @@ ET(){ TZ=America/New_York date "$@"; }
 log(){ echo "$(ET '+%Y-%m-%d %H:%M:%S ET') $*" >> "$LOGDIR/tick.log"; }
 py(){ PYTHONPATH="$REPO" "$PY" "$@"; }
 
-DOW=$(ET +%u)
-HM=$((10#$(ET +%H%M)))
-TODAY=$(ET +%Y-%m-%d)
+DOW="${WHEELBOT_FAKE_DOW:-$(ET +%u)}"
+HM="${WHEELBOT_FAKE_HM:-$((10#$(ET +%H%M)))}"
+TODAY="${WHEELBOT_FAKE_TODAY:-$(ET +%Y-%m-%d)}"
 MARKER="$LOGDIR/.dailyran-$TODAY"
 
 # --- weekly Schwab login reminder ------------------------------------------
@@ -32,7 +35,7 @@ MARKER="$LOGDIR/.dailyran-$TODAY"
 # pre-2026-07-29 nag could never fire -- the bot would have gone blind at the
 # 7-day refresh-token lapse with no warning at all. live/tokenage.py reads the
 # `creation_timestamp` field, which is the real issue time.
-TOKEN="$HOME/.schwab/token.json"
+TOKEN="${WHEELBOT_TOKEN_PATH:-$HOME/.schwab/token.json}"
 NAG="$LOGDIR/.tokennag-$TODAY"
 if [ -f "$TOKEN" ] && [ ! -f "$NAG" ] && [ "$DOW" -le 5 ] && [ "$HM" -ge 1700 ]; then
   if py live/run_notify.py token-age "$TOKEN" >> "$LOGDIR/tick.log" 2>&1; then
