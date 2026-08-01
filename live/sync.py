@@ -27,23 +27,35 @@ _SECRET_MARKERS = (".schwab", ".wheelbot", "token.json", "oci_api_key",
 _SECRET_CONTENT = (
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}"),
-    re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----"),
+    re.compile(r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"),
     re.compile(r"x-access-token:[^@\s*]{8,}@"),
     re.compile(r'"refresh_token"\s*:\s*"[^"]{8,}"'),
+    re.compile(r'"(?:access_token|app_key)"\s*:\s*"[^"]{8,}"'),
     re.compile(r'"(?:app_secret|client_secret)"\s*:\s*"[^"]{6,}"'),
     re.compile(r'"password"\s*:\s*"[^"]{6,}"'),
+    re.compile(r"Bearer\s+[A-Za-z0-9._\-]{20,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
 )
 
-_SCAN_MAX_BYTES = 2_000_000     # skip pathological files; state files are tiny
+# D8: PAT shapes are also run against a whitespace-stripped copy of the body,
+# so a line-wrapped token cannot defeat the single-string regexes.
+_WRAP_DEFEATING = (_SECRET_CONTENT[0], _SECRET_CONTENT[1])
+
+_SCAN_MAX_BYTES = 2_000_000     # state files are tiny; see oversize handling
 
 
-def secret_guard(paths, state_dir: str = None) -> list:
-    """Every staged path that is, or CONTAINS, a credential. Empty == safe.
+def secret_guard(paths, state_dir: str = None, literals=()) -> list:
+    """Every staged path that is, or CONTAINS, a credential -- or that CANNOT
+    BE PROVEN CLEAN. Empty == safe.
 
-    Two independent checks, because either alone is insufficient:
-      1. the path itself looks like a credential file, and
-      2. the file's bytes match a known credential shape.
+    D8 hardening (audit 2026-07-31): an oversize or unreadable file is an
+    OFFENDER, not a skip -- "could not scan" must abort the push, because a
+    silent skip is exactly how a 2.1MB log carrying a token would leak.
+    `literals` are the exact secret strings this process already holds (the
+    PAT, the mail password, the Schwab tokens); any staged body containing
+    one is an offender regardless of shape.
     """
+    literals = tuple(l for l in literals if l and len(str(l)) >= 6)
     bad = [p for p in paths if any(m in p for m in _SECRET_MARKERS)]
     if state_dir is None:
         return bad
@@ -53,14 +65,44 @@ def secret_guard(paths, state_dir: str = None) -> list:
         full = os.path.join(state_dir, p)
         try:
             if os.path.getsize(full) > _SCAN_MAX_BYTES:
+                print(f"[secret_guard: {p} exceeds {_SCAN_MAX_BYTES}B -- "
+                      f"unscannable, treated as an offender]")
+                bad.append(p)
                 continue
             with open(full, "r", errors="ignore") as f:
                 body = f.read()
-        except OSError:
+        except OSError as e:
+            print(f"[secret_guard: {p} unreadable ({type(e).__name__}) -- "
+                  f"treated as an offender]")
+            bad.append(p)
             continue
-        if any(rx.search(body) for rx in _SECRET_CONTENT):
+        stripped = re.sub(r"\s+", "", body)
+        if (any(rx.search(body) for rx in _SECRET_CONTENT)
+                or any(rx.search(stripped) for rx in _WRAP_DEFEATING)
+                or any(str(l) in body for l in literals)):
             bad.append(p)
     return bad
+
+
+def _known_literals(cfg) -> tuple:
+    """The exact secret strings this process can already read: the PAT, the
+    alert-mail password, and the Schwab token strings. Best-effort -- an
+    absent/unreadable source contributes nothing (never raises)."""
+    lits = [(cfg or {}).get("token")]
+    try:
+        from live.alerts import load_alert_config
+        lits.append((load_alert_config() or {}).get("password"))
+    except Exception:                          # noqa: BLE001 -- deliberate
+        pass
+    try:
+        with open(os.path.expanduser("~/.schwab/token.json")) as f:
+            tok = json.load(f)
+        inner = tok.get("token", tok) if isinstance(tok, dict) else {}
+        if isinstance(inner, dict):
+            lits += [inner.get("refresh_token"), inner.get("access_token")]
+    except Exception:                          # noqa: BLE001 -- deliberate
+        pass
+    return tuple(l for l in lits if l)
 
 
 def _scrub(text: str, cfg) -> str:
@@ -106,9 +148,37 @@ def sync_state(state_dir: str, message: str, cfg_path: str = GIT_CFG) -> bool:
             _git(["config", "user.email", "wheelbot@localhost"], state_dir)
             _git(["config", "user.name", "wheelbot"], state_dir)
 
+        # D13: self-healing .gitignore (ONLY *.tmp -- alerts-failed.jsonl and
+        # *.bak-* are recovery artifacts and MUST stay synced), plus cleanup
+        # of day-old orphaned tmp files (an in-flight writer's tmp is seconds
+        # old; a day-old tmp is an orphan by construction).
+        gi = os.path.join(state_dir, ".gitignore")
+        try:
+            existing = open(gi).read() if os.path.exists(gi) else ""
+            if "*.tmp" not in existing:
+                with open(gi, "a") as f:
+                    f.write(("" if existing.endswith("\n") or not existing
+                             else "\n") + "*.tmp\n")
+            import time as _time
+            cutoff = _time.time() - 86400
+            for root, _dirs, files in os.walk(state_dir):
+                if ".git" in root.split(os.sep):
+                    continue
+                for name in files:
+                    if name.endswith(".tmp"):
+                        full = os.path.join(root, name)
+                        try:
+                            if os.path.getmtime(full) < cutoff:
+                                os.remove(full)
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+
         _git(["add", "-A"], state_dir)
 
-        offenders = secret_guard(_staged_paths(state_dir), state_dir)
+        offenders = secret_guard(_staged_paths(state_dir), state_dir,
+                                 literals=_known_literals(cfg))
         if offenders:
             print(f"[sync ABORTED -- credential in staged paths: {offenders}]")
             _git(["reset"], state_dir)

@@ -133,3 +133,56 @@ def test_a17_fields_absent_stay_absent(tmp_path):
     raw = json.load(open(p))
     assert "working_order" not in raw["positions"][0]
     assert "opened_contracts" not in raw["positions"][0]["short"]
+
+
+# ---- D11: dated day-boundary backup + durable rename ----
+
+def test_first_save_of_day_keeps_day_boundary_backup(tmp_path):
+    """.prev is refreshed on EVERY save (and run_intraday saves on every TP
+    close), so by evening it is minutes old -- a valid-but-wrong EOD write
+    destroyed the last good day-boundary state. The FIRST save of a day must
+    keep the state it found as a dated backup that later saves never touch."""
+    import glob
+    from live.state import save_state, load_state, PortfolioState
+    p = str(tmp_path / "state.json")
+    save_state(PortfolioState(cash=111.0, positions=[]), p)
+    save_state(PortfolioState(cash=222.0, positions=[]), p)   # first save "today" over 111
+    save_state(PortfolioState(cash=333.0, positions=[]), p)   # intraday churn
+    baks = glob.glob(p + ".bak-*")
+    assert baks, "no day-boundary backup written"
+    assert load_state(baks[0]).cash == 111.0, \
+        "backup must hold the state the day STARTED from, not intraday churn"
+    assert load_state(p + ".prev").cash == 222.0   # .prev semantics unchanged
+
+
+def test_backups_older_than_seven_days_are_pruned(tmp_path):
+    import glob
+    from live.state import save_state, PortfolioState
+    p = str(tmp_path / "state.json")
+    stale = p + ".bak-2020-01-01"
+    open(stale, "w").write("{}")
+    save_state(PortfolioState(cash=1.0, positions=[]), p)
+    save_state(PortfolioState(cash=2.0, positions=[]), p)
+    assert not os.path.exists(stale)
+
+
+def test_directory_fsync_after_rename(tmp_path, monkeypatch):
+    """Mechanism test (declared): os.replace's rename is not durable across
+    power loss without an fsync on the DIRECTORY fd."""
+    from live import state as st
+    p = str(tmp_path / "state.json")
+    fsynced = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: fsynced.append(fd) or real_fsync(fd))
+    dir_fds = []
+    real_open = os.open
+
+    def spy_open(path, flags, *a, **kw):
+        fd = real_open(path, flags, *a, **kw)
+        if os.path.isdir(path):
+            dir_fds.append(fd)
+        return fd
+    monkeypatch.setattr(os, "open", spy_open)
+    st.save_state(st.PortfolioState(cash=1.0, positions=[]), p)
+    assert any(fd in fsynced for fd in dir_fds), \
+        "the state directory was never fsynced after the rename"

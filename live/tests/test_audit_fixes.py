@@ -111,6 +111,9 @@ def test_push_timeout_never_prints_the_token(tmp_path, capsys, monkeypatch):
     cfg.write_text(json.dumps({"repo": "o/r", "token": TOKEN, "user": "u"}))
     state = tmp_path / "state"
     state.mkdir()
+    # a real clean file: D8 now treats an unreadable staged path as an
+    # offender and aborts BEFORE the push this test needs to reach
+    (state / "state.json").write_text('{"cash": 1.0}')
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=state, check=True)
 
     def boom(args, cwd):

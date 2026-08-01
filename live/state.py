@@ -99,23 +99,78 @@ def state_from_dict(d) -> PortfolioState:
                          for e in d.get("intraday_closed", [])])
 
 
+BACKUP_KEEP_DAYS = 7
+
+
+def _day_boundary_backup(path, dirn):
+    """D11: `.prev` is refreshed on EVERY save and run_intraday saves on each
+    TP close, so by evening .prev is minutes old -- a valid-but-wrong EOD
+    write destroyed the last good day-boundary state. The FIRST save of an ET
+    day copies the state it found to `state.json.bak-<date>` (never touched
+    again that day); backups older than BACKUP_KEEP_DAYS are pruned. These
+    are recovery artifacts and deliberately sync to the mirror."""
+    import datetime as _dt
+    import glob
+    import shutil
+    from zoneinfo import ZoneInfo
+    today = _dt.datetime.now(ZoneInfo("America/New_York")).date()
+    bak = f"{path}.bak-{today}"
+    if os.path.exists(path) and not os.path.exists(bak):
+        shutil.copy2(path, bak)
+        _fsync_path(bak)
+    cutoff = today - _dt.timedelta(days=BACKUP_KEEP_DAYS)
+    for old in glob.glob(f"{path}.bak-*"):
+        try:
+            d = _dt.date.fromisoformat(old.rsplit(".bak-", 1)[1])
+        except ValueError:
+            continue
+        if d < cutoff:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+
+
+def _fsync_path(p):
+    try:
+        fd = os.open(p, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
 def save_state(state, path):
-    """Atomic + durable + one-level backup. temp-write -> fsync -> keep the
-    prior state.json as .prev (recovery from a valid-but-wrong write) ->
-    os.replace. A crash or power loss can't leave a half-written or truncated
-    state.json, and yesterday's state is always one file away."""
+    """Atomic + durable + backups. temp-write -> fsync -> day-boundary dated
+    backup (first save of the day, D11) -> keep the prior state.json as .prev
+    (crash-window recovery) -> os.replace -> fsync the DIRECTORY (the rename
+    itself is not durable across power loss without it). A crash or power
+    loss can't leave a half-written or truncated state.json; yesterday's
+    day-boundary state survives the whole day, not just one save."""
     import shutil
     d = state_to_dict(state)
     dirn = os.path.dirname(path) or "."
     os.makedirs(dirn, exist_ok=True)
+    _day_boundary_backup(path, dirn)
     if os.path.exists(path):
         shutil.copy2(path, path + ".prev")
+        _fsync_path(path + ".prev")
     fd, tmp = tempfile.mkstemp(dir=dirn, suffix=".tmp")
     with os.fdopen(fd, "w") as f:
         json.dump(d, f, indent=2)
         f.flush()
         os.fsync(f.fileno())     # durable content before the atomic rename
     os.replace(tmp, path)
+    try:
+        dfd = os.open(dirn, os.O_RDONLY)
+        try:
+            os.fsync(dfd)        # durable RENAME, not just content
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
 
 
 def load_state(path):
