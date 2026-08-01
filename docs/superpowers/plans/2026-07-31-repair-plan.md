@@ -187,7 +187,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A19 | Capture `openInterest`/`totalVolume`/`bidSize`/`askSize` from the Schwab response | MED | **DONE** | see A19 evidence block below |
 | A23 | `--smoke` isolation imperfect: its zombie path appends to the REAL `gaps.jsonl` and sends a real alert on a pull failure (state/trades/snapshots correctly go to `_smoke`) | LOW | TODO | filed from the A11 skeptic, 2026-08-01 |
 | A21 | `merge_held_legs` quote pull happens at 17:00, post-close (`run_daily.py:192` → `held_legs.py:113`) — same staleness class as A16 but marks/dashboard only, not entries | MED | TODO | Split out of A16 by owner decision 2026-07-31. Affects held-leg marks, snapshot equity (`snapshots.py:26`), and the EOD TP branch (`portfolio.py:94-101`); the intraday TP already runs on RTH quotes. |
-| A3b | Gate the covered-call side for liquidity/unclosability? 22.6% of backtest CALL entries (1,073/4,757) sell at bid ≤ $0.02 vs 1.05% of puts — but refusing a call leaves shares NAKED and re-attempts daily (measured 2,611 vetoes). Owner decision: gate calls, or accept micro-credit calls as closing-risk-on-owned-shares | MED | TODO | filed from the A3 analyst, 2026-08-01 |
+| A3b | Covered-call unclosability gate (owner 2026-08-01: **middle path** — A3 arithmetic guard extended to calls; calls stay EXEMPT from the A2 liquidity gate) | MED | **DONE** | see A3b evidence block below. Skeptic CORRECT-BUT-INCOMPLETE → 2 amendments same session (router quiet-run pin killing the surviving warn-always mutant; wheel/router uncovered-day pins). **C16b filed** (skeptic F1: a daily-refused call logs but never emails — needs an N-consecutive-days escalation; two-tier vs A4's unreachable email, declared). **F4 declared:** pre-A3b backtest numbers involving calls are non-comparable (SEEN-ticker drift up to ±$10k final cash from removed sub-floor call paths; goldens unaffected — they sell zero calls). |
 | A22 | `chain_frame` stamps `from_date`/`to_date` from the **box (UTC) clock**, not ET | MED | **DONE** | folded with B7 into the Group B batch; both pull functions frozen-clock tested | Found by the A16 analyst. `obs_date` is threaded correctly; only the request dates are wrong. Dormant on the new RTH snapshot path (UTC date == ET date at 15:xx ET) but live on `--smoke` and any manual post-19:00 pull. |
 | A17 | Represent partial fills / working-order state | HIGH | **DONE** | see A17 evidence block below. Follow-up filed: **A17b** — `run_intraday.py` saves state only `if trades`; a working order placed without an immediate fill would not persist. Inert until a fill model creates working orders; must land with that model. |
 | A1 | ~~Intraday fill realism~~ **DEFERRED — strategy decision, see owner decision above** | CRIT | DEFERRED (owner) | resting limit and next-poll both rejected on evidence; spread-fraction k≈0.5 is the supported candidate |
@@ -274,6 +274,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | E6 | Rewrite `test_all_modules_follow_the_override` so it stops proving the opposite | TODO | |
 | E7 | Re-run all nine surviving mutations; every one must now be killed | TODO | |
 | C16 | Surface `days_shares_uncovered` per account on the dashboard (incremented + persisted, zero live readers) | MED | TODO | filed from the A4 analyst, 2026-08-01 |
+| C16b | Escalation for the A3b refusal class: N consecutive `call_gated_unclosable` days on one ticker → email (today it logs daily, forever, and never emails — while A4's floor-above-window class emails daily; same physical condition, two tiers). Needs persisted per-ticker consecutive-day state; owner picks N. | MED | TODO | filed from the A3b skeptic F1, 2026-08-01. Measured: SLV router-BASE(basis) backtest shows 295 gated-warning days (multi-week naked stretches are real, not hypothetical); live book currently has zero CALL-phase holdings so the class is prospective. |
 | E8 | `run_chain_snapshot.main()` wiring tests (zombie wiring, partial-exit-1, save-recheck call site, `--force`) — predicates are tested, the wiring is executed only by the A16 skeptic's S1 run and the C2 dry run | TODO | filed from skeptic F6, 2026-07-31 |
 
 ---
@@ -548,6 +549,31 @@ max-spread part was already discharged by A2.
 
 ---
 
+## A3b — evidence (completed 2026-08-01, owner in session)
+
+**In plain language.** The bot could still rent out shares it was stuck holding for a penny — a
+deal whose "exit early" door literally does not exist (the buy-back price would be below the
+smallest printable price, and fees eat more than the penny earned). A3 built that arithmetic
+check for step-1 promises (puts); the owner's middle-path ruling extends it to covered calls at
+all three production sites, while calls stay EXEMPT from the A2 liquidity bouncer — refusing a
+call leaves shares naked, so only arithmetic impossibility may refuse one. Refused days are
+loud (`call_gated_unclosable`, surfaced by the A14 generic log path) and still count as
+shares-uncovered days.
+
+| Gate | Evidence |
+|---|---|
+| 1 Reproduce | 4 red tests failing on exactly the defect (`engine wrote a covered call whose TP exit is unsatisfiable`; 1¢ and 2.4¢ calls sold by portfolio, wheel, router). |
+| 2 Minimal fix | `feasible = mark is None or tp_exit_feasible(mark.bid, cfg)[0]` + warning + sale-skip at the 3 SELL_CALL sites (`portfolio.py`, `wheel.py`, `regime_router.py`). No config knob (same P1 ruling as A3). No live-code change needed — A14's generic path surfaces the new kind (skeptic-executed proof). |
+| 3 Suites | `539` backtest + `192` live = **731** green. Goldens inert — both golden configs sell zero calls (verified independently by me and the skeptic). |
+| 4 Mutation | 3 wiring mutants (gate forced open per engine) killed by the new tests, cache-safe + size-changing; skeptic added 4 more kills (sale-proceeds-anyway ×3, gate-on-ask, router-only inversion) and CAUGHT one survivor (`R_warn_always` — router warning spam passed the whole suite) → amended with a router quiet-run pin, mutant re-killed. |
+| 5 Line audit | 3 sites × (feasible line + warning + condition); test file. Declared: refusals do NOT join A4's naked-shares daily email (listed-but-junk ≠ not-listed; C16b filed for escalation). |
+| 6 Blast radius | `tp_exit_feasible` callers: puts (A3) + 3 call sites + roll; exactly three SELL_CALL emission sites exist in src/+live/ (skeptic grep — intraday engines delegate). Warning consumers: run_daily `_handled` generic path prints the new kind; `naked_all` email untouched. State purity: refused-day cash/premium/equity bit-identical to a no-call-listed control in all three engines (skeptic-executed). |
+| C1 Skeptic | **CORRECT-BUT-INCOMPLETE** → both incompletenesses amended same session (F2 router quiet pin, F3 wheel/router uncovered-day pins). F1 → C16b (escalation rule, owner-facing). Boundaries exact in all 3 engines incl. tp=0 → refuse-all and comm-conjunct binding. Old-vs-new on real SEEN chains: every divergence's first cause is a removed sub-floor call; new engines sell ZERO sub-floor calls; final-cash drift up to ±$10k declared (F4) — pre-A3b call backtests non-comparable. |
+| C2 Dry run | Live chain snapshots are VPS-only (absent locally, declared). Against the fresh state mirror (synced 2026-07-31): all 25 accounts hold zero CALL-phase positions — the guard is a no-op on today's real book; no holding is left unwritable. |
+| C3 Dollars | Realized: **$0.00 either way** — 264 real trades contain zero SELL_CALL ever (no assignment has occurred live). Prospective: backtest sub-floor share 134/713 (18.8%) of FROZEN-solo call entries across SEEN tickers; the class the A4 splice grows (median 4-7¢) passes the floor — only true pocket lint dies. |
+
+---
+
 ## A2 — evidence (completed 2026-08-01)
 
 **In plain language.** The bot ordered 757 crates from a shop that sells 84 a day, and the
@@ -781,6 +807,8 @@ test (E8).
 
 | Date | Entry |
 |---|---|
+| 2026-08-01 | **A3b DONE** (owner in session — middle path). A3 arithmetic guard extended to covered calls at all 3 engines; calls stay exempt from A2. 8 tests; 7 mutants killed incl. the skeptic-caught router warn-always survivor (amended same session with a router quiet pin + uncovered-day pins). C16b filed (refusal class logs but never emails — escalation needed). F4 declared: pre-A3b call backtests non-comparable (±$10k SEEN-ticker drift from removed sub-floor paths; goldens sell no calls, unaffected). Realized dollars $0.00 both ways (zero SELL_CALL ever live). Suites 539+192=**731**. |
+| 2026-08-01 | **OWNER DECISIONS — GROUP D (ELI10 dialog #2):** (1) **D2 = informational alert** on every holiday-classified weekday, no vendored NYSE calendar. (2) **D5 = warn daily from 3 days runway**, any day/hour; distinct once-daily EXPIRED alert; unreadable-token-file alerts. (3) **D10 = split markers** (`.dailyran` = run completed, `.synced` = mirror updated; sync-only retry each tick). (4) **D14 = GitHub Actions mirror-freshness check ONLY** — owner declined the healthchecks.io dead-man URL (no new accounts); same-day mid-session death detection therefore rests on D1's nightly post-hoc liveness scan + next-morning GitHub check, declared. Group D analyst spec (all rows re-verified against current tree, receipts) delivered 2026-08-01; execution order = enablers → alert/health Python (D3→D12→D4→D2) → sync/state (D8+D13+D11) → tick rewrite (D9+D1+D6+D10+D5+D7 units) → D14+heartbeat. |
 | 2026-08-01 | **OWNER DECISIONS (morning review, ELI10 dialog):** (1) **A3b = middle path** — extend the A3 unclosability-arithmetic guard to covered calls (refuse calls whose winning TP exit is impossible/net-negative), but do NOT apply the A2 liquidity gate to calls; naked-share days accepted over guaranteed-dead exits. (2) **A2 provisional trio BLESSED as built** (covered-call liquidity exemption — consistent with A3b ruling; rel-spread = gap÷midpoint @ 0.10 kept after pass-rate walkthrough; ON-in-FROZEN / OFF-in-defaults idiom kept). (3) **A12 fallback routing = richest-premium-first** (flip from least-concentration; owner accepts concentration for income when only one purchase fits). (4) Next work = **Group D**. |
 | 2026-07-31 | Audit completed (9 domains). Bot paused: timer stopped and **disabled**. 8 fixes shipped as `4cffd72` + `7022ade`. Plan created; no repair work started. |
 | 2026-07-31 | **A6 DONE.** Found the tree dirty and the live suite RED with a prior session's unfinished A6 change; owner ruled finish-A6-before-A16. All 7 gates + C1/C2/C3 recorded above. Skeptic forced an amendment (two regressions the reorder introduced). New findings filed: **A20** (TP=0.60 out of sample on the admitted population), plus evidence added to A3, A5, A18. Suites 484+151=635. Nothing deployed — bot stays paused. |

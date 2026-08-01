@@ -217,7 +217,17 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                 # bid/ask/mid -- a selected contract always marks; the skeptic
                 # proved the branch dead.)
                 warnings.append((d, "covered_call_unreachable", tk))
-            if c is not None and c not in closed_today and mark is not None:
+            feasible = mark is None or tp_exit_feasible(mark.bid, cfg)[0]
+            if mark is not None and not feasible:
+                # A3b (owner 2026-08-01): a covered call whose own TP exit is
+                # unreachable at the tick or a guaranteed net loss is never
+                # written -- the shares stay honestly naked for the day
+                # (counted below, retried daily). Calls remain EXEMPT from
+                # the A2 liquidity gate: refusing a call leaves shares naked,
+                # so only arithmetic impossibility may refuse one.
+                warnings.append((d, "call_gated_unclosable", tk))
+            if c is not None and c not in closed_today and mark is not None \
+                    and feasible:
                 n = pos["shares"] // mult
                 proceeds = sell_proceeds(mark, n, cfg)
                 cash += proceeds; pos["premium"] += proceeds

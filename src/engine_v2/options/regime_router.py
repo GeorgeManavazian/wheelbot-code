@@ -222,7 +222,11 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
             c = select_contract(day_chain, d, "C", cfg.call_delta,
                                 cfg.target_dte, cfg.ticker, min_strike=floor)
             mark = option_mark(day_chain, d, c) if c is not None else None
-            if c is not None and c != closed_today and mark is not None:
+            feasible = mark is None or tp_exit_feasible(mark.bid, cfg)[0]
+            if mark is not None and not feasible:
+                # A3b: covered call with an unsatisfiable TP exit -- refused
+                warnings.append((d, "call_gated_unclosable", cfg.ticker))
+            if c is not None and c != closed_today and mark is not None and feasible:
                 n = shares // mult
                 proceeds = sell_proceeds(mark, n, cfg)
                 cash += proceeds; campaign_premium += proceeds
