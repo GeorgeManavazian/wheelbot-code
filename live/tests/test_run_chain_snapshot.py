@@ -1,9 +1,130 @@
 import datetime as dt
+import sys
+import types
 from zoneinfo import ZoneInfo
+
+import pandas as pd
 
 from live.run_chain_snapshot import snapshot_window_open, save_still_rth
 
 ET = ZoneInfo("America/New_York")
+
+
+# ---- E8: main() wiring harness -------------------------------------------
+# The predicates above are unit-tested; until now the WIRING (zombie exit,
+# partial-save-exit-1, the save-recheck call site, --force) was executed only
+# by one skeptic run. Everything external is monkeypatched at the module that
+# owns it (main() re-imports inside the function, so call-time attribute
+# patches land); no network, no real store.
+
+class _FakeMarket:
+    def __init__(self, skipped_closes=0, chain_attempts=3, chains_ok=3,
+                 skipped_chains=()):
+        self.skipped_closes = [None] * skipped_closes
+        self.chain_attempts = chain_attempts
+        self.chains_ok = chains_ok
+        self.skipped_chains = list(skipped_chains)
+        self.truncated_closes = []
+        self._chains = {"GDX": pd.DataFrame({"strike": [30.0], "right": ["C"]})}
+
+    def add_chain_rows(self, tk, rows):
+        return 0
+
+
+def _clockseq(*stamps):
+    """dt.datetime replacement whose now() pops stamps in order (start clock,
+    save-recheck clock), then repeats the last one."""
+    stamps = list(stamps)
+
+    class _DT(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            s = stamps.pop(0) if len(stamps) > 1 else stamps[0]
+            return s
+    return _DT
+
+
+def _wire(monkeypatch, tmp_path, market, start=None, done=None, argv=None):
+    import live.run_chain_snapshot as rcs
+    import live.run_daily as rd
+    import live.chain_store as cs
+    import live.config as lc
+    import live.accounts as la
+    import live.state as ls
+    start = start or _at(17, 15, 30)
+    done = done or start
+    monkeypatch.setattr(rcs.dt, "datetime", _clockseq(start, done))
+    fake = types.ModuleType("schwab_client")
+    fake.get_client = lambda: object()
+    monkeypatch.setitem(sys.modules, "schwab_client", fake)
+    monkeypatch.setattr(rd, "_live_market", lambda *a, **k: market)
+    monkeypatch.setattr(la, "all_accounts", lambda: [])
+    monkeypatch.setattr(lc, "load_run_config",
+                        lambda *a, **k: {"zombie_threshold": 0.5})
+    saved = []
+    monkeypatch.setattr(cs, "save_chain_snapshot",
+                        lambda obs, chains, pulled_at: saved.append(obs)
+                        or str(tmp_path / "snap.parquet"))
+    monkeypatch.setattr(sys, "argv", argv or ["run_chain_snapshot.py"])
+    return rcs, saved
+
+
+def test_e8_zombie_wiring_exits_1_and_saves_nothing(monkeypatch, tmp_path):
+    """A dead feed (all closes failed) must trip zombie_check -> exit 1,
+    NOTHING saved -- the tick retries inside the window."""
+    m = _FakeMarket(skipped_closes=550, chain_attempts=10, chains_ok=1)
+    rcs, saved = _wire(monkeypatch, tmp_path, m)
+    assert rcs.main() == 1
+    assert saved == [], "E8: a zombie snapshot was saved"
+
+
+def test_e8_partial_saves_anyway_but_exits_1(monkeypatch, tmp_path):
+    """Skeptic F3 semantics: a sub-threshold chain failure SAVES the partial
+    snapshot (17:00 uses the best one written) but exits 1 so remaining
+    window ticks retry a cleaner pull."""
+    m = _FakeMarket(skipped_chains=[("XOP", "boom")])
+    rcs, saved = _wire(monkeypatch, tmp_path, m)
+    assert rcs.main() == 1
+    assert len(saved) == 1, "E8: the partial snapshot was not saved"
+
+
+def test_e8_save_recheck_discards_a_slow_pull(monkeypatch, tmp_path):
+    """Started in-window, finished past the 16:05 grace: the save-recheck
+    CALL SITE must discard (predicate alone was tested; the wiring wasn't)."""
+    m = _FakeMarket()
+    rcs, saved = _wire(monkeypatch, tmp_path, m,
+                       start=_at(17, 15, 45), done=_at(17, 16, 20))
+    assert rcs.main() == 1
+    assert saved == [], "E8: post-close quotes were blessed as RTH"
+
+
+def test_e8_clean_run_saves_and_exits_0(monkeypatch, tmp_path):
+    m = _FakeMarket()
+    rcs, saved = _wire(monkeypatch, tmp_path, m)
+    assert rcs.main() == 0
+    assert len(saved) == 1
+
+
+def test_e8_force_bypasses_window_but_still_pulls(monkeypatch, tmp_path):
+    """--force at 17:30 ET (both gates shut) must still pull and save --
+    the documented manual/backfill path."""
+    m = _FakeMarket()
+    rcs, saved = _wire(monkeypatch, tmp_path, m,
+                       start=_at(17, 17, 30), done=_at(17, 17, 31),
+                       argv=["run_chain_snapshot.py", "--force"])
+    assert rcs.main() == 0
+    assert len(saved) == 1
+
+
+def test_e8_no_force_outside_window_refuses_before_client(monkeypatch, tmp_path):
+    m = _FakeMarket()
+    rcs, saved = _wire(monkeypatch, tmp_path, m, start=_at(17, 17, 30))
+    fake = types.ModuleType("schwab_client")
+    fake.get_client = lambda: (_ for _ in ()).throw(
+        AssertionError("refused snapshot must never build a client"))
+    monkeypatch.setitem(sys.modules, "schwab_client", fake)
+    assert rcs.main() == 1
+    assert saved == []
 
 
 def _at(day, h, m):
