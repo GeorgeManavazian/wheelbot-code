@@ -183,6 +183,64 @@ def test_portfolio_assignment_charges_event_fee():
     assert state.cash == pytest.approx(50_200 - 47_000 - 15.0)
 
 
+def test_assignment_fee_is_per_event_not_per_contract():
+    """Group A boundary sweep survivor M11 (2026-08-02): charging the fee
+    per CONTRACT survived all 896 tests because every fee test sized at
+    exactly 1 contract, where once and once-each are indistinguishable. On
+    the live book's 181-lot fills a $15 fee mischarged per contract leaks
+    $2,700 per event. Multi-lot on both settlement directions."""
+    # wheel: 2-contract assignment then 2-contract called-away, fee 15 each EVENT
+    rows = [
+        ["2024-01-02", "2024-01-09", 7, 235, "P", 2.00, 2.10, 2.05, 2.05, -0.30, 0.1, 236.0],
+        ["2024-01-09", "2024-01-09", 0, 235, "P", 5.00, 5.10, 5.05, 5.05, -0.99, 0.1, 232.0],
+        ["2024-01-10", "2024-01-16", 6, 240, "C", 3.00, 3.10, 3.05, 3.05, 0.30, 0.1, 232.0],
+        ["2024-01-16", "2024-01-16", 0, 240, "C", 5.00, 5.10, 5.05, 5.05, 0.99, 0.1, 245.0],
+    ]
+    cfg = WheelConfig(starting_capital=50_000.0, put_delta=0.30, call_delta=0.30,
+                      take_profit_pct=None, commission_per_contract=0.0,
+                      fee_per_assignment=15.0)
+    res = run_wheel(_chain(rows), cfg)
+    n = [t for t in res.trades if t.action == "ASSIGNED"][0].contracts
+    assert n == 2, "fixture must size to 2 contracts or the pin is vacuous"
+    # +2x200 credit; -47000-15 assigned (ONE fee); +2x300 call; +48000-15 away
+    assert res.final_cash == pytest.approx(
+        50_000 + 400 - 47_000 - 15.0 + 600 + 48_000 - 15.0)
+
+
+def test_portfolio_multilot_assignment_charges_one_fee():
+    class _M:
+        universe = []
+
+        def chain(self, tk, d):
+            return None
+
+        def spot(self, tk, d, fb):
+            return 232.0
+
+        def settle_price(self, tk, e):
+            return 232.0
+
+        def regime_row(self, tk, d):
+            return None
+
+        def eligible(self, tk, d):
+            return True
+
+    d = pd.Timestamp("2024-01-09")
+    put = Contract("SPY", d, 235.0, "P")
+    pos = {"ticker": "SPY", "shares": 0, "phase": "PUT", "basis": None,
+           "premium": 400.0, "campaign": 1, "last_spot": 236.0,
+           "short": {"contract": put, "contracts": 2, "credit": 2.0,
+                     "last_mid": 2.0}}
+    state = PortfolioState(cash=50_400.0, positions=[pos], campaign=1)
+    cfg = WheelConfig(ticker="SPY", starting_capital=50_000.0,
+                      take_profit_pct=None, commission_per_contract=0.0,
+                      fee_per_assignment=15.0)
+    step_one_day(state, _M(), d, cfg, selector="plain", n_slots=1)
+    assert state.cash == pytest.approx(50_400 - 2 * 235.0 * 100 - 15.0), \
+        "A13: assignment fee must charge once per EVENT, not per contract"
+
+
 def test_assignment_fee_default_zero_changes_nothing():
     plain = WheelConfig(starting_capital=50_000.0, put_delta=0.30,
                         take_profit_pct=None, commission_per_contract=0.0)

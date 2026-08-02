@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 42 of 76 done (A2-A19 all non-owner-blocked, A21c, A22, A23, B1-B5, B7-B11 minus B6, C13-C15, D5b, E1-E7; session 3: A8 rescoped+done, A8b deferred, A9 done, A9b owner-blocked, A13 done) · **Group A COMPLETE except owner-blocked A20/A21/A21b/A9b** · Group B remaining: B6 only (owner) · Group E: DONE · Next unblocked: small rows (A10b/A10e/C16b/E8/C16/C17) then Group C · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 42 of 76 done (A2-A19 all non-owner-blocked, A21c, A22, A23, B1-B5, B7-B11 minus B6, C13-C15, D5b, E1-E7; session 3: A8 rescoped+done, A8b deferred, A9 done, A9b owner-blocked, A13 done) · **Group A COMPLETE except owner-blocked A20/A21/A21b/A9b** · Group B remaining: B6 only (owner) · Group E: DONE · Next unblocked: small rows (A10f/A10b/A10e/C16b/E8/C16/C17) then Group C · **GROUP A BOUNDARY SWEEP DONE 2026-08-02** (see boundary block below): interaction skeptic 7/7 pairs SAFE (+A10f filed); mutation hunter 18 mutants, 16 killed, 2 survivors (M8 CA band edges, M11 fee-per-contract) — both closed same session with boundary pins, re-proven killed; regression prover ZERO stowaways (neutralized-HEAD byte-equal to 7022ade across all 5 arms). Suites 580+319. **Owner review is the remaining boundary gate.** · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -304,8 +304,51 @@ password would block every push — acceptable, noted.
 | A10e | Batch chains may contain unadjusted CA fossils beyond the one XOP `DEFAULT_CLEAN_START` fence (~19 candidates found in underlying histories) — backtest integrity sweep | LOW | TODO | filed from the A10 analyst, 2026-08-01 |
 | A21c | `held_marks_failed` judged before holiday/snapshot classification — holiday + dead quote endpoint = all-evening retry spam | MED | **DONE** | commit `7f90fee`. Block relocated after every no-session/no-snapshot exit; positive-path pin added (trading day + dead endpoint → exit 1 loud BEFORE any account steps — this is also the B4 wiring test the Group B batch declared missing). Mutants Y1 (block deleted) + Y2 (order reverted) killed. Declared: a skipped-day gap now files its gap instead of the held-marks retry loop (nothing steps on such a day; no retry can rebuild an RTH snapshot). |
 | C17 | `last_spot=0.0` positions render −100% "ITM" on the dashboard (HAL/WBD, real) | LOW | TODO | filed from the A21 analyst, 2026-08-01; display only |
+| A10f | A `ca_frozen` position's short leg is still re-marked every step — portfolio.py section 3 (~:461-482) has no frozen check, so `last_ask`/`last_mid` are overwritten daily from a possibly-restated chain and snapshot/dashboard equity swings in unknown units during a freeze (state.json contaminated mid-restatement; batch residual finalizer would buy back at it). No trading decision reads it (frozen skips TP/settlement/call). Fix: extend the frozen skip to the equity-mark loop (carry pre-freeze mark) or declare frozen-book equity unknown. | LOW-MED | TODO | filed from the Group A boundary interaction skeptic, 2026-08-02; repro `probe1b_frozen_mark.py` in session scratch |
 | C16b | Escalation for the A3b refusal class: N consecutive `call_gated_unclosable` days on one ticker → email (today it logs daily, forever, and never emails — while A4's floor-above-window class emails daily; same physical condition, two tiers). Needs persisted per-ticker consecutive-day state; owner picks N. | MED | TODO | filed from the A3b skeptic F1, 2026-08-01. Measured: SLV router-BASE(basis) backtest shows 295 gated-warning days (multi-week naked stretches are real, not hypothetical); live book currently has zero CALL-phase holdings so the class is prospective. |
 | E8 | `run_chain_snapshot.main()` wiring tests (zombie wiring, partial-exit-1, save-recheck call site, `--force`) — predicates are tested, the wiring is executed only by the A16 skeptic's S1 run and the C2 dry run | TODO | filed from skeptic F6, 2026-07-31 |
+
+---
+
+## GROUP A BOUNDARY SWEEP — evidence block (2026-08-02, session 3)
+
+Three read-only agents at HEAD `7a7c188`, tree verified untouched by all three.
+
+**1. Interaction skeptic — 7/7 fix-pair compositions CONFIRMED-SAFE, by execution:** A9×A10
+(freeze/defer/late-booking all defer from the booking session; freeze wins over the D+1 call);
+A9×A17×A13 (partial close D−1 + remainder assigned: friction on the 3 closed only, ONE event
+fee, assigned_d survives reload); A13×A3/A3b at tp=0.50 (the 0.026→0.028 band is EMPTY on real
+penny-quantized chains — RIG/VALE/AGNC entry counts identical fee-ON/OFF; every synthetic band
+credit refused loudly `tp_net_negative`); A5×A9 (stale intraday_closed never leaks into D+1
+closed_today; same-day anti-churn intact); A6×A2 (held_only zero-bid rows unreachable by entry,
+4 layers deep); A12×A2 re-fuzz post-A9/A13 (1,000 trials vs independent reference: identical
+picks, no phantom money, fallback right 105/105); A16/A22/B7×A7 (every date-classifying clock
+read in live/ is ET; frozen-clock boundary probes pass incl. 21:55-ET-is-tomorrow-in-UTC).
+New finding → **A10f** (frozen legs still re-marked daily; row filed).
+
+**2. Mutation hunter — 18 targeted money-path mutants on scratch copies, both suites each:
+16 killed, 2 SURVIVED, both closed same session:**
+- **M8** CA restatement band widened 0.80/1.25→0.5/2.0 survived 896 tests (drills only used 2:1
+  and 1:4 splits — freeze under ANY band). A 3:2 split would trade straight through = the
+  $42,750 phantom-assignment class. Closed: `test_restatement_band_edges_pin_the_owner_defaults`
+  (0.79/1.26 freeze, 0.81/1.24 don't); mutant re-applied → fails.
+- **M11** assignment fee charged per CONTRACT survived (every fee test sized 1 lot, where once
+  and once-each are identical). Inert at FROZEN $0 today; $15 on a 181-lot = $2,700/event leak
+  the day it's set. Closed: two multi-lot pins (wheel event pair + portfolio 2-lot); mutants
+  re-applied → fail.
+- Noted: M12's kill came only from the LIVE suite — the backtest suite never directly pins that
+  step_one_day returns its warnings (single point of defense, E-class candidate).
+
+**3. Regression prover — ZERO stowaways.** Method: HEAD with the declared default-ON fixes
+surgically neutralized (A9, A3/A3b, A15, A12) reproduces baseline `7022ade` **byte-for-byte**
+(trades incl. cash_after, final_cash, all counters, equity) on all five arms: SPY anchor
+(1,224 trades), GDX/SLV BASE, rotation N=1/N=5. Therefore every behavior delta since the plan
+began is attributable to declared fixes and nothing else. Cross-receipts: SPY 30 removed
+same-session calls == the A9 skeptic's count; warnings-only fixes (A4/B11) emit in neutralized
+runs while trades stay identical — provably cannot move money. Process note: the sweep prompt's
+allow-list omitted A12 (declared in plan; paperwork gap, recorded).
+
+**Post-sweep suites: 580 backtest + 319 live green.** Remaining boundary gate: owner review.
 
 ---
 

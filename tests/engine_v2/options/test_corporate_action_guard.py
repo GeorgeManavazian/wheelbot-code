@@ -73,6 +73,28 @@ def _step(market, pos, prev_d=D1):
     return st, r
 
 
+def test_restatement_band_edges_pin_the_owner_defaults():
+    """Group A boundary sweep survivor M8 (2026-08-02): widening the band to
+    0.5/2.0 survived all 896 tests, because every drill uses 2:1 or 1:4
+    splits that freeze under ANY band. A 3:2 split (ratio 0.667) or a 5:4
+    (0.8) is a common corporate action, and an unfrozen one is the audit's
+    $42,750 phantom-assignment class. Pin just inside and just outside the
+    owner's 0.80/1.25 band (not the exact float edges); a band-widening
+    mutant must fail the outside pins. Far expiry: nothing settles, so a
+    non-freeze day books no trades and the freeze flag is the only signal."""
+    far = pd.Timestamp("2026-12-18")
+    for ratio, must_freeze in [(0.79, True), (0.81, False),
+                               (1.24, False), (1.26, True)]:
+        pos = _held_put(expiry=far)
+        st, r = _step(Liveish(spot_today=104.0 * ratio, prior=104.0 * ratio),
+                      pos)
+        assert bool(pos.get("ca_frozen")) == must_freeze, \
+            (f"A10 band edge: ratio {ratio} expected "
+             f"{'freeze' if must_freeze else 'no freeze'}")
+        assert any(w[1] == "ca_confirmed_frozen" for w in r.warnings) \
+            == must_freeze
+
+
 def test_split_restatement_freezes_instead_of_phantom_assignment():
     """The audit hole verbatim: 2:1 split, adjusted close 52.50, stored
     last_spot 104. Old engine: ASSIGNED 900 @ 100, $42,750 fabricated. The
