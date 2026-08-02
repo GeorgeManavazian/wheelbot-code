@@ -28,6 +28,42 @@ def test_live_mark_overrides_last_mid_and_flags_live():
     assert round(unreal, 2) == round((3.45 - 2.00) * 100, 2)   # +145 profit
 
 
+def test_missing_spot_renders_no_distance_not_minus_100pct(tmp_path):
+    """C17: HAL/WBD carried last_spot=0.0 and the dashboard printed -100%
+    "ITM" -- a fabricated max-risk signal from a missing input. No spot ->
+    no distance (None, the same sentinel bare-shares rows already use),
+    never an arithmetic artifact."""
+    for spot_variant in ({"last_spot": 0.0}, {}):
+        state = {"cash": 100_000.0, "positions": [
+            {"ticker": "HAL", "phase": "PUT", **spot_variant, "short": {
+                "contracts": 1, "credit": 0.50, "last_mid": 0.50,
+                "contract": {"root": "HAL", "expiry": "2026-08-15",
+                             "strike": 20.0, "right": "P"}}}]}
+        rows, _e, _u = _rows_and_equity(state, marks={})
+        assert rows[0]["_dist"] is None, \
+            f"C17: {spot_variant} rendered dist {rows[0]['_dist']}, not None"
+
+
+def test_naked_days_line_surfaces_only_when_nonzero():
+    """C16: the counter had zero live readers. Nonzero -> a line naming the
+    count; zero/absent -> None (no noise on healthy accounts)."""
+    from dashboard.monitor import naked_days_line
+    assert naked_days_line({"days_shares_uncovered": 0}) is None
+    assert naked_days_line({}) is None
+    line = naked_days_line({"days_shares_uncovered": 7})
+    assert line is not None and "7" in line and "UNCOVERED" in line
+
+
+def test_board_actually_renders_the_naked_days_line():
+    """Wiring pin (streamlit board() needs a browser harness): the board must
+    call naked_days_line and pass a nonzero result to st.warning."""
+    import re
+    src = open("dashboard/monitor.py").read()
+    assert re.search(r'naked = naked_days_line\(state\)\s+if naked:\s+'
+                     r'st\.warning\(naked\)', src), \
+        "C16: naked_days_line is not wired into board()"
+
+
 def test_assigned_shares_use_spot():
     state = {"cash": 50_000.0, "positions": [
         {"ticker": "F", "phase": "SHARES", "shares": 500, "basis": 12.0,

@@ -105,7 +105,10 @@ def _rows_and_equity(state, marks):
             spot = p.get("last_spot", 0.0)
             dte = (pd.Timestamp(c_["expiry"]).normalize() - pd.Timestamp.now().normalize()).days
             # put: spot above strike = OTM cushion (>0 safe); below = ITM (assignment risk)
-            dist = (spot / strike - 1.0) if strike else 0.0
+            # C17: no stored spot (0.0 / absent, the HAL/WBD class) -> no
+            # distance -- None, the sentinel bare-shares rows already use.
+            # 0/strike - 1 printed a fabricated "-100% ITM" max-risk signal.
+            dist = (spot / strike - 1.0) if (strike and spot > 0) else None
             row = {"Ticker": tk, "Phase": phase, "Strike": f"{strike:g}", "Right": right,
                    "Contracts": k, "_premium": collected, "DTE": dte, "_dist": dist,
                    "_mark": mark, "Unreal P&L": unreal, "_live": live}
@@ -121,6 +124,19 @@ def _rows_and_equity(state, marks):
         total_unreal += unreal
         rows.append(row)
     return rows, cash + equity_positions, total_unreal
+
+
+def naked_days_line(state) -> str | None:
+    """C16: `days_shares_uncovered` was incremented and persisted with ZERO
+    live readers -- shares could sit unrented for weeks (SLV backtest: 295
+    gated days) and no page ever said so. One line, only when nonzero."""
+    d = state.get("days_shares_uncovered", 0)
+    if not d:
+        return None
+    return (f"shares have sat UNCOVERED (no covered call) for {d} "
+            f"session{'s' if d != 1 else ''} over this account's life -- "
+            f"if it is climbing daily, the call is being refused (A3b/A4) "
+            f"or deferred; see the run log")
 
 
 def _pnl_html(x):
@@ -172,6 +188,9 @@ def board(paths, capital, n, label, refresh="15s"):
     st.markdown(f"### {cap_label(capital)} account · N={n} &nbsp; {tag}", unsafe_allow_html=True)
     st.caption(f"${baseline:,.0f} capital · up to {n} positions · "
                f"{len(positions)} open · updates every {refresh}")
+    naked = naked_days_line(state)
+    if naked:
+        st.warning(naked)   # C16
 
     total_premium = sum(r["_premium"] for r in rows)
     c = st.columns(5)
