@@ -103,6 +103,14 @@ def _rows_and_equity(state, marks):
             unreal = collected - liability            # sold at credit, buy back at mark
             equity_positions -= liability             # short leg is owed
             spot = p.get("last_spot", 0.0)
+            # C9: a COVERED position carries shares alongside the short call --
+            # they were silently worth $0 here (a $10k covered lot rendered as
+            # a bare -$150 liability). Value them like the bare-shares branch:
+            # spot, falling back to basis when no spot is stored (C17 class).
+            sh = p.get("shares", 0)
+            if sh:
+                equity_positions += sh * (spot if spot > 0
+                                          else (p.get("basis") or 0.0))
             dte = (pd.Timestamp(c_["expiry"]).normalize() - pd.Timestamp.now().normalize()).days
             # put: spot above strike = OTM cushion (>0 safe); below = ITM (assignment risk)
             # C17: no stored spot (0.0 / absent, the HAL/WBD class) -> no

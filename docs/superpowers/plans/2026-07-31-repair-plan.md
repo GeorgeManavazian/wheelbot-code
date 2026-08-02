@@ -237,7 +237,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | C6 | Buy-and-hold benchmark (SPY + equal-weight of names traded) | HIGH | TODO | |
 | C7 | Header the grid with effective-N, distinct decisions, top-underlying share | HIGH | TODO | |
 | C8 | One source of truth for both dashboard pages, or stamp as-of dates | MED | TODO | |
-| C9 | Dashboard must add share value for covered positions | CRIT | TODO | |
+| C9 | Dashboard must add share value for covered positions | CRIT | **DONE** | short branch now values `shares × spot` (basis fallback, C17 class) alongside the leg liability — a $10k covered lot no longer renders as a bare −$150 liability. Red-first (2 tests incl. no-spot fallback), guard-removal mutant killed, live 336. Matches the E1 engine pin (equity = cash + shares×spot − ask×100×k). |
 | C10 | Drawdown/returns measured from capital, not the first snapshot | MED | TODO | |
 | C11 | Stamp `mark_basis` in every snapshot; annotate the changeover | MED | TODO | |
 | C12 | Deduplicate the equity index | LOW | TODO | |

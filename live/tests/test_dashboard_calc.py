@@ -44,6 +44,36 @@ def test_missing_spot_renders_no_distance_not_minus_100pct(tmp_path):
             f"C17: {spot_variant} rendered dist {rows[0]['_dist']}, not None"
 
 
+def test_covered_position_adds_share_value():
+    """C9 (CRIT): a covered position -- shares AND a short call -- must value
+    the shares. The short branch subtracted the leg liability and dropped
+    spot*shares entirely: a $10k covered lot rendered as a bare -$150
+    liability. Engine convention (E1 pin): equity = cash + shares*spot -
+    ask*100*k."""
+    state = {"cash": 5_000.0, "positions": [
+        {"ticker": "GDX", "phase": "CALL", "shares": 100, "basis": 30.0,
+         "last_spot": 32.0, "short": {
+             "contracts": 1, "credit": 0.80, "last_mid": 1.40, "last_ask": 1.50,
+             "contract": {"root": "GDX", "expiry": "2026-08-21",
+                          "strike": 33.0, "right": "C"}}}]}
+    rows, equity, _u = _rows_and_equity(state, marks={})
+    assert equity == 5_000.0 + 100 * 32.0 - 1.50 * 100, \
+        "C9: covered shares are missing from dashboard equity"
+
+
+def test_covered_position_without_spot_falls_back_to_basis():
+    """C9 x C17: covered lot with no stored spot values shares at basis
+    (the bare-shares branch's existing convention), never at zero."""
+    state = {"cash": 5_000.0, "positions": [
+        {"ticker": "WBD", "phase": "CALL", "shares": 100, "basis": 11.0,
+         "last_spot": 0.0, "short": {
+             "contracts": 1, "credit": 0.30, "last_mid": 0.30, "last_ask": 0.35,
+             "contract": {"root": "WBD", "expiry": "2026-08-21",
+                          "strike": 12.0, "right": "C"}}}]}
+    rows, equity, _u = _rows_and_equity(state, marks={})
+    assert equity == 5_000.0 + 100 * 11.0 - 0.35 * 100
+
+
 def test_naked_days_line_surfaces_only_when_nonzero():
     """C16: the counter had zero live readers. Nonzero -> a line naming the
     count; zero/absent -> None (no noise on healthy accounts)."""
