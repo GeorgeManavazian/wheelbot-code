@@ -24,6 +24,7 @@ from live.accounts import all_accounts, account_paths, account_label
 from live.alerts import send_alert
 from live.gaps import append_gap, append_correction
 from live.held_legs import merge_held_legs
+from live.escalations import update_escalations, ESCALATION_DAYS
 from live.config import load_run_config
 
 ET = ZoneInfo("America/New_York")
@@ -552,6 +553,7 @@ def main():
     naked_all = set()   # A4: tickers whose covered call was unreachable, any account
     unsettled_all = {}  # A14: contract -> days-late, any account
     frozen_all = set()  # A10: corporate-action-frozen legs, any account
+    gated_all = set()   # A3b/C16b: tickers whose covered call was refused, any account
     for (cap, n) in accounts:
         state, paths = loaded[(cap, n)]
         label = "_smoke" if args.smoke else account_label(cap, n)
@@ -576,6 +578,8 @@ def main():
                           if w[1] == "covered_call_unreachable"}
             frozen_all |= {str(w[2]) for w in r.warnings
                            if w[1] == "ca_confirmed_frozen"}
+            gated_all |= {str(w[2]) for w in r.warnings
+                          if w[1] == "call_gated_unclosable"}
             for key, late in collect_unsettled(r.warnings).items():
                 unsettled_all[key] = max(unsettled_all.get(key, 0), late)
             stepped += 1
@@ -607,6 +611,31 @@ def main():
                f"calls are suspended on these positions. Strike/shares/basis "
                f"need manual restatement, then clear ca_frozen in the state "
                f"file (A10; this alert repeats daily until cleared).")
+    if not args.smoke:
+        # A10b/C16b: conditions that log daily but never email escalate after
+        # ESCALATION_DAYS consecutive stepped days. Both kinds are passed
+        # EVERY stepped day (empty list = surface ran clean = streak resets).
+        # Keys are global across accounts (market/data conditions, not
+        # sizing). --smoke never touches the counter file (A23 class).
+        esc = update_escalations(day, {
+            "unquoted_leg": merged["unquoted"],
+            "call_gated_unclosable": sorted(gated_all),
+        })
+        if esc:
+            n_esc = sum(len(v) for v in esc.values())
+            lines = []
+            if esc.get("unquoted_leg"):
+                lines.append("DEAD/UNQUOTED held legs (A10b -- reverse split, "
+                             "symbol change or delisting; TP suspended): "
+                             + ", ".join(f"{k} ({c}d)" for k, c in esc["unquoted_leg"]))
+            if esc.get("call_gated_unclosable"):
+                lines.append("covered call REFUSED daily, shares naked (C16b): "
+                             + ", ".join(f"{k} ({c}d)" for k, c in
+                                         esc["call_gated_unclosable"]))
+            _alert(f"ESCALATION -- {n_esc} condition(s) at "
+                   f"{ESCALATION_DAYS}+ consecutive days",
+                   f"{day}: " + " | ".join(lines) + ". Repeats daily while "
+                   f"the condition persists.")
     if naked_all:
         # A4: ONE deduped alert for all 25 accounts (heavy overlap, avg 7.2x
         # replication) -- shares sitting naked must reach the owner's inbox,
