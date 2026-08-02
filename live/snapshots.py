@@ -27,7 +27,12 @@ def snapshot(state, equity: float, day) -> dict:
                 # A17: original leg size, present only once a partial fill
                 # shrank the leg -- lets a stored row say "6 of 10 remain"
                 **({"opened_contracts": sh["opened_contracts"]}
-                   if "opened_contracts" in sh else {})},
+                   if "opened_contracts" in sh else {}),
+                # C1: when the equity's mark was taken -- a stored equity row
+                # can now say "this leg's price is N days old"
+                **({"mark_asof": sh["mark_asof"]} if "mark_asof" in sh else {}),
+                **({"mark_quote_time": sh["mark_quote_time"]}
+                   if "mark_quote_time" in sh else {})},
         })
     return {
         "date": pd.Timestamp(day).normalize().isoformat(),

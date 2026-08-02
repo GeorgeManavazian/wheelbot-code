@@ -20,6 +20,10 @@ class Mark:
     bid: float
     ask: float
     mid: float
+    # C1: per-leg quote time (ms epoch) when the source provides one; None on
+    # backtest frames (no column) and legacy payloads. Trailing default so
+    # positional construction and equality with 3-arg Marks stay intact.
+    quote_time: float | None = None
 
 def normalize_greeks_eod(raw: pd.DataFrame) -> pd.DataFrame:
     df = raw.copy()

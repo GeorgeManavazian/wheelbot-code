@@ -379,8 +379,19 @@ def main():
     # still pull chains live. `snap is None` is handled after the pulls, where
     # holiday / outage / genuine gap can be told apart; passing {} meanwhile
     # keeps every candidate an honest skipped_chains entry instead of a pull.
-    from live.chain_store import load_chain_snapshot
+    from live.chain_store import load_chain_snapshot, snapshot_pulled_at
     snap = None if args.smoke else load_chain_snapshot(obs)
+    if snap is not None:
+        # C1: pulled_at was written from day one and never read. One line:
+        # how old is the book the 17:00 decisions are about to run on.
+        pa = snapshot_pulled_at(obs)
+        if pa:
+            try:
+                age_min = (dt.datetime.now(ET)
+                           - dt.datetime.fromisoformat(pa)).total_seconds() / 60
+                print(f"chain snapshot pulled {pa} ({age_min:.0f} min ago)")
+            except ValueError:
+                print(f"chain snapshot pulled {pa}")
     if args.smoke:
         # E4: the probe leg below needs GDX's chain, and a chop-gated day
         # would otherwise pull no chains at all -- held tickers always get

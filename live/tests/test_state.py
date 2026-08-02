@@ -223,6 +223,36 @@ def test_positions_without_ca_keys_stay_key_identical(tmp_path):
         "A8: absent recon key must stay absent (legacy files byte-identical)"
 
 
+def test_mark_asof_and_quote_time_survive_the_round_trip(tmp_path):
+    """C1: the carried-mark discriminator lives on the short dict; the state
+    whitelist silently drops unknown short keys, so without the round-trip a
+    reload erases the as-of and every leg looks freshly marked."""
+    from src.engine_v2.options.chain import Contract
+    from src.engine_v2.options.portfolio import PortfolioState
+    from live.state import save_state, load_state
+    import pandas as pd
+    p = str(tmp_path / "state.json")
+    pos = {"ticker": "XYZ", "shares": 0, "phase": "PUT", "basis": None,
+           "premium": 0.0, "campaign": 1, "last_spot": 104.0,
+           "short": {"contract": Contract("XYZ", pd.Timestamp("2026-08-21"),
+                                          100.0, "P"),
+                     "contracts": 1, "credit": 2.0, "last_mid": 2.0,
+                     "mark_asof": "2026-08-03",
+                     "mark_quote_time": 1754140000000.0}}
+    save_state(PortfolioState(cash=1.0, positions=[pos]), p)
+    sh = load_state(p).positions[0]["short"]
+    assert sh.get("mark_asof") == "2026-08-03"
+    assert sh.get("mark_quote_time") == 1754140000000.0
+    # absent stays absent (legacy files byte-identical, last_ask precedent)
+    pos2 = {**pos, "short": {"contract": Contract("XYZ",
+                                                  pd.Timestamp("2026-08-21"),
+                                                  100.0, "P"),
+                             "contracts": 1, "credit": 2.0, "last_mid": 2.0}}
+    save_state(PortfolioState(cash=1.0, positions=[pos2]), p)
+    sh2 = load_state(p).positions[0]["short"]
+    assert "mark_asof" not in sh2 and "mark_quote_time" not in sh2
+
+
 def test_recon_freeze_survives_the_round_trip(tmp_path):
     """A8: `recon_frozen` (broker-vs-state divergence freeze, real-money mode)
     uses the exact A10 lifecycle -- sticky until a human clears it. Landing

@@ -195,9 +195,15 @@ def contract_quotes(client, positions) -> dict:
         # rot): same-ET-date or refused; a missing timestamp is refused too
         # (a book whose freshness cannot be judged is not tradeable).
         # Minutes-scale halt staleness within a session is C1's row.
-        qt = _num(node.get("quoteTimeInLong"))
+        # C1b: the quotes endpoint's official spec names this `quoteTime`;
+        # `quoteTimeInLong` is the CHAIN endpoint's name. Reading only the
+        # chain-style key meant a spec-shaped payload refused EVERY leg --
+        # all intraday TPs suspended, fail-closed, forever. Dual-key until a
+        # captured live payload settles the name (resume-day step 0).
+        qt = _num(node.get("quoteTime", node.get("quoteTimeInLong")))
         if qt is None:
-            print(f"stale-quote gate: {sym} has no quoteTimeInLong -- refused")
+            print(f"stale-quote gate: {sym} has no quoteTime/quoteTimeInLong"
+                  f" -- refused")
             continue
         try:
             # skeptic F1: inf / out-of-Timestamp-range / unit-drifted values
@@ -230,5 +236,7 @@ def contract_quotes(client, positions) -> dict:
             continue
         mk = _num(node.get("mark"))
         mid = mk if (mk is not None and mk > 0) else (bid + ask) / 2.0
-        out[tk] = Mark(bid, ask, mid)
+        # C1: the per-leg time used to die right here after the A7 date gate;
+        # it rides the Mark now so staleness is measurable downstream.
+        out[tk] = Mark(bid, ask, mid, qt)
     return out

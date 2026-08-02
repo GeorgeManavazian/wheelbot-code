@@ -21,6 +21,30 @@ def test_chain_exact_columns_and_types():
     assert (df["bid"] > 0).all() and (df["ask"] > 0).all()   # placeholders skipped
 
 
+def test_chain_captures_per_leg_quote_times():
+    """C1: the chain payload carries per-contract quoteTimeInLong /
+    tradeTimeInLong (proven on the real captured GDX payload) and both were
+    discarded -- the pre-A19 class. Captured, not consumed: no gate reads
+    them yet; they accrue from ship day (no historical chain endpoint)."""
+    payload = _payload()
+    df = chain_from_json(payload, OBS)
+    for col in ("quote_time", "trade_time"):
+        assert col in df.columns, f"C1: {col} discarded from the chain"
+    row = df.iloc[0]
+    raw = None
+    for exp_key, strikes in payload["putExpDateMap"].items():
+        for _sk, cts in strikes.items():
+            ct = cts[0]
+            if (float(ct["strikePrice"]) == row["strike"]
+                    and int(ct["daysToExpiration"]) == row["dte"]):
+                raw = ct
+    assert raw is not None
+    if raw.get("quoteTimeInLong") is not None:
+        assert row["quote_time"] == float(raw["quoteTimeInLong"])
+    if raw.get("tradeTimeInLong") is not None:
+        assert row["trade_time"] == float(raw["tradeTimeInLong"])
+
+
 def test_chain_captures_liquidity_fields():
     """A19: openInterest/totalVolume/bidSize/askSize must be captured, not
     discarded -- they are the prerequisite for any size-aware fill model (A2)

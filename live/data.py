@@ -15,7 +15,11 @@ _CHAIN_COLS = ["date", "expiry", "strike", "right", "dte",
                # them yet (that is A2, a deferred owner decision). They accrue
                # from the day this ships because Schwab has no historical chain
                # endpoint: a day not captured is unmeasurable forever.
-               "open_interest", "volume", "bid_size", "ask_size"]
+               "open_interest", "volume", "bid_size", "ask_size",
+               # C1: per-leg quote/trade times (ms epoch), same capture-first
+               # doctrine -- no gate reads them yet; they make a stale book
+               # measurable at all.
+               "quote_time", "trade_time"]
 
 
 def closes_from_json(payload: dict) -> pd.Series:
@@ -123,6 +127,10 @@ def _rows_for(exp_map, right, obs, und):
                     "volume": _num(ct.get("totalVolume")),
                     "bid_size": _num(ct.get("bidSize")),
                     "ask_size": _num(ct.get("askSize")),
+                    # C1: chain payloads name these ...InLong (proven on the
+                    # captured GDX payload)
+                    "quote_time": _num(ct.get("quoteTimeInLong")),
+                    "trade_time": _num(ct.get("tradeTimeInLong")),
                 })
             except (KeyError, TypeError, ValueError, IndexError) as e:
                 # B3: ONE malformed contract used to raise out of the whole

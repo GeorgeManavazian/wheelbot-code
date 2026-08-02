@@ -151,7 +151,11 @@ def option_mark(chain, date, contract):
     if r.empty:
         return None
     row = r.iloc[0]
-    return Mark(float(row["bid"]), float(row["ask"]), float(row["mid"]))
+    # C1: quote_time only when the frame carries it (live path); backtest
+    # frames have no column -> None -> Marks byte-identical to before.
+    qt = row["quote_time"] if "quote_time" in chain.columns else None
+    return Mark(float(row["bid"]), float(row["ask"]), float(row["mid"]),
+                None if qt is None or pd.isna(qt) else float(qt))
 
 def intrinsic_value(right, strike, underlying):
     return max(strike - underlying, 0.0) if right == "P" else max(underlying - strike, 0.0)

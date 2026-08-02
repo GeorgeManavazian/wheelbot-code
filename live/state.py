@@ -55,6 +55,11 @@ def _pos_to_dict(p):
     # size; absent == equals `contracts`.
     if "opened_contracts" in sh:
         out["opened_contracts"] = sh["opened_contracts"]
+    # C1: the carried-mark discriminator -- dropping these on save would make
+    # every reloaded leg look freshly marked.
+    for k in ("mark_asof", "mark_quote_time"):
+        if k in sh:
+            out[k] = sh[k]
     d["short"] = out
     return d
 
@@ -77,6 +82,9 @@ def _pos_from_dict(d):
         out["last_ask"] = sh["last_ask"]
     if "opened_contracts" in sh:
         out["opened_contracts"] = sh["opened_contracts"]
+    for k in ("mark_asof", "mark_quote_time"):
+        if k in sh:
+            out[k] = sh[k]
     p["short"] = out
     return p
 

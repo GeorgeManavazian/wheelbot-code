@@ -119,7 +119,9 @@ def _rows_and_equity(state, marks):
             dist = (spot / strike - 1.0) if (strike and spot > 0) else None
             row = {"Ticker": tk, "Phase": phase, "Strike": f"{strike:g}", "Right": right,
                    "Contracts": k, "_premium": collected, "DTE": dte, "_dist": dist,
-                   "_mark": mark, "Unreal P&L": unreal, "_live": live}
+                   "_mark": mark, "Unreal P&L": unreal, "_live": live,
+                   # C1: when the stored mark was taken; None on pre-C1 legs
+                   "_asof": short.get("mark_asof")}
         else:                                         # bare shares (post-assignment)
             sh = p.get("shares", 0)
             basis = p.get("basis", 0.0)
@@ -128,7 +130,8 @@ def _rows_and_equity(state, marks):
             equity_positions += spot * sh
             row = {"Ticker": tk, "Phase": phase, "Strike": f"{basis:g}", "Right": "shares",
                    "Contracts": sh, "_premium": p.get("premium", 0.0), "DTE": "—",
-                   "_dist": None, "_mark": spot, "Unreal P&L": unreal, "_live": live}
+                   "_dist": None, "_mark": spot, "Unreal P&L": unreal, "_live": live,
+                   "_asof": None}
         total_unreal += unreal
         rows.append(row)
     return rows, cash + equity_positions, total_unreal
@@ -221,6 +224,15 @@ def board(paths, capital, n, label, refresh="15s"):
             "DTE": df["DTE"],
             "vs strike": df["_dist"].map(_dist),
             "Mark": df["_mark"].map(lambda v: f"{v:.2f}"),
+            # C1: the carried-mark discriminator, rendered. A mark whose
+            # as-of predates today is a CARRIED price (the $11.30-TMO class);
+            # legs marked today (or live-pulled) show clean.
+            "Mark as-of": df.apply(
+                lambda r: ('<span class="tag live">live</span>' if r["_live"]
+                           else "—" if r["_asof"] in (None, "")
+                           or str(r["_asof"]) >= str(pd.Timestamp.now().date())
+                           else f'<span class="neg">carried {r["_asof"]}</span>'),
+                axis=1),
             "": df["_live"].map(lambda b: "live" if b else "stale"),
             "Unreal P&L": df["Unreal P&L"].map(_pnl_html),
         })

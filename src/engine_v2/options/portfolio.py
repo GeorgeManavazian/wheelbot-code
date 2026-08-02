@@ -489,6 +489,14 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
             if mk is not None:
                 pos["short"]["last_mid"] = mk.mid
                 pos["short"]["last_ask"] = mk.ask
+                # C1: stamp WHEN this mark was taken -- never on the carried
+                # path below, so `mark_asof < today` IS the carried-mark
+                # discriminator (TMO sat at $11.30 for six snapshots with
+                # nothing saying the price was days old). quote_time is the
+                # chain row's per-leg time when the live path provides one.
+                pos["short"]["mark_asof"] = str(d.date())
+                if mk.quote_time is not None:
+                    pos["short"]["mark_quote_time"] = mk.quote_time
             # Marked at the ASK (owner decision 2026-07-29, option B). A short
             # option is a liability dischargeable only by BUYING it back, and you
             # buy at the offer; the midpoint books half a spread the account can

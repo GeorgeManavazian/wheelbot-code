@@ -51,6 +51,28 @@ def test_held_contracts_dedupes_the_same_leg_across_accounts():
     assert {c["ticker"] for c in out} == {"TMO", "RIG"}
 
 
+def test_row_captures_quote_times_dual_key():
+    """C1/C1b: the quotes endpoint's spec-shaped key is `quoteTime`; older
+    captures used `quoteTimeInLong`. Capture whichever is present (never
+    both invented); absent -> None and the row is STILL kept (a held row
+    must keep splicing -- flag-only, never a drop)."""
+    contracts = held_contracts([[_position()]])
+    q1 = _quote(0.40, 0.44, mark=0.42)
+    q1["quote"]["quoteTime"] = 1754140000000
+    q1["quote"]["tradeTime"] = 1754139000000
+    r = rows_from_quotes({"TMO   260807P00512500": q1}, contracts, OBS)["TMO"][0]
+    assert r["quote_time"] == 1754140000000.0
+    assert r["trade_time"] == 1754139000000.0
+    q2 = _quote(0.40, 0.44, mark=0.42)
+    q2["quote"]["quoteTimeInLong"] = 1754141111000
+    r2 = rows_from_quotes({"TMO   260807P00512500": q2}, contracts, OBS)["TMO"][0]
+    assert r2["quote_time"] == 1754141111000.0
+    q3 = _quote(0.40, 0.44, mark=0.42)   # neither key
+    r3 = rows_from_quotes({"TMO   260807P00512500": q3}, contracts, OBS)["TMO"][0]
+    assert r3["quote_time"] is None and r3["trade_time"] is None, \
+        "C1: a held row with no timestamp must still splice (flag-only)"
+
+
 def test_row_built_for_a_leg_outside_the_chain_window():
     contracts = held_contracts([[_position()]])
     rows = rows_from_quotes({"TMO   260807P00512500": _quote(0.40, 0.44, mark=0.42)},

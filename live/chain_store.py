@@ -86,7 +86,27 @@ def load_chain_snapshot(obs, path=None):
             # object dtype and makes select_contract's `.abs()` raise (same trap
             # documented in market_live.add_chain_rows).
             df["delta"] = pd.to_numeric(df["delta"], errors="coerce")
+            # C1: same dtype-poison guard for the timestamp columns -- a None
+            # would flip them to object and break any future numeric consumer
+            df["quote_time"] = pd.to_numeric(df["quote_time"], errors="coerce")
+            df["trade_time"] = pd.to_numeric(df["trade_time"], errors="coerce")
             out[tk] = df
     except (ValueError, TypeError, KeyError):
         return None
     return out
+
+
+def snapshot_pulled_at(obs, path=None):
+    """The snapshot's pull start time (ISO string) or None. C1: the field was
+    written from day one and never read -- the 17:00 consumer can now say how
+    old its book is."""
+    obs = pd.Timestamp(obs).normalize()
+    path = path or snapshot_path(obs)
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload.get("pulled_at")

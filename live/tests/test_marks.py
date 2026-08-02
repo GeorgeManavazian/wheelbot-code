@@ -57,6 +57,36 @@ def _fresh_ms():
     import time
     return int(time.time() * 1000)
 
+def test_contract_quotes_accepts_spec_shaped_quote_time_key():
+    """C1b (C1 analyst, 2026-08-02): the QUOTES endpoint's official spec
+    names the field `quoteTime`; `quoteTimeInLong` is the CHAIN endpoint's
+    name. Reading only the chain-style key means a spec-shaped payload
+    refuses EVERY leg on resume -- all intraday TPs silently suspended,
+    forever, fail-closed. Both keys must admit; the raw ms value must ride
+    the Mark so C1's staleness accrual can see it."""
+    positions = [{"ticker": "AGNC", "short": {"contract": {"root": "AGNC",
+                 "expiry": "2026-08-15", "strike": 11.0, "right": "P"}}}]
+    ms = _fresh_ms()
+    quotes = {"AGNC  260815P00011000": {"quote": {
+        "bidPrice": 0.38, "askPrice": 0.40, "quoteTime": ms}}}
+    out = contract_quotes(_FakeClient(quotes), positions)
+    assert "AGNC" in out, \
+        "C1b: a spec-shaped (quoteTime) payload was refused wholesale"
+    assert out["AGNC"].quote_time == ms
+
+
+def test_contract_quotes_carries_quote_time_on_the_mark():
+    """C1: the per-leg timestamp survived only long enough to pass the A7
+    date gate, then was destroyed at the parse site. It rides Mark now."""
+    positions = [{"ticker": "AGNC", "short": {"contract": {"root": "AGNC",
+                 "expiry": "2026-08-15", "strike": 11.0, "right": "P"}}}]
+    ms = _fresh_ms()
+    quotes = {"AGNC  260815P00011000": {"quote": {
+        "bidPrice": 0.38, "askPrice": 0.40, "quoteTimeInLong": ms}}}
+    out = contract_quotes(_FakeClient(quotes), positions)
+    assert out["AGNC"].quote_time == ms
+
+
 def test_contract_quotes_returns_bid_ask_mark():
     positions = [{"ticker": "AGNC", "short": {"contract": {"root": "AGNC",
                  "expiry": "2026-08-15", "strike": 11.0, "right": "P"}}}]

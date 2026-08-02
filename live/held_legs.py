@@ -86,6 +86,13 @@ def rows_from_quotes(quotes: dict, contracts, obs) -> dict:
             "volume": _num(node.get("totalVolume")),
             "bid_size": _num(node.get("bidSize")),
             "ask_size": _num(node.get("askSize")),
+            # C1/C1b: the quotes endpoint's spec name is quoteTime/tradeTime;
+            # older captures said quoteTimeInLong. Take whichever is present;
+            # absent -> None, the row still splices (flag-only, never a drop).
+            "quote_time": _num(node.get("quoteTime",
+                                        node.get("quoteTimeInLong"))),
+            "trade_time": _num(node.get("tradeTime",
+                                        node.get("tradeTimeInLong"))),
             # MARK ONLY -- select_contract must never return this row. It was
             # pulled by OCC symbol because we already hold it, not because the
             # bot surveyed it, and run_daily shares one market across all 25
