@@ -219,3 +219,25 @@ def test_positions_without_ca_keys_stay_key_identical(tmp_path):
     got = load_state(p).positions[0]
     assert "ca_frozen" not in got and "ca_watch" not in got, \
         "absent CA keys must stay absent (legacy files byte-identical)"
+    assert "recon_frozen" not in got, \
+        "A8: absent recon key must stay absent (legacy files byte-identical)"
+
+
+def test_recon_freeze_survives_the_round_trip(tmp_path):
+    """A8: `recon_frozen` (broker-vs-state divergence freeze, real-money mode)
+    uses the exact A10 lifecycle -- sticky until a human clears it. Landing
+    the round-trip key now, before any engine wiring, means state files never
+    need a migration when real-money mode is built."""
+    from src.engine_v2.options.portfolio import PortfolioState
+    from live.state import save_state, load_state
+    p = str(tmp_path / "state.json")
+    pos = {"ticker": "XYZ", "shares": 0, "phase": "PUT", "basis": None,
+           "premium": 0.0, "campaign": 1, "last_spot": 104.0,
+           "recon_frozen": {"date": "2026-08-02",
+                            "kind": "early_put_assignment",
+                            "expected": -3, "observed": 0},
+           "short": None}
+    save_state(PortfolioState(cash=1.0, positions=[pos]), p)
+    got = load_state(p).positions[0]
+    assert got.get("recon_frozen") == pos["recon_frozen"], \
+        "A8: the recon freeze evaporated on the state round trip"

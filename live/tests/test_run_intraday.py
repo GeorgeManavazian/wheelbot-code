@@ -84,3 +84,24 @@ def test_market_closed_exits_zero(monkeypatch):
     import live.run_intraday as ri
     monkeypatch.setattr(ri, "market_is_open", lambda now: False)
     assert ri.main() == 0
+
+
+def test_real_money_flag_refuses_even_when_market_closed(monkeypatch):
+    """A8 (rescoped): `real_money: true` with no reconciler wired must refuse
+    with exit 3 at EVERY tick -- including out-of-hours no-ops. The check runs
+    BEFORE the market gate: a misconfigured box screams on the very next tick,
+    not at the next open."""
+    import live.run_intraday as ri
+    from live.config import DEFAULTS
+    monkeypatch.setattr(ri, "market_is_open", lambda now: False)
+    monkeypatch.setattr(ri, "load_run_config",
+                        lambda: {**DEFAULTS, "real_money": True})
+    assert ri.main() == 3, "A8: real_money=true must refuse with exit 3"
+
+
+def test_paper_flag_leaves_intraday_untouched(monkeypatch):
+    """A8: the default (real_money absent -> False) changes nothing -- the
+    closed-market no-op still exits 0."""
+    import live.run_intraday as ri
+    monkeypatch.setattr(ri, "market_is_open", lambda now: False)
+    assert ri.main() == 0

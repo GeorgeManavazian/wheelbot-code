@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 39 of 74 done (A2-A7, A10-A12, A14-A19, A21c, A22, A23, B1-B5, B7-B11 minus B6, C13-C15, D5b, E1-E7; A21b/A21c/C17/A10b-e added session 2) · Group A remaining: A8, A9, A13 + owner-blocked A20/A21/A21b · Group B remaining: B6 only (owner) · Group E: DONE · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 40 of 75 done (A2-A8, A10-A12, A14-A19, A21c, A22, A23, B1-B5, B7-B11 minus B6, C13-C15, D5b, E1-E7; A21b/A21c/C17/A10b-e added session 2; A8 rescoped defense-only + A8b deferred, session 3) · Group A remaining: A9, A13 + owner-blocked A20/A21/A21b · Group B remaining: B6 only (owner) · Group E: DONE · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -198,7 +198,8 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A5 | Same-day re-entry guard must see intraday closes | HIGH | **DONE** | see A5 evidence block below. Skeptic-found sibling gap (EOD closes left no self-note for the crash-retry window) amended in the same fix. | **A6 is an amplifier for this** — `portfolio.py:84` rebuilds `closed_today = set()` inside `step_one_day` and `manage_intraday` persists nothing, so every intraday close is invisible to the guard, and A6 exists to increase intraday closes. Bound: the newly-admitted population is deep-OTM/near-worthless, least likely to be re-selected at 0.30 delta, so the marginal exposure from A6 alone is probably small. |
 | A6 | Intraday must see a 0.00 bid (align with `rows_from_quotes`) | HIGH | **DONE** | see A6 evidence block below |
 | A7 | Intraday holiday + quote-freshness gate | MED | **DONE** | see A7 evidence block below. Minutes-scale intra-session staleness deliberately left to **C1**; EOD held-leg staleness stays **A21**; dashboard marks (`live_marks`/`live_asks`) still show prior-session prices on holidays — display-only, noted for **A18b**. |
-| A8 | Early assignment modelling | MED | TODO | |
+| A8 | Early assignment — **OWNER RESCOPED 2026-08-02: no modelling, defense only.** Backtest + paper sim assume early exercise never happens (paper mode simulates its own fills, so it structurally cannot). Deliverable is the real-money seam: detect broker-vs-state divergence → freeze + alert (A10 idiom), and real-money mode must refuse to run without the reconciler wired. | MED | **DONE** | see A8 evidence block below. Skeptic CORRECT-BUT-INCOMPLETE → mapper-contract guard amended same session; 3 exposures declared (A11-gate-before-refusal ordering, chain-snapshot pull ungated under the flag, state.py rollback silently un-freezes `recon_frozen`). Follow-up: **A8b**. |
+| A8b | Real-money build prerequisites, so the seam is not forgotten when it matters: wire `diff_positions` into both runners (reconcile-before-trade), `fetch_broker_view` mapper with contract enforcement, extend the refusal to `run_chain_snapshot`, `recon_frozen` engine skips (A10 sites), A9's covered-call deferral must also hold for reconciled assignments, replace the startup refusal with a reconciler-wired self-check | — | DEFERRED (real-money build) | filed from the A8 analyst + skeptic, 2026-08-02. The `real_money=true` refusal is the guard that forces this row to be done first. |
 | A9 | Defer the covered call one session after assignment | MED | TODO | |
 | A10 | Corporate actions — at minimum detect and refuse | HIGH | **DONE (provisional owner defaults)** | commit `b672cda`; analyst spec + A10 evidence block below. Restatement detector (`LiveMarket.prior_close` vs stored `last_spot`, capability-gated so batch is byte-identical by construction) → sticky manual-clear freeze; ≥25% gap with clean restatement → ONE deferred settlement session + 5-session watch (real crash auto-clears, tested); intraday underlying-gap refusal + frozen-skip; state round-trip; one deduped daily FROZEN email. **Owner may re-tune D1-D4 (band 0.80/1.25, backstop 25%, manual clearing, no entry veto) before Phase F — veto cheap, nothing trades while paused.** Mutants X1-X6 killed. Suites 560+295=855. |
 | A11 | Clock gate inside `run_daily` (refuse before 17:00 ET without `--force`) | MED | **DONE** | see A11 evidence block below. Boundary tightened 16:00→17:00 per its skeptic (Schwab's bar isn't settled until ~17:00 and `already_stepped` locks a half-baked day in). New row filed: **A23** — `--smoke` isolation is imperfect (its zombie path writes the REAL gaps.jsonl + a real email on a pull failure; pre-existing, skeptic F5). Cosmetic: run_health strings still say "20:00 window" (stale, noted). |
@@ -304,6 +305,53 @@ password would block every push — acceptable, noted.
 | C17 | `last_spot=0.0` positions render −100% "ITM" on the dashboard (HAL/WBD, real) | LOW | TODO | filed from the A21 analyst, 2026-08-01; display only |
 | C16b | Escalation for the A3b refusal class: N consecutive `call_gated_unclosable` days on one ticker → email (today it logs daily, forever, and never emails — while A4's floor-above-window class emails daily; same physical condition, two tiers). Needs persisted per-ticker consecutive-day state; owner picks N. | MED | TODO | filed from the A3b skeptic F1, 2026-08-01. Measured: SLV router-BASE(basis) backtest shows 295 gated-warning days (multi-week naked stretches are real, not hypothetical); live book currently has zero CALL-phase holdings so the class is prospective. |
 | E8 | `run_chain_snapshot.main()` wiring tests (zombie wiring, partial-exit-1, save-recheck call site, `--force`) — predicates are tested, the wiring is executed only by the A16 skeptic's S1 run and the C2 dry run | TODO | filed from skeptic F6, 2026-07-31 |
+
+---
+
+## A8 — evidence block (2026-08-02, session 3)
+
+**Owner decision 2026-08-02 (rescope):** assume early exercise never happens in sim/paper;
+the deliverable is defense IF it ever happens under real money. Provisional defaults taken
+(dialog offered, defaults uncontested; veto cheap while paused): D1 freeze+manual-clear, never
+auto-apply · D2 cash epsilon $25/account/day · D3 flag in `data/live/config.json` · D4 reconcile
+every run both flows (at real-money build) · D5 land the seam now.
+
+**What landed** (`live/config.py`, `live/run_daily.py`, `live/run_intraday.py`, `live/state.py`,
+new `live/reconcile.py`, 5 test files, +20 tests):
+- `real_money: false` config default, strict-bool (1/"true"/"yes" raise, never coerce).
+- Refusal gates: run_daily exits 3 + alert BEFORE client build (config load hoisted from the old
+  post-pull site — a refused or malformed-config run no longer burns API quota); run_intraday
+  exits 3 + `ERROR` literal as the FIRST statement, before the market gate (misconfigured box
+  screams on the next 5-min tick, not at the next open).
+- `live/reconcile.py`: pure `diff_positions(broker_view, state, eps=25.0)` → T1-T7 taxonomy
+  (early_put_assignment/_partial, early_call_assignment, cash_drift ALERT<eps/FREEZE≥eps judged
+  only on a matching book, unknown_position, leg_vanished, + 2 fallbacks, all FREEZE). Zero
+  production callers by design; malformed broker_view dies named (ValueError, not KeyError).
+- `recon_frozen` round-trips in state (A10 lifecycle, optional-when-absent).
+
+**Gates:** red first (5 failures, right reasons: KeyError real_money / recon key dropped /
+run_daily built a client / intraday had no config read / module absent) · suites 560+316
+(baseline 560+296; backtest rerun post-fix, live rerun post-amendment) · 7 mutants killed
+(strict-bool drop, refusal flip ×2 runners, state tuple revert, T2 branch dead, cash-suppression
+removed, mapper guard dead), each restore-green · line audit + blast radius clean (only other
+`load_run_config` caller is run_chain_snapshot:163, zombie_threshold only) · C2 dry run: real
+config.json parses → real_money False, real intraday runner exit 0 unchanged · C3: $0 delta on
+the real book (flag absent, reconcile zero callers).
+
+**Skeptic (fresh, read-only): CORRECT-BUT-INCOMPLETE, nothing blocking.** Receipts: refusal in a
+sealed no-credentials sandbox → exit 3, zero files written, client never built (control run died
+at get_client, proving the refusal is the last statement before it); --smoke+real_money refuses;
+26/26 real synced account files byte-identical through new state.py; 20-case reconcile battery.
+Amended same session: mapper-contract guard (`cash` required, string expiries) + test + mutant.
+**Declared, not fixed:** (1) "byte-identical" holds under VALID config — malformed config.json now
+fails EARLIER in run_daily and LOUDLY in intraday (uncaught → exit 1 → tick catches by rc AND
+"Traceback" grep; pre-fix intraday never read config at all); (2) A11 clock gate fires before the
+refusal in run_daily (exit 2 pre-17:00, refusal never named — harmless, no network either way);
+(3) run_chain_snapshot has no real_money gate (data-only pull; A8b); (4) a state.py ROLLBACK
+silently un-freezes `recon_frozen` on resave — inherent to the optional-key pattern, same
+exposure ca_frozen shipped with; (5) diff_positions precondition documented: ≤1 short per root
+(two vanished shorts on one root double-explain one share delta; severity-safe, both FREEZE);
+(6) cosmetic: cash delta exactly 0.005 → ALERT not clean (float repr; fail-safe direction).
 
 ---
 

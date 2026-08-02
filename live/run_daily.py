@@ -327,6 +327,20 @@ def main():
     else:
         _alert, _gap, _correction = send_alert, append_gap, append_correction
 
+    # A8: real-money mode requires a wired position reconciler
+    # (live/reconcile.py) and order code; neither exists. Refuse BEFORE any
+    # client build or pull -- a refused run must not burn API quota or
+    # half-execute. Loaded here (not at the old post-pull site) for the same
+    # reason; a malformed config now also aborts before any network work.
+    run_cfg = load_run_config()
+    if run_cfg["real_money"]:
+        msg = ("real_money=true in config.json, but real-money mode requires "
+               "a wired position reconciler (A8) and order code; neither "
+               "exists. Refusing to run. Set real_money back to false.")
+        print(f"A8: {msg}")
+        _alert("WHEELBOT: real_money refused", msg)
+        return 3
+
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts", "schwab"))
     from schwab_client import get_client
     client = get_client()
@@ -408,7 +422,6 @@ def main():
         print(f"skipped {len(market.skipped)} tickers (pull failures): "
               f"{[s[0] for s in market.skipped][:8]}")
 
-    run_cfg = load_run_config()
     # group-skeptic F3: B5 widened the closes population to universe UNION
     # held -- ratios must divide by what was actually PULLED or a handful of
     # dead held-outside tickers inflates the ratio (and can exceed 100%).

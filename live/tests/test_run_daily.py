@@ -179,6 +179,39 @@ def test_decision_run_refuses_before_the_close(monkeypatch):
         "A11: a 04:13 run must refuse with a nonzero exit (no marker, retry later)"
 
 
+def test_real_money_flag_refuses_before_any_network(monkeypatch):
+    """A8 (rescoped): real-money mode requires a wired position reconciler and
+    order code; neither exists. `real_money: true` must refuse with exit 3
+    BEFORE building a client or pulling anything -- a refused run must not
+    burn API quota or half-execute. Alert sent so the misconfiguration is
+    loud, not just a silent nonzero in the journal."""
+    import datetime as dt
+    import sys
+    import types
+    from live import run_daily
+    from live.config import DEFAULTS
+
+    class _FrozenDT(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt.datetime(2026, 8, 3, 17, 30, tzinfo=tz)   # past the A11 gate
+
+    monkeypatch.setattr(run_daily.dt, "datetime", _FrozenDT)
+    fake = types.ModuleType("schwab_client")
+    fake.get_client = lambda: (_ for _ in ()).throw(
+        AssertionError("A8: refused run must never build a client"))
+    monkeypatch.setitem(sys.modules, "schwab_client", fake)
+    monkeypatch.setattr(run_daily, "load_run_config",
+                        lambda: {**DEFAULTS, "real_money": True})
+    alerts = []
+    monkeypatch.setattr(run_daily, "send_alert",
+                        lambda subject, body: alerts.append(subject) or True)
+    monkeypatch.setattr(sys, "argv", ["run_daily.py"])
+    rc = run_daily.main()
+    assert rc == 3, "A8: real_money=true must refuse with exit 3"
+    assert alerts, "A8: the refusal must alert, not just exit"
+
+
 def test_clock_gate_boundary_is_seventeen(monkeypatch):
     """Skeptic F1: 16:0x closes are preliminary; the shell's old constant was
     'after 5pm ET (data settled)'. 16:59 refused, 17:00 reaches the client

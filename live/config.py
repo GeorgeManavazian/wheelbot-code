@@ -10,7 +10,11 @@ from live.paths import in_state
 import json
 
 CONFIG_PATH = in_state("config.json")
-DEFAULTS = {"n": 5, "capital": 100_000.0, "zombie_threshold": 0.5}
+# real_money: A8. False = paper (the only mode that exists). True makes both
+# runners REFUSE to start -- real-money mode requires a wired position
+# reconciler (live/reconcile.py) and order code, and neither is built.
+DEFAULTS = {"n": 5, "capital": 100_000.0, "zombie_threshold": 0.5,
+            "real_money": False}
 
 
 def load_run_config(path: str = CONFIG_PATH) -> dict:
@@ -31,6 +35,12 @@ def load_run_config(path: str = CONFIG_PATH) -> dict:
         cfg["capital"] = float(raw["capital"])
     if "zombie_threshold" in raw:
         cfg["zombie_threshold"] = float(raw["zombie_threshold"])
+    if "real_money" in raw:
+        # strict bool: 1 / "true" / "yes" must never silently mean real money
+        if not isinstance(raw["real_money"], bool):
+            raise ValueError(f"{path}: real_money must be JSON true/false, "
+                             f"got {raw['real_money']!r}")
+        cfg["real_money"] = raw["real_money"]
     if cfg["n"] < 1:
         raise ValueError(f"{path}: n must be >= 1, got {cfg['n']}")
     if cfg["capital"] <= 0:

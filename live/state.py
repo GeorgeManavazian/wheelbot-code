@@ -30,8 +30,9 @@ def _pos_to_dict(p):
         d["working_order"] = p["working_order"]
     # A10: freeze/watch survive the round trip or a corporate-action freeze
     # silently un-freezes overnight. Written only when present (last_ask
-    # precedent -- legacy files byte-identical).
-    for k in ("ca_frozen", "ca_watch"):
+    # precedent -- legacy files byte-identical). recon_frozen is A8's
+    # broker-vs-state divergence freeze (real-money mode), same lifecycle.
+    for k in ("ca_frozen", "ca_watch", "recon_frozen"):
         if p.get(k) is not None:
             d[k] = p[k]
     sh = p["short"]
@@ -60,7 +61,7 @@ def _pos_from_dict(d):
     p = {k: d[k] for k in _POS_SCALARS}
     if d.get("working_order") is not None:
         p["working_order"] = d["working_order"]
-    for k in ("ca_frozen", "ca_watch"):
+    for k in ("ca_frozen", "ca_watch", "recon_frozen"):
         if d.get(k) is not None:
             p[k] = d[k]
     sh = d["short"]

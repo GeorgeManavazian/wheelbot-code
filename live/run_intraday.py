@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from src.engine_v2.options.wheel import WheelConfig
+from live.config import load_run_config
 from live.state import load_state, save_state
 from live.accounts import all_accounts, account_paths, account_label
 from live.intraday import manage_intraday
@@ -36,6 +37,14 @@ def main() -> int:
     client/quote layer failed wholesale. The old runner returned None (exit 0)
     even with all 25 accounts erroring, and the tick's case-sensitive
     `grep ERROR` was the only tripwire -- a bare traceback slipped it."""
+    # A8: refuse real_money BEFORE the market gate -- a misconfigured box must
+    # scream on the very next 5-min tick, not at the next open. No reconciler
+    # or order code exists; exit 3 + the ERROR literal trips the tick's grep.
+    if load_run_config()["real_money"]:
+        print("ERROR A8: real_money=true but no position reconciler is wired "
+              "-- refusing. Set real_money back to false.")
+        return 3
+
     now_et = dt.datetime.now(ET)
     if not market_is_open(now_et):
         print(f"market closed ({now_et:%Y-%m-%d %H:%M %Z}) — intraday skip")
