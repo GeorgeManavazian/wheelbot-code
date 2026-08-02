@@ -16,6 +16,7 @@ Provisional defaults (owner asleep, veto cheap, bot paused): confirm band
 ratio <=0.80 / >=1.25; gap backstop 25%; freeze clearing manual-only;
 suspects print but only freezes email."""
 import pandas as pd
+import pytest
 
 from src.engine_v2.options.portfolio import PortfolioState, step_one_day
 from src.engine_v2.options.wheel import WheelConfig
@@ -165,6 +166,33 @@ def test_frozen_position_skips_tp_and_covered_call_every_run():
         "A10: a frozen position traded"
     assert any(w[1] == "ca_confirmed_frozen" for w in r.warnings), \
         "the freeze must stay loud every run until cleared"
+
+
+def test_frozen_position_keeps_its_prefreeze_mark():
+    """A10f (boundary sweep, 2026-08-02): the frozen skip covered TP,
+    settlement and the covered call -- but section 3 still re-marked the
+    frozen leg from the possibly-restated chain every step, mutating
+    state.json in unknown units mid-restatement (2.10 -> 4.40 in the sweep
+    repro), feeding snapshots/dashboard, and setting the price the batch
+    residual finalizer would buy back at. A frozen leg carries its
+    pre-freeze mark until a human clears it; equity uses that carried mark."""
+    from src.engine_v2.options.select import Contract
+    exp = D2 + pd.Timedelta(days=7)
+    # chain quotes the (restated-unit) leg far from the stored 2.00/2.10 mark
+    ch = pd.DataFrame([[D2, exp, 7, 100.0, "P", 4.30, 4.40, 4.35, 4.35,
+                        -0.60, 0.2, 52.0]], columns=COLS)
+    ch["date"] = pd.to_datetime(ch["date"])
+    ch["expiry"] = pd.to_datetime(ch["expiry"])
+    pos = _held_put(expiry=exp)
+    pos["short"]["last_mid"] = 2.00
+    pos["short"]["last_ask"] = 2.10
+    pos["ca_frozen"] = {"date": "2026-07-20", "stored_spot": 104.0,
+                        "ratio": 0.5}
+    st, r = _step(Liveish(spot_today=52.0, prior=52.0, chain=ch), pos)
+    assert pos["short"]["last_ask"] == 2.10 and pos["short"]["last_mid"] == 2.00, \
+        "A10f: a frozen leg was re-marked from the restated chain"
+    # equity carries the pre-freeze ask: cash + 0 shares - 2.10*100*9
+    assert r.equity == pytest.approx(10_000.0 - 2.10 * 100 * 9)
 
 
 def test_watch_catches_one_day_late_restatement():

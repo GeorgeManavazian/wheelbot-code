@@ -460,6 +460,16 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
     liab, shares_val = 0.0, 0.0
     for pos in positions:
         if pos["short"] is not None:
+            # A10f: a frozen position's chain quotes may be in restated units
+            # (the reason it is frozen) -- never overwrite the stored marks
+            # with them. The leg carries its pre-freeze mark into liab until a
+            # human clears the freeze; the freeze is already loud every run.
+            if pos.get("ca_frozen"):
+                short_ = pos["short"]
+                liab += short_.get("last_ask", short_["last_mid"]) \
+                    * mult * short_["contracts"]
+                shares_val += pos["shares"] * pos["last_spot"]
+                continue
             day_chain = market.chain(pos["ticker"], d)
             mk = option_mark(day_chain, d, pos["short"]["contract"]) \
                 if day_chain is not None else None
