@@ -87,6 +87,7 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
         d = pd.Timestamp(d)
         spot = float(und.get(d))
         day_chain = by_date.get(d)
+        assigned_today = False   # A9: assignment defers the call one session
         if prev_d is not None and cfg.cash_yield > 0:
             cash *= (1 + cfg.cash_yield / 365) ** (d - prev_d).days
         prev_d = d
@@ -138,6 +139,7 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                     if settle_spot < c.strike:
                         cash -= c.strike * mult * n; shares += mult * n
                         phase = "CALL"; basis = c.strike
+                        assigned_today = True   # A9: no covered call this session
                         trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash, campaign))
                     else:
                         trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash, campaign))
@@ -218,7 +220,8 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                             warnings.append((d, "strike_window_edge", cfg.ticker))
             # cell CASH: nothing — counted below
         elif (short is None and shares >= mult and phase == "CALL"
-              and cell == "WHEEL" and day_chain is not None):
+              and cell == "WHEEL" and day_chain is not None
+              and not assigned_today):
             # covered-call entry, solo rules; ONLY in wheel cells (spec rule 6).
             floor = None
             if cfg.call_min_strike == "basis" and basis is not None:

@@ -283,6 +283,15 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                         cash -= c.strike * mult * n
                         pos["shares"] += mult * n; pos["phase"] = "CALL"
                         pos["basis"] = c.strike
+                        # A9: the notice arrives after this session's close and
+                        # the shares settle next session -- the covered-call
+                        # block below is skipped while assigned_d == today.
+                        # PERSISTED (not an in-step flag): live re-steps the
+                        # same day in the snapshot-failed retry window, and a
+                        # reconciled real-money assignment (A8b) arrives from
+                        # another process. Keyed on the BOOKING session, so a
+                        # late-booked expiry defers from when the engine learns.
+                        pos["assigned_d"] = str(d.date())
                         trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash, pos["campaign"]))
                     else:
                         trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash, pos["campaign"]))
@@ -296,7 +305,11 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                         trades.append(Trade(d, "CALL_EXPIRED", c, n, 0.0, cash, pos["campaign"]))
                 pos["short"] = None; short = None
         if (pos["short"] is None and pos["phase"] == "CALL"
-                and pos["shares"] >= mult and day_chain is not None):
+                and pos["shares"] >= mult and day_chain is not None
+                and pos.get("assigned_d") != str(d.date())):
+            # A9: the WHOLE block is gated, not just the sale -- a structural
+            # one-session deferral must not fire the A4/A3b naked-shares
+            # warnings (each one emails the owner daily).
             floor = None
             if cfg.call_min_strike == "basis" and pos["basis"] is not None:
                 floor = pos["basis"] - pos["premium"] / pos["shares"]

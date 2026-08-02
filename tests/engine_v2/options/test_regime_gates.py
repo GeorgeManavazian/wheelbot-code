@@ -96,10 +96,14 @@ def test_entry_gate_unknown_state_allows_and_warns():
 def test_entry_gate_does_not_gate_call_phase():
     # assigned shares; the call phase continues the OLD campaign, so the call
     # is written even though the state has turned unpaid-decline by then.
+    # A9 (2026-08-02): the fixture's only call row sat on assignment day,
+    # which merely happened to encode the same-session defect -- the intent
+    # here (call phase is not entry-gated) is unrelated. A next-session row
+    # carries the call now; the gate assertion is unchanged.
     rows = [
         ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
         ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
-        ["2024-01-09","2024-01-16",7,475,"C",1.00,1.10,1.05,1.05,0.30,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,475,"C",1.00,1.10,1.05,1.05,0.30,0.1,465.0],
     ]
     st = _states([("2024-01-01","uptrend","calm"), ("2024-01-08","downtrend","calm")])
     res = run_wheel(_chain(rows), _cfg(regime_entry_gate=True), regime_states=st)

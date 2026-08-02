@@ -32,7 +32,9 @@ def _pos_to_dict(p):
     # silently un-freezes overnight. Written only when present (last_ask
     # precedent -- legacy files byte-identical). recon_frozen is A8's
     # broker-vs-state divergence freeze (real-money mode), same lifecycle.
-    for k in ("ca_frozen", "ca_watch", "recon_frozen"):
+    # assigned_d is A9's covered-call deferral date -- it must survive the
+    # snapshot-failed retry window's reload or the re-step sells same-day.
+    for k in ("ca_frozen", "ca_watch", "recon_frozen", "assigned_d"):
         if p.get(k) is not None:
             d[k] = p[k]
     sh = p["short"]
@@ -61,7 +63,7 @@ def _pos_from_dict(d):
     p = {k: d[k] for k in _POS_SCALARS}
     if d.get("working_order") is not None:
         p["working_order"] = d["working_order"]
-    for k in ("ca_frozen", "ca_watch", "recon_frozen"):
+    for k in ("ca_frozen", "ca_watch", "recon_frozen", "assigned_d"):
         if d.get(k) is not None:
             p[k] = d[k]
     sh = d["short"]

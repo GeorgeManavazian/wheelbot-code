@@ -17,11 +17,12 @@ def _cfg(**kw):
     base.update(kw); return WheelConfig(**base)
 
 # saga: put sold, assigned, call sold, called away -> ONE campaign; the next
-# put entry -> campaign 2.
+# put entry -> campaign 2. A9 (2026-08-02): the call row moved off assignment
+# day (01-09 -> 01-10) -- the same-day sale encoded the defect.
 _SAGA = [
     ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
     ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
-    ["2024-01-09","2024-01-16",7,470,"C",2.00,2.10,2.05,2.05,0.30,0.1,465.0],
+    ["2024-01-10","2024-01-16",6,470,"C",2.00,2.10,2.05,2.05,0.30,0.1,465.0],
     ["2024-01-16","2024-01-16",0,470,"C",5.00,5.10,5.05,5.05,0.99,0.1,476.0],
     ["2024-01-16","2024-01-23",7,472,"P",2.00,2.10,2.05,2.05,-0.30,0.1,476.0],
     ["2024-01-23","2024-01-23",0,472,"P",0.05,0.10,0.075,0.075,-0.01,0.1,480.0],
@@ -54,4 +55,7 @@ def test_days_shares_uncovered_counts_naked_share_days():
     res = run_wheel(_chain(naked), _cfg())
     assert res.days_shares_uncovered == 3   # Jan 9 (post-assignment), 10, 11
     covered = run_wheel(_chain(_SAGA), _cfg())
-    assert covered.days_shares_uncovered == 0
+    # A9: the assignment day itself is now always an uncovered day -- the
+    # deferral makes it structural (owner default 2026-08-02: it counts; it
+    # is a real day the shares sat unrented).
+    assert covered.days_shares_uncovered == 1

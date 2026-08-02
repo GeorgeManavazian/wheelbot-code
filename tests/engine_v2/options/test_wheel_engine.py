@@ -41,18 +41,26 @@ def test_put_expires_otm_keeps_credit():
 def test_put_itm_assigned_then_call_called_away():
     # put strike 470 ITM at expiry (spot 465) -> assigned 100 sh @470
     # then covered call strike 475 sold, ITM at its expiry (spot 480) -> called away @475
+    # A9 (2026-08-02): the original fixture sold the call ON assignment day --
+    # that encoded the defect (notice arrives after the close; shares settle
+    # next session). The call now sells on the NEXT session's row (01-10) at
+    # that session's price; cash walk re-pinned accordingly.
     rows = [
         ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
         ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
         ["2024-01-09","2024-01-16",7,475,"C",3.00,3.10,3.05,3.05, 0.30,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,475,"C",2.90,3.00,2.95,2.95, 0.30,0.1,466.0],
         ["2024-01-16","2024-01-16",0,475,"C",5.00,5.10,5.05,5.05, 0.99,0.1,480.0],
     ]
     res = run_wheel(_chain(rows), _cfg())
     acts = [t.action for t in res.trades]
     assert acts == ["SELL_PUT","ASSIGNED","SELL_CALL","CALLED_AWAY"]
+    assert [t for t in res.trades if t.action == "SELL_CALL"][0].date == \
+        pd.Timestamp("2024-01-10")
     # cash walk (1 contract, mult 100, commission 0):
-    # start 50000; +200 put credit; -47000 assigned; +300 call credit; +47500 called away
-    assert res.final_cash == pytest.approx(50_000 + 200 - 47_000 + 300 + 47_500)
+    # start 50000; +200 put credit; -47000 assigned; +290 call credit (D+1
+    # session's bid 2.90, NOT assignment day's 3.00); +47500 called away
+    assert res.final_cash == pytest.approx(50_000 + 200 - 47_000 + 290 + 47_500)
     assert res.final_shares == 0
 
 def test_take_profit_closes_short_put():

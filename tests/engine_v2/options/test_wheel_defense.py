@@ -29,10 +29,12 @@ _ASSIGN = [
 def test_call_min_strike_basis_restricts_to_strikes_at_or_above_basis():
     # nearest-delta call is 465 (below the 470 basis); only the tiny-delta 470
     # and 475 sit at/above basis -> must pick from those, nearest target delta.
+    # A9 (2026-08-02): call rows sat on assignment day, encoding the
+    # same-session defect; moved to the next session. Intent unchanged.
     rows = _ASSIGN + [
-        ["2024-01-09","2024-01-16",7,465,"C",3.00,3.10,3.05,3.05,0.30,0.1,465.0],
-        ["2024-01-09","2024-01-16",7,470,"C",0.50,0.60,0.55,0.55,0.05,0.1,465.0],
-        ["2024-01-09","2024-01-16",7,475,"C",0.20,0.30,0.25,0.25,0.02,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,465,"C",3.00,3.10,3.05,3.05,0.30,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,470,"C",0.50,0.60,0.55,0.55,0.05,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,475,"C",0.20,0.30,0.25,0.25,0.02,0.1,465.0],
     ]
     res = run_wheel(_chain(rows), _cfg(call_min_strike="basis"))
     calls = [t for t in res.trades if t.action == "SELL_CALL"]
@@ -40,9 +42,10 @@ def test_call_min_strike_basis_restricts_to_strikes_at_or_above_basis():
     assert calls[0].contract.strike == 470.0     # 0.05 delta beats 0.02 for 0.30 target
 
 def test_call_min_strike_none_keeps_plain_behavior():
+    # A9: call rows moved off assignment day (same-session defect); see above.
     rows = _ASSIGN + [
-        ["2024-01-09","2024-01-16",7,465,"C",3.00,3.10,3.05,3.05,0.30,0.1,465.0],
-        ["2024-01-09","2024-01-16",7,470,"C",0.50,0.60,0.55,0.55,0.05,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,465,"C",3.00,3.10,3.05,3.05,0.30,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,470,"C",0.50,0.60,0.55,0.55,0.05,0.1,465.0],
     ]
     res = run_wheel(_chain(rows), _cfg())     # default: no basis floor
     calls = [t for t in res.trades if t.action == "SELL_CALL"]
@@ -51,9 +54,13 @@ def test_call_min_strike_none_keeps_plain_behavior():
 def test_call_min_strike_basis_no_eligible_strike_sells_nothing_holds_shares():
     # only strikes below the 470 basis exist in the selected expiry -> no call
     # that day; shares held (exposed, so NOT counted flat).
+    # A9 skeptic (2026-08-02): rows sat on assignment day, so the deferral
+    # satisfied the no-call assertion VACUOUSLY (mutant-proven: deleting the
+    # basis floor kept this green). Moved to D+1, where the block runs and
+    # the floor must do the refusing itself.
     rows = _ASSIGN + [
-        ["2024-01-09","2024-01-16",7,460,"C",4.00,4.10,4.05,4.05,0.45,0.1,465.0],
-        ["2024-01-09","2024-01-16",7,465,"C",3.00,3.10,3.05,3.05,0.30,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,460,"C",4.00,4.10,4.05,4.05,0.45,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,465,"C",3.00,3.10,3.05,3.05,0.30,0.1,465.0],
     ]
     res = run_wheel(_chain(rows), _cfg(call_min_strike="basis"))
     assert not [t for t in res.trades if t.action == "SELL_CALL"]
@@ -63,14 +70,16 @@ def test_call_min_strike_basis_no_eligible_strike_sells_nothing_holds_shares():
 def test_basis_clears_after_called_away():
     # assigned @470, called away @475, re-assigned @450 -> new basis is 450,
     # so a 455 call (>= 450, < 470) is legal.
+    # A9: both call rows moved one session past their assignments (01-09 ->
+    # 01-10, 01-23 -> 01-24); the same-day rows encoded the defect.
     rows = [
         ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
         ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
-        ["2024-01-09","2024-01-16",7,475,"C",3.00,3.10,3.05,3.05,0.30,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,475,"C",3.00,3.10,3.05,3.05,0.30,0.1,465.0],
         ["2024-01-16","2024-01-16",0,475,"C",5.00,5.10,5.05,5.05,0.99,0.1,480.0],
         ["2024-01-16","2024-01-23",7,450,"P",2.00,2.10,2.05,2.05,-0.30,0.1,480.0],
         ["2024-01-23","2024-01-23",0,450,"P",5.00,5.10,5.05,5.05,-0.99,0.1,445.0],
-        ["2024-01-23","2024-01-30",7,455,"C",2.00,2.10,2.05,2.05,0.30,0.1,445.0],
+        ["2024-01-24","2024-01-30",6,455,"C",2.00,2.10,2.05,2.05,0.30,0.1,445.0],
     ]
     res = run_wheel(_chain(rows), _cfg(call_min_strike="basis"))
     calls = [t for t in res.trades if t.action == "SELL_CALL"]
@@ -164,14 +173,22 @@ def test_put_stop_does_not_fire_below_threshold():
 
 def test_put_stop_applies_to_puts_only():
     # short CALL's ask triples -> no stop (spec: calls are not the losing leg)
+    # A9 skeptic (2026-08-02): the call used to sell on assignment day and the
+    # tripled ask sat on 01-10 -- post-deferral the call now SELLS on the
+    # tripled row and no held call ever saw a 3x ask (mutant-proven vacuous:
+    # removing the puts-only stop restriction kept this green). The call now
+    # sells 01-10 at a normal price; 01-11 carries the tripled ask against
+    # the HELD call, which is what the puts-only rule must ignore.
     rows = [
         ["2024-01-02","2024-01-09",7,470,"P",2.00,2.10,2.05,2.05,-0.30,0.1,472.0],
         ["2024-01-09","2024-01-09",0,470,"P",5.00,5.10,5.05,5.05,-0.99,0.1,465.0],
-        ["2024-01-09","2024-01-16",7,465,"C",3.00,3.10,3.05,3.05, 0.30,0.1,465.0],
-        ["2024-01-10","2024-01-16",6,465,"C",14.90,15.10,15.00,15.00,0.99,0.1,480.0],
+        ["2024-01-10","2024-01-16",6,465,"C",3.00,3.10,3.05,3.05, 0.30,0.1,465.0],
+        ["2024-01-11","2024-01-16",5,465,"C",14.90,15.10,15.00,15.00,0.99,0.1,480.0],
     ]
     res = run_wheel(_chain(rows), _cfg(put_stop_mult=3.0))
-    assert "STOP_CLOSE" not in [t.action for t in res.trades]
+    acts = [t.action for t in res.trades]
+    assert "SELL_CALL" in acts          # the call IS held when the ask triples
+    assert "STOP_CLOSE" not in acts
 
 # ---- repair pass: stop fixes ----
 
@@ -307,9 +324,10 @@ def test_roll_missing_current_mark_logs_warning():
 def test_floor_is_net_basis_not_raw_strike():
     # assigned at 470 with 2.00 credit collected (no commission) -> net basis
     # 468. A 468 call must be eligible; under the old raw-strike floor it wasn't.
+    # A9: call rows moved off assignment day (same-session defect).
     rows = _ASSIGN + [
-        ["2024-01-09","2024-01-16",7,468,"C",1.00,1.10,1.05,1.05,0.30,0.1,465.0],
-        ["2024-01-09","2024-01-16",7,465,"C",3.00,3.10,3.05,3.05,0.60,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,468,"C",1.00,1.10,1.05,1.05,0.30,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,465,"C",3.00,3.10,3.05,3.05,0.60,0.1,465.0],
     ]
     res = run_wheel(_chain(rows), _cfg(call_min_strike="basis"))
     calls = [t for t in res.trades if t.action == "SELL_CALL"]
@@ -319,8 +337,11 @@ def test_floor_ratchets_down_as_call_premium_accrues():
     # saga: assigned at 470 (put credit 2.00 -> floor 468); first call at 468
     # expires worthless adding 1.00 credit -> floor 467; a 467 call becomes
     # eligible next cycle.
+    # A9: the first call row moved off assignment day (01-09 -> 01-10). The
+    # second cycle's 01-16 rows stay: CALL_EXPIRED is not an assignment, so
+    # same-day re-covering after a worthless expiry remains legal.
     rows = _ASSIGN + [
-        ["2024-01-09","2024-01-16",7,468,"C",1.00,1.10,1.05,1.05,0.30,0.1,465.0],
+        ["2024-01-10","2024-01-16",6,468,"C",1.00,1.10,1.05,1.05,0.30,0.1,465.0],
         ["2024-01-16","2024-01-16",0,468,"C",0.05,0.10,0.075,0.075,0.01,0.1,464.0],
         ["2024-01-16","2024-01-23",7,467,"C",1.00,1.10,1.05,1.05,0.30,0.1,464.0],
         ["2024-01-16","2024-01-23",7,468,"C",0.40,0.50,0.45,0.45,0.10,0.1,464.0],

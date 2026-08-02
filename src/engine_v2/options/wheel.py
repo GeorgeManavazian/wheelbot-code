@@ -142,6 +142,11 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
         d = pd.Timestamp(d)
         spot = float(und.get(d))
         day_chain = by_date.get(d)
+        # A9: an assignment booked this session defers the covered call to the
+        # next stepped session (notice after the close, shares settle T+1). A
+        # local flag suffices here -- the batch engine steps each date exactly
+        # once; the persisted twin lives in portfolio.py for the live path.
+        assigned_today = False
 
         # 0) accrue yield on idle cash (cash only — shares/liability are not collateral)
         if prev_d is not None and cfg.cash_yield > 0:
@@ -286,6 +291,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                     if settle_spot < c.strike:
                         cash -= c.strike * mult * n; shares += mult * n; phase = "CALL"
                         basis = c.strike
+                        assigned_today = True   # A9: no covered call this session
                         trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash, campaign))
                         if cfg.liquidate_assignment:
                             # pure put-write: dump the shares at spot same day
@@ -351,7 +357,7 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                             if at_risky_window_edge(day_chain, d, c, cfg.put_delta):
                                 # B11: clipped window -- riskier than configured
                                 warnings.append((d, "strike_window_edge", cfg.ticker))
-            elif phase == "CALL" and shares >= mult:
+            elif phase == "CALL" and shares >= mult and not assigned_today:
                 floor = None
                 if cfg.call_min_strike == "basis" and basis is not None:
                     # net basis: assignment strike minus premium already banked

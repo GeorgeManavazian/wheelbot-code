@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 40 of 75 done (A2-A8, A10-A12, A14-A19, A21c, A22, A23, B1-B5, B7-B11 minus B6, C13-C15, D5b, E1-E7; A21b/A21c/C17/A10b-e added session 2; A8 rescoped defense-only + A8b deferred, session 3) · Group A remaining: A9, A13 + owner-blocked A20/A21/A21b · Group B remaining: B6 only (owner) · Group E: DONE · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 41 of 76 done (A2-A12, A14-A19, A21c, A22, A23, B1-B5, B7-B11 minus B6, C13-C15, D5b, E1-E7; A21b/A21c/C17/A10b-e added session 2; A8 rescoped defense-only + A8b deferred + A9 done + A9b owner-blocked, session 3) · Group A remaining: A13 (analyst spec delivered) + owner-blocked A20/A21/A21b/A9b · Group B remaining: B6 only (owner) · Group E: DONE · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -200,11 +200,12 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A7 | Intraday holiday + quote-freshness gate | MED | **DONE** | see A7 evidence block below. Minutes-scale intra-session staleness deliberately left to **C1**; EOD held-leg staleness stays **A21**; dashboard marks (`live_marks`/`live_asks`) still show prior-session prices on holidays — display-only, noted for **A18b**. |
 | A8 | Early assignment — **OWNER RESCOPED 2026-08-02: no modelling, defense only.** Backtest + paper sim assume early exercise never happens (paper mode simulates its own fills, so it structurally cannot). Deliverable is the real-money seam: detect broker-vs-state divergence → freeze + alert (A10 idiom), and real-money mode must refuse to run without the reconciler wired. | MED | **DONE** | see A8 evidence block below. Skeptic CORRECT-BUT-INCOMPLETE → mapper-contract guard amended same session; 3 exposures declared (A11-gate-before-refusal ordering, chain-snapshot pull ungated under the flag, state.py rollback silently un-freezes `recon_frozen`). Follow-up: **A8b**. |
 | A8b | Real-money build prerequisites, so the seam is not forgotten when it matters: wire `diff_positions` into both runners (reconcile-before-trade), `fetch_broker_view` mapper with contract enforcement, extend the refusal to `run_chain_snapshot`, `recon_frozen` engine skips (A10 sites), A9's covered-call deferral must also hold for reconciled assignments, replace the startup refusal with a reconciler-wired self-check | — | DEFERRED (real-money build) | filed from the A8 analyst + skeptic, 2026-08-02. The `real_money=true` refusal is the guard that forces this row to be done first. |
-| A9 | Defer the covered call one session after assignment | MED | TODO | |
+| A9 | Defer the covered call one session after assignment | MED | **DONE** | see A9 evidence block below. Skeptic CONFIRMED on real data (pre-fix 30/30 SPY assignments sold same-session, post-fix 0/29) → 2 amendments same session (two collateral tests gone vacuous, mutant-proven, teeth restored). **A9b filed** (owner design question: router trend→chop handoff sells a call the same session — those shares ARE settled, so physically fillable; defer anyway for timing-convention consistency?). **F4 declared:** pre-A9 backtest numbers containing assignments are non-comparable (the same-session call re-prices at D+1 and cascades through premium→floor→strike selection; 9-ticker solo measured $433k of phantom same-session premium, 180 events). Goldens unaffected (zero assignments). |
+| A9b | Router trend→chop share-handoff can sell a covered call in the handoff session (`regime_router.py:165-170` sets phase="CALL", `assigned_today` stays False). Unlike assignment, those shares settled long ago — same-day sale is physically fillable. Owner: defer anyway (EOD-quote timing convention) or keep? | LOW | BLOCKED (owner) | filed from the A9 skeptic, 2026-08-02. Solo-only surface (batch router; live never routes trend). `liquidate_assignment` same-day LIQUIDATE+re-entry also noted — research flag, rejected by both production engines, out of scope. |
 | A10 | Corporate actions — at minimum detect and refuse | HIGH | **DONE (provisional owner defaults)** | commit `b672cda`; analyst spec + A10 evidence block below. Restatement detector (`LiveMarket.prior_close` vs stored `last_spot`, capability-gated so batch is byte-identical by construction) → sticky manual-clear freeze; ≥25% gap with clean restatement → ONE deferred settlement session + 5-session watch (real crash auto-clears, tested); intraday underlying-gap refusal + frozen-skip; state round-trip; one deduped daily FROZEN email. **Owner may re-tune D1-D4 (band 0.80/1.25, backstop 25%, manual clearing, no entry veto) before Phase F — veto cheap, nothing trades while paused.** Mutants X1-X6 killed. Suites 560+295=855. |
 | A11 | Clock gate inside `run_daily` (refuse before 17:00 ET without `--force`) | MED | **DONE** | see A11 evidence block below. Boundary tightened 16:00→17:00 per its skeptic (Schwab's bar isn't settled until ~17:00 and `already_stepped` locks a half-baked day in). New row filed: **A23** — `--smoke` isolation is imperfect (its zombie path writes the REAL gaps.jsonl + a real email on a pull failure; pre-existing, skeptic F5). Cosmetic: run_health strings still say "20:00 window" (stale, noted). |
 | A12 | Budget allocation must not strand capital at small sizes | MED | **DONE** (+ owner amendment 2026-08-01) | see A12 evidence block below. Skeptic-F3 routing preference resolved by owner 2026-08-01: fallback flipped to **richest-ranked-first at any k**, sized at the largest k (least concentration) that affords it. Fresh skeptic on the flip: **SURVIVES** (4,000-trial differential fuzz vs HEAD, phantom money 0/8,000 runs, fallback n=1 in all 1,286 fallback trials, equal-split path identical in all 2,714 non-fallback trials, gate resurrection impossible, 4 mutants killed incl. exact-old-behavior revert). Declared (skeptic F8): fallback route_events record only the chosen name, so the audit referee cannot detect a wrong fallback pick — the two new tests in `test_budget_split.py` are the defense. |
-| A13 | Model exchange/OCC/regulatory and assignment fees | LOW | TODO | |
+| A13 | Model exchange/OCC/regulatory and assignment fees | LOW | WIP | analyst dispatched 2026-08-02 (session 3), parallel with A9's (both read-only) |
 | A14 | Surface `StepResult.warnings`; bound the unsettleable-expiry refusal | HIGH | **DONE** | see A14 evidence block below. **Incident logged there too:** the A14 skeptic's probe wrote test states into the LOCAL frozen archive (`data/live/accounts/100k_N1..N6`) via the WHEELBOT_STATE_DIR import-time trap — self-reported, recovered same session (N6 deleted; N1 byte-exact from `data/live-synced@a8ea1f8`; N2-N5 nearest-frozen, one intraday session off; polluted snapshot rows stripped). Canonical VPS store untouched; Phase F resets all accounts anyway. Process rule saved to memory: main()-touching probes need the env pre-set in a fresh interpreter. |
 | A15 | Restore a bounded reach-back for the batch engine | MED | **DONE** | see the session-2 batch evidence block. `BatchMarket.bounded_settle_price` (≤5 calendar days) + `step_one_day` fall-through only when the market provides it; LiveMarket never grows it (hasattr-pinned, skeptic F2). Real-data C3: SPY has exactly 2 absent expiry dates in 9 years (2018-12-05, 2025-01-09, funeral closures), both now settle at the prior close. |
 
@@ -352,6 +353,49 @@ silently un-freezes `recon_frozen` on resave — inherent to the optional-key pa
 exposure ca_frozen shipped with; (5) diff_positions precondition documented: ≤1 short per root
 (two vanished shorts on one root double-explain one share delta; severity-safe, both FREEZE);
 (6) cosmetic: cash delta exactly 0.005 → ALERT not clean (float repr; fail-safe direction).
+
+---
+
+## A9 — evidence block (2026-08-02, session 3)
+
+**Rule:** an assignment BOOKED in the step for session D makes the first legal covered-call
+sale the next stepped session (notice arrives after the close; shares settle T+1). Late/A10-
+deferred bookings defer from the BOOKING session. Owner defaults taken: all 3 engines (parity);
+deferral day counts in `days_shares_uncovered`; scope stops at ASSIGNED→SELL_CALL (CALLED_AWAY→
+re-entry, PUT_EXPIRED→entry, liquidate_assignment same-day untouched); last-day assignment
+sells no call (declared, more honest than banking premium at the phantom session).
+
+**What landed:** `portfolio.py` — ASSIGNED branch persists `pos["assigned_d"] = str(d.date())`;
+the covered-call BLOCK (selection + warnings + sale) gated on `assigned_d != today`, so a
+structural deferral day fires no A4/A3b warnings (each would email daily). PERSISTED, not
+in-step: live re-steps the same day in the snapshot-failed retry window (A5 lesson) and A8b
+reconciled assignments arrive from another process. `wheel.py`/`regime_router.py` — per-day
+`assigned_today` local flag (batch engines step each date once). `state.py` — `assigned_d` in
+the optional round-trip tuples. +7 tests (5 backtest incl. late-booking semantics + a
+floor-unreachable fixture that kills sale-only-gating mutants; 2 live incl. reload/re-step).
+
+**Gates:** red first (5 failures: same-session SELL_CALL in every engine + reload re-sale) ·
+suites 565+318 · 8 mutants killed (guard removed, sale-only gating, wheel flag, router flag,
+round-trip drop, date-format mismatch, + 2 post-skeptic teeth checks) · line audit 8 hunks no
+riders · blast radius: `assigned_d` has no consumer outside portfolio.py/state.py · C3 $0 today
+(zero live CALL-phase positions, no live assignment has ever occurred).
+
+**Test amendments (rule A3, all defect-encoding fixtures, rationale in each):** 9 total —
+test_wheel_engine (D+1 row + date assert + cash re-pin at D+1 prices), test_regime_gates (intent
+preserved on D+1), test_wheel_defense ×5, test_campaigns `_SAGA` + `days_shares_uncovered` 0→1
+(owner default: deferral day is a real uncovered day). The A9 analyst's stays-green sweep missed
+5 of these (declared); the skeptic then caught 2 MORE gone silently vacuous — the basis-floor
+refusal test and the puts-only-stop test passed post-fix even with their rules deleted
+(mutant-proven) — both re-fixtured to D+1 and both mutants re-run: now caught.
+
+**Skeptic (fresh, read-only): CONFIRMED.** Receipts: HEAD-vs-fixed on real SPY chains — 30/30
+same-session calls pre-fix, 0/29 post-fix (one marginal assignment ceased to exist as decisions
+cascaded); parity anchors green AND non-vacuous (29 assignments exercised); every SELL_CALL
+append traced (one per engine, all gated; rolls are puts-only; routing sells puts only; intraday
+is close-only); two-cycle probe proved stale `assigned_d` can never block later dates and the
+flat-drop yields clean dicts; A10 defer path books through the same gated branch. Declared:
+`assigned_d` never cleared (cosmetic residue in state.json); `--force` post-close snapshot pulls
+call quotes for a can't-sell-today position (harmless, gate still blocks).
 
 ---
 
