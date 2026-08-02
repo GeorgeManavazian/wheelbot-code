@@ -155,31 +155,73 @@ def _pnl_html(x):
     return f'<span class="{cls}">{_fmt(x)}</span>'
 
 
-def gap_banner():
-    """Show missed trading days at the top of every page.
+def split_gap_records(records):
+    """C2/C3: the two disclosure classes, from the folded ledger RECORDS
+    (reasons included), not the bare dates. The old banner asserted 'never
+    traded, cannot be backfilled' for every date -- false for 45.5% of
+    realized P&L (07-23 closed the DOW campaign for $25,616 while labelled
+    no_run; 07-24 opened WMT in 19 accounts off stale prices while labelled
+    missed). Class split: a plain `no_run` really is a hole; anything with a
+    correction or another reason DID have activity and carries that reason
+    as its caveat."""
+    full_miss, degraded = [], []
+    for r in records:
+        reason = str(r.get("reason", "?"))
+        if r.get("correction") is True or reason != "no_run":
+            degraded.append((str(r["date"]), reason))
+        else:
+            full_miss.append((str(r["date"]), reason))
+    return full_miss, degraded
 
-    The bot records them in gaps.jsonl, but until this existed nothing read that
-    file -- so an equity curve with holes in it looked continuous and complete.
-    A number the owner cannot see the caveat on is worse than no number."""
+
+def gap_banner():
+    """Show missed/degraded trading days at the top of every page.
+
+    The bot records them in gaps.jsonl, but until this existed nothing read
+    that file -- and until C2/C3 the banner rendered only the DATES with a
+    blanket 'never traded' claim the ledger's own reasons contradicted."""
     from live.gaps import gap_summary
     g = gap_summary()
     if not g["count"]:
         return
-    dates = ", ".join(g["dates"])
+    full_miss, degraded = split_gap_records(g["records"])
+    parts = []
+    if full_miss:
+        parts.append(
+            f"<b>&#9888; {len(full_miss)} day(s) with no bot activity</b> "
+            f"&mdash; {', '.join(d for d, _ in full_miss)}"
+            f"<br><span style='color:#c9b184;'>Nothing ran; these cannot be "
+            f"backfilled (Schwab has no historical chain endpoint). The "
+            f"equity curve has holes on these dates.</span>")
+    if degraded:
+        rows = ", ".join(f"{d} ({why})" for d, why in degraded)
+        parts.append(
+            f"<b>&#9888; {len(degraded)} degraded day(s)</b> &mdash; {rows}"
+            f"<br><span style='color:#c9b184;'>The bot DID act on these days "
+            f"-- the reason above is the caveat its numbers carry (partial "
+            f"run, stale prices, or a corrected record). Do not read them as "
+            f"clean sessions or as holes.</span>")
     st.markdown(
         f"<div style='background:#3a2a0e;border:1px solid #8a6d1f;border-radius:6px;"
         f"padding:10px 14px;margin-bottom:14px;color:#f0d999;font-size:.86rem;'>"
-        f"<b>&#9888; {g['count']} missed trading day(s)</b> &mdash; {dates}"
-        f"<br><span style='color:#c9b184;'>These days were never traded and "
-        f"<b>cannot be backfilled</b> (Schwab has no historical option-chain "
-        f"endpoint). Returns and the equity curve below cover fewer sessions "
-        f"than the date range implies.</span></div>",
+        + "<br>".join(parts) + "</div>",
         unsafe_allow_html=True)
+
+
+def dedupe_snaps(snaps):
+    """C12: keep the LAST snapshot per date. The retry-window bug era left
+    duplicate 2026-07-24 rows in every account; a duplicated index double-
+    counts sessions in every downstream stat and kinks the equity curve."""
+    latest = {}
+    for s in snaps:
+        if isinstance(s, dict) and "date" in s:
+            latest[str(s["date"])[:10]] = s
+    return [latest[k] for k in sorted(latest)]
 
 
 def board(paths, capital, n, label, refresh="15s"):
     state = _load_json(Path(paths["state"]), {"cash": float(capital), "positions": []})
-    snaps = _load_jsonl(Path(paths["snapshots"]))
+    snaps = dedupe_snaps(_load_jsonl(Path(paths["snapshots"])))   # C12
     positions = state.get("positions", [])
     # marks come from session_state, keyed per account (populated by this page's
     # "Pull live quotes" button) -- the render path NEVER hits the network.

@@ -59,11 +59,15 @@ def _read_json(path: str, default):
 
 
 def _equity_series(snaps: list[dict]) -> pd.Series:
-    """Chronological equity curve indexed by snapshot date. Empty if no snaps."""
+    """Chronological equity curve indexed by snapshot date. Empty if no snaps.
+    C12: LAST row per date wins -- the retry-window era left duplicate
+    2026-07-24 rows in every account, and a duplicated index double-counts
+    that session in every stat downstream (returns, drawdown, Sharpe ppy)."""
     if not snaps:
         return pd.Series(dtype=float)
     dates = pd.to_datetime([s.get("date") for s in snaps])
     eq = pd.Series([float(s.get("equity", 0.0)) for s in snaps], index=dates)
+    eq = eq[~eq.index.duplicated(keep="last")]
     return eq.sort_index()
 
 
