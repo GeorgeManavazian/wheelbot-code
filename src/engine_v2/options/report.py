@@ -71,7 +71,7 @@ def wheel_stats(result, cfg) -> dict:
     closes = of("CLOSE_PUT") + of("CLOSE_CALL") + of("ROLL_CLOSE") + of("STOP_CLOSE")
     prem_in = sum(t.price_per_contract * mult * t.contracts for t in sells)
     prem_out = sum(t.price_per_contract * mult * t.contracts for t in closes)
-    commission = cfg.commission_per_contract * sum(t.contracts for t in sells + closes)
+    commission = cfg.friction_per_contract * sum(t.contracts for t in sells + closes)
     n_puts = len(of("SELL_PUT"))
     return {
         "n_puts_sold": n_puts, "n_calls_sold": len(of("SELL_CALL")),
@@ -108,7 +108,7 @@ def _trade_cash_flow(t, cfg) -> float:
     """Cash flow of one trade from its own economics — NOT cash_after deltas,
     which would fold cash-yield interest (earned on the whole balance, campaign
     or not) into per-campaign P&L."""
-    mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
+    mult, comm = cfg.contract_multiplier, cfg.friction_per_contract
     px, n = t.price_per_contract, t.contracts
     if t.action in ("SELL_PUT", "SELL_CALL", "ROLL_OPEN"):
         return px * mult * n - comm * n
@@ -150,7 +150,7 @@ def roll_counterfactuals(result, chain, cfg) -> pd.DataFrame:
     close actually realized vs what holding THAT leg to its own expiry would
     have settled at (credit - intrinsic). Does NOT model the post-assignment
     path — labeled approximation, per the repair spec."""
-    mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
+    mult, comm = cfg.contract_multiplier, cfg.friction_per_contract
     und = underlying_series(chain)
     opens, rows = {}, []
     skipped = 0
@@ -352,7 +352,7 @@ _TERM = {"CLOSE_PUT", "CLOSE_CALL", "PUT_EXPIRED", "CALL_EXPIRED", "ASSIGNED",
          "CALLED_AWAY", "ROLL_CLOSE", "STOP_CLOSE"}
 
 def position_log(result, cfg) -> pd.DataFrame:
-    mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
+    mult, comm = cfg.contract_multiplier, cfg.friction_per_contract
     rows, open_opt, assign = [], None, None
     for t in result.trades:
         if t.action in ("SELL_PUT", "SELL_CALL", "ROLL_OPEN"):
@@ -438,7 +438,7 @@ def portfolio_campaign_table(result, cfg, last_spots) -> pd.DataFrame:
     is exact cash flow; pnl_mtm marks any still-held shares at last_spots AND
     any still-open short option (opens outnumber terminal closes) to intrinsic
     value at the last spot — an open short is a liability, not a finished win."""
-    mult, comm = cfg.contract_multiplier, cfg.commission_per_contract
+    mult, comm = cfg.contract_multiplier, cfg.friction_per_contract
     agg = {}
     for t in result.trades:
         cid = t.campaign_id

@@ -42,6 +42,15 @@ class WheelConfig:
     ticker: str = "SPY"
     contract_multiplier: int = 100
     commission_per_contract: float = 0.65
+    # A13: pass-through fees (OCC clearing + ORF + SEC/TAF sell-side, all
+    # itemized on a real statement as one blur) as ONE flat per-contract-side
+    # adder, and the broker's per-EVENT assignment/exercise fee. Defaults 0.0
+    # so the plain path is byte-identical (golden precedent); production sets
+    # fees_per_contract=0.05 in live/run_daily.FROZEN (provisional -- owner
+    # verifies against the first real statement; the audit's $0.30 implied
+    # rate double-counts exchange fees Schwab embeds in the $0.65).
+    fees_per_contract: float = 0.0
+    fee_per_assignment: float = 0.0
     # defense variants (amendment 2026-07-12b, repaired 2026-07-13) — all
     # default-off so plain behavior is byte-identical.
     call_min_strike: str | None = None   # "basis": covered calls only at strike >= net basis
@@ -74,6 +83,15 @@ class WheelConfig:
     def any_regime_gate(self) -> bool:
         return self.regime_entry_gate or self.regime_roll_gate or self.regime_stop_gate
 
+    @property
+    def friction_per_contract(self) -> float:
+        """A13: the one per-contract-side cost every fill and every guard
+        prices. sell_proceeds / buy_cost / try_take_profit / tp_exit_floor all
+        consume THIS, never the raw commission -- if the fills charge it and
+        the floor doesn't (or vice versa), the bot either writes guaranteed-
+        loss exits or refuses survivable ones."""
+        return self.commission_per_contract + self.fees_per_contract
+
 @dataclass
 class Trade:
     date: pd.Timestamp
@@ -89,11 +107,11 @@ def underlying_series(chain: pd.DataFrame) -> pd.Series:
 
 def sell_proceeds(mark, contracts, cfg) -> float:
     return (mark.bid * cfg.contract_multiplier * contracts
-            - cfg.commission_per_contract * contracts)
+            - cfg.friction_per_contract * contracts)
 
 def buy_cost(mark, contracts, cfg) -> float:
     return (mark.ask * cfg.contract_multiplier * contracts
-            + cfg.commission_per_contract * contracts)
+            + cfg.friction_per_contract * contracts)
 
 @dataclass
 class WheelResult:
@@ -289,7 +307,9 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                         settle_spot = float(pre.iloc[-1])
                 if c.right == "P":
                     if settle_spot < c.strike:
-                        cash -= c.strike * mult * n; shares += mult * n; phase = "CALL"
+                        # A13: per-event assignment fee ($0 at Schwab, VERIFY)
+                        cash -= c.strike * mult * n + cfg.fee_per_assignment
+                        shares += mult * n; phase = "CALL"
                         basis = c.strike
                         assigned_today = True   # A9: no covered call this session
                         trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash, campaign))
@@ -302,7 +322,8 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                         trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash, campaign))
                 else:
                     if settle_spot > c.strike:
-                        cash += c.strike * mult * n; shares -= mult * n; phase = "PUT"
+                        cash += c.strike * mult * n - cfg.fee_per_assignment
+                        shares -= mult * n; phase = "PUT"
                         basis = None
                         trades.append(Trade(d, "CALLED_AWAY", c, n, c.strike, cash, campaign))
                     else:

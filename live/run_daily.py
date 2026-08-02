@@ -44,7 +44,15 @@ FROZEN = dict(put_delta=0.30, call_delta=0.50, target_dte=11,
               # the A2 evidence block. Missing/NaN field with a set threshold
               # = refuse.
               liq_max_rel_spread=0.10, liq_min_open_interest=250,
-              liq_min_volume=25)
+              liq_min_volume=25,
+              # A13 (2026-08-02): pass-through fees (OCC/ORF/SEC/TAF) as one
+              # flat per-contract-side adder -- PROVISIONAL $0.05, owner
+              # verifies against the first real statement (the audit's
+              # implied $0.30 double-counts exchange fees Schwab embeds).
+              # Assignment fee $0 at Schwab since 2019 (VERIFY) -- wired so a
+              # nonzero is a one-line change. Dataclass defaults stay 0.0:
+              # goldens and every historical backtest stay byte-identical.
+              fees_per_contract=0.05, fee_per_assignment=0.0)
 
 
 def zombie_check(skipped_closes: int, universe_size: int,

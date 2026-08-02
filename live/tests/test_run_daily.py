@@ -179,6 +179,17 @@ def test_decision_run_refuses_before_the_close(monkeypatch):
         "A11: a 04:13 run must refuse with a nonzero exit (no marker, retry later)"
 
 
+def test_frozen_carries_the_a13_fee_constants():
+    """A13: production charges pass-through fees (OCC/ORF/SEC/TAF ~ $0.05 per
+    contract-side, provisional pending a real statement) and a $0 Schwab
+    assignment fee (VERIFY on first real statement). Dataclass defaults stay
+    0.0 so goldens/backtests are byte-identical; FROZEN is where production
+    diverges -- pin it so a config refactor can't silently drop the fee."""
+    from live.run_daily import FROZEN
+    assert FROZEN["fees_per_contract"] == 0.05
+    assert FROZEN["fee_per_assignment"] == 0.0
+
+
 def test_real_money_flag_refuses_before_any_network(monkeypatch):
     """A8 (rescoped): real-money mode requires a wired position reconciler and
     order code; neither exists. `real_money: true` must refuse with exit 3

@@ -280,7 +280,8 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                     warnings.append((d, "expiry_resolved_late", c))
                 if c.right == "P":
                     if settle_spot < c.strike:
-                        cash -= c.strike * mult * n
+                        # A13: per-event assignment fee ($0 at Schwab, VERIFY)
+                        cash -= c.strike * mult * n + cfg.fee_per_assignment
                         pos["shares"] += mult * n; pos["phase"] = "CALL"
                         pos["basis"] = c.strike
                         # A9: the notice arrives after this session's close and
@@ -297,7 +298,7 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                         trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash, pos["campaign"]))
                 else:
                     if settle_spot > c.strike:
-                        cash += c.strike * mult * n
+                        cash += c.strike * mult * n - cfg.fee_per_assignment
                         pos["shares"] -= mult * n; pos["phase"] = "PUT"
                         pos["basis"] = None
                         trades.append(Trade(d, "CALLED_AWAY", c, n, c.strike, cash, pos["campaign"]))

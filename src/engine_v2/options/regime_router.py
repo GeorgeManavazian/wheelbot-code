@@ -137,7 +137,9 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                         settle_spot = float(pre.iloc[-1])
                 if c.right == "P":
                     if settle_spot < c.strike:
-                        cash -= c.strike * mult * n; shares += mult * n
+                        # A13: per-event assignment fee ($0 at Schwab, VERIFY)
+                        cash -= c.strike * mult * n + cfg.fee_per_assignment
+                        shares += mult * n
                         phase = "CALL"; basis = c.strike
                         assigned_today = True   # A9: no covered call this session
                         trades.append(Trade(d, "ASSIGNED", c, n, c.strike, cash, campaign))
@@ -145,7 +147,8 @@ def run_regime_router(chain: pd.DataFrame, cfg: WheelConfig,
                         trades.append(Trade(d, "PUT_EXPIRED", c, n, 0.0, cash, campaign))
                 else:
                     if settle_spot > c.strike:
-                        cash += c.strike * mult * n; shares -= mult * n
+                        cash += c.strike * mult * n - cfg.fee_per_assignment
+                        shares -= mult * n
                         phase = "PUT"; basis = None
                         trades.append(Trade(d, "CALLED_AWAY", c, n, c.strike, cash, campaign))
                     else:

@@ -1,6 +1,6 @@
 # Repair plan — live paper wheel bot
 
-**Created:** 2026-07-31 · **Status:** IN PROGRESS — 41 of 76 done (A2-A12, A14-A19, A21c, A22, A23, B1-B5, B7-B11 minus B6, C13-C15, D5b, E1-E7; A21b/A21c/C17/A10b-e added session 2; A8 rescoped defense-only + A8b deferred + A9 done + A9b owner-blocked, session 3) · Group A remaining: A13 (analyst spec delivered) + owner-blocked A20/A21/A21b/A9b · Group B remaining: B6 only (owner) · Group E: DONE · **Bot state:** PAUSED
+**Created:** 2026-07-31 · **Status:** IN PROGRESS — 42 of 76 done (A2-A19 all non-owner-blocked, A21c, A22, A23, B1-B5, B7-B11 minus B6, C13-C15, D5b, E1-E7; session 3: A8 rescoped+done, A8b deferred, A9 done, A9b owner-blocked, A13 done) · **Group A COMPLETE except owner-blocked A20/A21/A21b/A9b** · Group B remaining: B6 only (owner) · Group E: DONE · Next unblocked: small rows (A10b/A10e/C16b/E8/C16/C17) then Group C · **Bot state:** PAUSED
 (timer stopped AND disabled on the VPS)
 **Findings source:** `docs/superpowers/AUDIT-2026-07-31-full-system.md`
 **Owner decisions:** bot stays paused until done · every recorded finding fixed before day 1 ·
@@ -205,7 +205,7 @@ Legend: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DEFERRED (owner)`
 | A10 | Corporate actions — at minimum detect and refuse | HIGH | **DONE (provisional owner defaults)** | commit `b672cda`; analyst spec + A10 evidence block below. Restatement detector (`LiveMarket.prior_close` vs stored `last_spot`, capability-gated so batch is byte-identical by construction) → sticky manual-clear freeze; ≥25% gap with clean restatement → ONE deferred settlement session + 5-session watch (real crash auto-clears, tested); intraday underlying-gap refusal + frozen-skip; state round-trip; one deduped daily FROZEN email. **Owner may re-tune D1-D4 (band 0.80/1.25, backstop 25%, manual clearing, no entry veto) before Phase F — veto cheap, nothing trades while paused.** Mutants X1-X6 killed. Suites 560+295=855. |
 | A11 | Clock gate inside `run_daily` (refuse before 17:00 ET without `--force`) | MED | **DONE** | see A11 evidence block below. Boundary tightened 16:00→17:00 per its skeptic (Schwab's bar isn't settled until ~17:00 and `already_stepped` locks a half-baked day in). New row filed: **A23** — `--smoke` isolation is imperfect (its zombie path writes the REAL gaps.jsonl + a real email on a pull failure; pre-existing, skeptic F5). Cosmetic: run_health strings still say "20:00 window" (stale, noted). |
 | A12 | Budget allocation must not strand capital at small sizes | MED | **DONE** (+ owner amendment 2026-08-01) | see A12 evidence block below. Skeptic-F3 routing preference resolved by owner 2026-08-01: fallback flipped to **richest-ranked-first at any k**, sized at the largest k (least concentration) that affords it. Fresh skeptic on the flip: **SURVIVES** (4,000-trial differential fuzz vs HEAD, phantom money 0/8,000 runs, fallback n=1 in all 1,286 fallback trials, equal-split path identical in all 2,714 non-fallback trials, gate resurrection impossible, 4 mutants killed incl. exact-old-behavior revert). Declared (skeptic F8): fallback route_events record only the chosen name, so the audit referee cannot detect a wrong fallback pick — the two new tests in `test_budget_split.py` are the defense. |
-| A13 | Model exchange/OCC/regulatory and assignment fees | LOW | WIP | analyst dispatched 2026-08-02 (session 3), parallel with A9's (both read-only) |
+| A13 | Model exchange/OCC/regulatory and assignment fees | LOW | **DONE** | see A13 evidence block below. Skeptic CONFIRMED, zero required amendments. Analyst finding worth keeping: the audit's "$1,349 unmodelled" implied $0.30/side — likely 5-6× overstated (double-counts exchange fees Schwab embeds in the $0.65); realistic pass-through ≈ $0.03-0.06/side. Declared: report shows no `fee_per_assignment` line (inert at $0; surface before ever setting nonzero); negative-fee configs unvalidated (pre-existing class); A18c referee stays raw-commission until fee-ON logs exist; **A20 must be decided fee-ON** (RIG surrender 70.2%→73.9% @ $0.05). |
 | A14 | Surface `StepResult.warnings`; bound the unsettleable-expiry refusal | HIGH | **DONE** | see A14 evidence block below. **Incident logged there too:** the A14 skeptic's probe wrote test states into the LOCAL frozen archive (`data/live/accounts/100k_N1..N6`) via the WHEELBOT_STATE_DIR import-time trap — self-reported, recovered same session (N6 deleted; N1 byte-exact from `data/live-synced@a8ea1f8`; N2-N5 nearest-frozen, one intraday session off; polluted snapshot rows stripped). Canonical VPS store untouched; Phase F resets all accounts anyway. Process rule saved to memory: main()-touching probes need the env pre-set in a fresh interpreter. |
 | A15 | Restore a bounded reach-back for the batch engine | MED | **DONE** | see the session-2 batch evidence block. `BatchMarket.bounded_settle_price` (≤5 calendar days) + `step_one_day` fall-through only when the market provides it; LiveMarket never grows it (hasattr-pinned, skeptic F2). Real-data C3: SPY has exactly 2 absent expiry dates in 9 years (2018-12-05, 2025-01-09, funeral closures), both now settle at the prior close. |
 
@@ -396,6 +396,37 @@ is close-only); two-cycle probe proved stale `assigned_d` can never block later 
 flat-drop yields clean dicts; A10 defer path books through the same gated branch. Declared:
 `assigned_d` never cleared (cosmetic residue in state.json); `--force` post-close snapshot pulls
 call quotes for a can't-sell-today position (harmless, gate still blocks).
+
+---
+
+## A13 — evidence block (2026-08-02, session 3)
+
+**Owner defaults taken (veto cheap):** `fees_per_contract` $0.05 in FROZEN / $0.0 dataclass
+(A2 idiom — goldens byte-identical) · `fee_per_assignment` $0.00 (Schwab charges nothing since
+2019 — VERIFY against the first real statement; wired so nonzero is one line) · no retroactive
+edits to stored trades (Phase F resets) · fee-sensitive studies must pass fees explicitly.
+
+**What landed:** `WheelConfig.friction_per_contract` property (commission + fees) consumed at
+the four shared arithmetic sites (`sell_proceeds`/`buy_cost`, both `try_take_profit` cost lines,
+`tp_exit_floor`) + all 5 report.py recomputes; `fee_per_assignment` inside the cash mutation at
+all 6 settlement sites (3 engines × ASSIGNED/CALLED_AWAY), charged before the Trade append so
+`cash_after` is honest. FROZEN carries $0.05/$0.00, pinned by a live test.
+
+**Gates:** red first (11 failures) · suites 577+319, zero regressions · 6 mutants killed incl.
+P2 = the floor/fill divergence class (guard prices commission while fills charge friction — the
+one real defect A13 could introduce) · line audit clean · blast radius: sole raw-commission
+survivor is the A18c referee script, declared.
+
+**Skeptic (fresh, read-only): CONFIRMED, no required amendments.** Receipts: HEAD-vs-fixed on
+the real SPY chain, defaults only — 1,140 trades, diff-identical to repr precision both engines;
+fee-ON run: cash delta exactly 0.05 × 3,259 sides (no decision changed on this chain), 443 TP
+pairs zero net-negative, band-credit probe refused at entry with `tp_net_negative`; FROZEN
+propagation into BOTH live paths quoted (`run_intraday.py:22,62` imports and spreads FROZEN);
+per-EVENT fee proven (5-contract assignment charges $15 not $75, all 3 engines; double-charge
+impossible — settlement nulls the leg); rolls and stops pay friction, LIQUIDATE stock leg
+correctly does not. Declared (optional, inert): report lacks a `fee_per_assignment` line;
+`commission_paid` label now carries commission+fees (owner picks presentation at Group C);
+negative fees unvalidated (pre-existing); referee fee-blind on marginal rolls under fee-ON.
 
 ---
 

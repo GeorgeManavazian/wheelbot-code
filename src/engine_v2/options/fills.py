@@ -76,13 +76,15 @@ def tp_exit_floor(cfg):
         # loss. Infinite floor (refuse all), never "inert": inert was the one
         # gap that waved the WBD class through under a degenerate config.
         return float("inf")
-    # NOTE (skeptic F2): the commission conjunct evaluates the worst fill at
+    # NOTE (skeptic F2): the friction conjunct evaluates the worst fill at
     # continuous thresh; the engine's actual worst fill is the penny at/below
     # it, so for tp <= ~0.43 this over-refuses a thin band of survivable
     # entries. Conservative-only; exact at every config in the repo (tp 0.50,
-    # 0.60). Revisit only if a small-tp config ever appears.
+    # 0.60). Revisit only if a small-tp config ever appears. A13: friction
+    # (commission + fees), never raw commission -- the guard must price
+    # exactly what the fills charge.
     return max(MIN_TICK / (1.0 - tp),
-               2.0 * cfg.commission_per_contract / (tp * cfg.contract_multiplier))
+               2.0 * cfg.friction_per_contract / (tp * cfg.contract_multiplier))
 
 
 def tp_exit_feasible(credit, cfg):
@@ -134,12 +136,12 @@ def try_take_profit(*, mark, credit, contracts, cfg, day, expiry,
                 # stays the numpy scalar it always was (cash dtype contamination
                 # is pre-existing, pinned by test, and NOT changed by this seam)
                 cost = (fill["close"] * cfg.contract_multiplier * contracts
-                        + cfg.commission_per_contract * contracts)
+                        + cfg.friction_per_contract * contracts)
                 return FillDecision(True, float(fill["close"]), cost,
                                     fill["timestamp"], "print", contracts)
     if mark is not None and mark.ask <= thresh:
         cost = (mark.ask * cfg.contract_multiplier * contracts
-                + cfg.commission_per_contract * contracts)
+                + cfg.friction_per_contract * contracts)
         return FillDecision(True, mark.ask, cost,
                             day if day_stamp is None else day_stamp, "quote",
                             contracts)
