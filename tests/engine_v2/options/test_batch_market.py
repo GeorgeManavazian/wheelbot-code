@@ -47,6 +47,25 @@ def test_regime_row_strictly_prior_day():
     assert m.regime_row("GDX", pd.Timestamp("2021-01-04")) is None  # nothing strictly before
 
 
+def test_default_clean_start_carries_the_a10e_fossil_fences():
+    """A10e sweep (2026-08-02): the in-sample chains carry unadjusted
+    corporate actions -- AAPL 4:1 2020-08-31, AMZN 20:1 2022-06-06, META
+    symbol reuse until 2022-06-09 (a $12 Metaverse ETF, not Facebook), NVDA
+    4:1 2021-07-20 + 10:1 2024-06-10, XOP 1:4 2020-03-31 (the original).
+    Measured on solo runs: NVDA booked $363k of phantom split losses; META's
+    P&L rode a x15 wrong-instrument jump. Every fence must sit AFTER its
+    ticker's last fossil; dropping any entry un-fences fiction."""
+    import pandas as pd
+    from src.engine_v2.options.portfolio import DEFAULT_CLEAN_START
+    last_fossil = {"XOP": "2020-03-31", "AAPL": "2020-08-31",
+                   "AMZN": "2022-06-06", "META": "2022-06-09",
+                   "NVDA": "2024-06-10"}
+    for tk, fossil in last_fossil.items():
+        assert tk in DEFAULT_CLEAN_START, f"A10e: {tk} fence missing"
+        assert DEFAULT_CLEAN_START[tk] > pd.Timestamp(fossil), \
+            f"A10e: {tk} fence does not clear its last fossil {fossil}"
+
+
 def test_eligible_respects_clean_start():
     m = _mkt()
     assert m.eligible("GDX", pd.Timestamp("2021-01-04")) is True     # no clean_start for GDX

@@ -18,9 +18,22 @@ from .market import BatchMarket
 ROTATION_TIE_ORDER = ("SPY", "GDX", "SLV", "XOP",
                       "AAPL", "AMZN", "NVDA", "META", "FB")
 RESERVED_TICKERS = ("XBI", "EEM", "EWZ", "TLT", "ARKK")
-# XOP's chain is split-broken before this date (unadjusted 1:4 reverse split
-# 2020-03-31) — STATUS item; a ticker is ineligible before its clean start.
-DEFAULT_CLEAN_START = {"XOP": pd.Timestamp("2020-07-01")}
+# A ticker is ineligible before its clean start: its stored chain carries an
+# UNADJUSTED corporate action before that date (underlying jumps by the split
+# ratio, the whole strike ladder re-grids) and everything computed across the
+# boundary is fiction. XOP was the original (unadjusted 1:4 reverse split
+# 2020-03-31); the A10e sweep (2026-08-02) found the rest of the in-sample
+# set: AAPL 4:1 2020-08-31, AMZN 20:1 2022-06-06, META is symbol REUSE (rows
+# before 2022-06-09 are the Roundhill Metaverse ETF at ~$12, not Facebook),
+# NVDA has TWO fossils (4:1 2021-07-20, 10:1 2024-06-10) so its fence loses
+# 2010-2024 history — re-pull adjusted history to restore it (declared).
+# Fence = fossil date + ~2-month regime flush (XOP precedent). The expansion
+# 341 map lives in the A10e verdicts, applied before any expansion run.
+DEFAULT_CLEAN_START = {"XOP": pd.Timestamp("2020-07-01"),
+                       "AAPL": pd.Timestamp("2020-11-01"),
+                       "AMZN": pd.Timestamp("2022-08-01"),
+                       "META": pd.Timestamp("2022-09-01"),
+                       "NVDA": pd.Timestamp("2024-08-01")}
 
 
 @dataclass
