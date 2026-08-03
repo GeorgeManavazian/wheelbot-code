@@ -57,11 +57,20 @@ def _scan_start(logs_dir, gaps_path, today, lookback_days):
             break
         except ValueError:
             continue
+    # F7: the store's epoch is a hard floor. A freshly reset store has no
+    # marker and no gap, so the fallback window would scan back 10 days and
+    # record a `no_run` gap for every weekday in it -- days on which this
+    # store, and on a first install the bot itself, did not exist. Nothing
+    # before the epoch was missed, because there was nothing to miss. The
+    # epoch DAY itself is scanned: it is a real trading day the bot owes a run.
+    from live.reset import read_epoch
+    epoch = read_epoch(logs_dir)
     if last is None:
-        return fallback
+        return max(fallback, epoch) if epoch else fallback
     # never past today (a future-dated marker from clock skew must not blind
     # the scan to today), never a negative scan
-    return min(last + _dt.timedelta(days=1), today)
+    start = min(last + _dt.timedelta(days=1), today)
+    return max(start, epoch) if epoch else start
 
 
 def check_day(now_et, logs_dir: str = LOGS_DIR, gaps_path=None,
