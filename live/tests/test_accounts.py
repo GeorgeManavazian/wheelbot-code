@@ -29,3 +29,22 @@ def test_account_paths_shape():
     assert p["trades"].endswith("100k_N2/trades.jsonl")
     assert p["snapshots"].endswith("100k_N2/snapshots.jsonl")
     assert p["dir"].endswith("100k_N2")
+
+
+def test_b6_retired_names_are_out_of_the_universe():
+    """B6 (owner kill-list 2026-08-02, all 11 approved): dead tickers, ghosts
+    the vendor still quotes (PARA frozen at $11.04 since the PSKY merger),
+    sub-$1 wrecks and surgery-scarred names are banned from the tradable
+    universe -- subtracted, not deleted, so the source lists stay a faithful
+    record and the exclusion states itself."""
+    from live.universe import UNIVERSE, _RETIRED
+    assert _RETIRED == frozenset({
+        "PARA", "WBA", "GPRO", "CHPT", "PLUG",          # dead / penny
+        "SIRI", "AMCR", "DD", "DOC", "FLEX", "FTV",     # surgery-scarred
+    })
+    leaks = _RETIRED & set(UNIVERSE)
+    assert not leaks, f"B6: retired names still tradable: {sorted(leaks)}"
+    # the ban must also hold against future list edits: a name re-added to a
+    # source list must still be subtracted
+    import live.universe as u
+    assert all(t not in u.UNIVERSE for t in _RETIRED)

@@ -96,4 +96,20 @@ _ALL = _ETFS + _CHEAP + _SP_AM + _SP_NZ
 # stay a faithful record of the source indices and the exclusion states itself.
 from src.engine_v2.options.portfolio import RESERVED_TICKERS
 
-UNIVERSE = [t for t in dict.fromkeys(_ALL) if t not in RESERVED_TICKERS]
+# B6 re-vet (owner kill-list, 2026-08-02 -- all 11 approved). Same
+# subtract-don't-delete idiom as the reserved set: the source lists above stay
+# a faithful record of the indices they came from, and the ban states itself.
+# Dead / ghost / penny: PARA became PSKY 2025-08-07 yet the vendor still
+# serves its frozen $11.04 close, which RANKS NORMALLY -- the silent-staleness
+# class this repair exists to remove; WBA went private (zero local data);
+# GPRO/PLUG are sub-$1 with near-empty books; CHPT is a 1:20-reverse-split
+# death spiral. Surgery-scarred (mergers/spinoffs/symbol-reuse with
+# unadjusted history and thin books): SIRI, AMCR, DD, DOC, FLEX, FTV.
+# Evidence: the B6 sweep kill-list, 2026-08-02 (repair plan row B6).
+_RETIRED = frozenset({
+    "PARA", "WBA", "GPRO", "CHPT", "PLUG",
+    "SIRI", "AMCR", "DD", "DOC", "FLEX", "FTV",
+})
+
+UNIVERSE = [t for t in dict.fromkeys(_ALL)
+            if t not in RESERVED_TICKERS and t not in _RETIRED]
