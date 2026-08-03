@@ -127,6 +127,60 @@ def already_stepped(snapshot_path, obs) -> bool:
     return False
 
 
+def _read_trades_tickers(path) -> set:
+    """C6: tickers this account ever traded, from its ledger. Missing or
+    partially unreadable file -> whatever parsed (benchmark coverage, not
+    money path)."""
+    out = set()
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get("ticker"):
+                    out.add(r["ticker"])
+    except OSError:
+        pass
+    return out
+
+
+def write_benchmark_row(accounts, market, day, *, smoke,
+                        paths_fn=None, bench_path=None) -> bool:
+    """C6: one benchmark row per stepped day -- SPY + every name any account
+    ever traded, closes from the SAME pull the decisions used. price_history
+    is retroactive, so the store is complete-backwards from its first write;
+    no backfill logic exists or is needed. Smoke never writes (A23 class).
+    Any failure is a printed disclosure, never a raise -- yardstick coverage,
+    not money path. `paths_fn`/`bench_path` exist so tests never touch the
+    real store (WHEELBOT_STATE_DIR is read at import time)."""
+    if smoke:
+        return False
+    try:
+        pf = paths_fn or (lambda cap, n: _paths(cap, n, smoke=False))
+        traded = {"SPY"}
+        for (cap_, n_) in accounts:
+            traded |= _read_trades_tickers(pf(cap_, n_)["trades"])
+        closes = getattr(market, "_closes", {})
+        bench = {t: float(closes[t].iloc[-1]) for t in sorted(traded)
+                 if t in closes and len(closes[t])}
+        if not bench:
+            return False
+        bpath = bench_path or in_state("benchmark.jsonl")
+        os.makedirs(os.path.dirname(bpath) or ".", exist_ok=True)
+        with open(bpath, "a") as f:
+            f.write(json.dumps({"date": day, "closes": bench}) + "\n")
+        return True
+    except Exception as e:                     # noqa: BLE001 -- disclosure
+        print(f"C6: benchmark row not written ({type(e).__name__}: {e})"
+              f" -- yardstick has a hole today, trading unaffected")
+        return False
+
+
 def _trade_row(t):
     c = t.contract
     return {"date": pd.Timestamp(t.date).isoformat(), "action": t.action,
@@ -601,6 +655,7 @@ def main():
             print(f"{label:<10} ERROR: {type(e).__name__}: {e} — skipped, others continue")
 
     day = str(obs.date())
+    write_benchmark_row(accounts, market, day, smoke=args.smoke)   # C6
     if unsettled_all:
         # A14: the bound on the unsettleable-expiry refusal is ESCALATION --
         # one alert per day naming each stuck leg and how many days past

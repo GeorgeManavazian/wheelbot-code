@@ -576,3 +576,69 @@ def test_frozen_leg_surfaces_in_log_and_alert_wiring_exists(tmp_path, capsys):
         "A10: main() no longer aggregates frozen legs across accounts"
     assert re.search(r'if frozen_all:[\s\S]{0,400}FROZEN', src), \
         "A10: the daily FROZEN alert wiring is gone"
+
+
+def test_c6_benchmark_row_written_from_the_days_own_closes(tmp_path):
+    """C6 writer: SPY + every ledger ticker, priced off the SAME closes pull
+    the decisions used; tickers the pull lacks (or with empty history) are
+    skipped, unreadable ledger lines survive."""
+    import types
+    import pandas as pd
+    from live.run_daily import write_benchmark_row
+    ledger = tmp_path / "trades.jsonl"
+    ledger.write_text('{"ticker": "DOW"}\n'
+                      'not json at all\n'
+                      '{"ticker": "GME"}\n')
+    market = types.SimpleNamespace(_closes={
+        "SPY": pd.Series([699.0, 700.0]),
+        "DOW": pd.Series([30.0]),
+        "GME": pd.Series([], dtype=float),      # pulled but empty -> skipped
+    })
+    bpath = tmp_path / "benchmark.jsonl"
+    ok = write_benchmark_row([(100_000, 1)], market, "2026-08-03",
+                             smoke=False,
+                             paths_fn=lambda c, n: {"trades": str(ledger)},
+                             bench_path=str(bpath))
+    assert ok is True
+    rows = [json.loads(l) for l in bpath.read_text().splitlines()]
+    assert rows == [{"date": "2026-08-03",
+                     "closes": {"DOW": 30.0, "SPY": 700.0}}]
+
+
+def test_c6_benchmark_writer_smoke_gated_and_failure_is_disclosure(
+        tmp_path, capsys):
+    """A23 class: --smoke must never touch the real benchmark store. And a
+    broken market must produce a printed disclosure, never a raise -- the
+    yardstick is not the money path."""
+    import types
+    import pandas as pd
+    from live.run_daily import write_benchmark_row
+    bpath = tmp_path / "benchmark.jsonl"
+    ledger = tmp_path / "trades.jsonl"
+    ledger.write_text("")
+    ok = write_benchmark_row(
+        [(100_000, 1)], types.SimpleNamespace(_closes={"SPY": pd.Series([1.0])}),
+        "2026-08-03", smoke=True,
+        paths_fn=lambda c, n: {"trades": str(ledger)}, bench_path=str(bpath))
+    assert ok is False and not bpath.exists(), \
+        "C6: smoke wrote a benchmark row"
+    ok = write_benchmark_row(
+        [(100_000, 1)], types.SimpleNamespace(_closes={"SPY": object()}),
+        "2026-08-03", smoke=False,
+        paths_fn=lambda c, n: {"trades": str(ledger)}, bench_path=str(bpath))
+    assert ok is False and not bpath.exists()
+    assert "benchmark row not written" in capsys.readouterr().out, \
+        "C6: a writer failure must disclose itself in the run log"
+
+
+def test_c6_wiring_main_calls_the_writer():
+    """The C12-X3 lesson: a tested helper with dropped wiring passes every
+    unit test. Lint pin (C13 precedent -- a main() harness would need the
+    WHEELBOT_STATE_DIR env pre-set in a fresh interpreter)."""
+    import inspect
+    import re
+    import live.run_daily as rd
+    src = inspect.getsource(rd.main)
+    assert re.search(r"write_benchmark_row\(accounts, market, day,"
+                     r" smoke=args\.smoke\)", src), \
+        "C6: main() no longer writes the nightly benchmark row"

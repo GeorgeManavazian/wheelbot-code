@@ -57,6 +57,12 @@ class PortfolioResult:
 # crash never rewrites yesterday. Fires only through a market providing
 # prior_close() -- LiveMarket; BatchMarket never grows it (hasattr-pinned),
 # so batch runs are byte-identical by construction.
+# C11: which side of the book prices the short-leg liability in equity --
+# owner decision B, 2026-07-31 (mid -> ask changeover). Single source of
+# truth: live/snapshots.py stamps THIS constant into every snapshot row, so a
+# future basis change confesses in the data instead of silently rebasing the
+# curve. A free string (an A21 RTH move can become "ask@rth" schema-free).
+MARK_BASIS = "ask"
 CA_RESTATE_LO, CA_RESTATE_HI = 0.80, 1.25
 CA_GAP_BACKSTOP = 0.25
 CA_WATCH_CAL_DAYS = 7          # ~5 sessions of re-checks for a lagged adjust

@@ -208,6 +208,102 @@ def gap_banner():
         unsafe_allow_html=True)
 
 
+def concentration_line() -> str:
+    """C7: the compare grid's honesty header. 25 accounts copy each other's
+    homework -- the audit measured an effective sample of 2.09. Always
+    rendered; a young store says so instead of going silently blank."""
+    from live.compare import grid_concentration
+    g = grid_concentration()
+    if g["n_eff"] is None:
+        return ("<div style='color:#e6b45a;font-size:.9rem;'>&#9888; too few "
+                "observations to estimate account independence — do not read "
+                "25 rows as 25 samples</div>")
+    top = (f" · top underlying {g['top_ticker']} = "
+           f"{g['top_premium_share']*100:.0f}% of premium collected"
+           if g["top_ticker"] else "")
+    return (f"<div style='color:#e6b45a;font-size:.9rem;'>&#9888; 25 accounts "
+            f"&ne; 25 samples — effective N &asymp; {g['n_eff']:.1f} (mean "
+            f"pairwise &rho; {g['rho_bar']:.2f}) · {g['n_decisions']} distinct "
+            f"decisions replicated {g['replication']:.1f}&times;{top}</div>")
+
+
+def benchmark_line(rows_hint=None) -> str | None:
+    """C6: the buy-and-hold yardstick, with the MANDATORY capital-matching
+    caveat -- the benchmark is 100% invested, the wheel sits mostly in cash."""
+    from live.compare import benchmark_series
+    b = benchmark_series()
+    if not b:
+        return None
+    bits = [f"window {b['window'][0]} → {b['window'][1]}"]
+    if "spy_pct" in b:
+        bits.append(f"SPY buy-and-hold {b['spy_pct']:+.2f}%")
+    if "ew_pct" in b:
+        # F3: the basket is names present at BOTH window ends -- a ticker
+        # first traded mid-window (or dropped from the pull) is not in it,
+        # and the copy must say so rather than imply "everything traded".
+        bits.append(f"equal-weight of {b['ew_names']} names held at both "
+                    f"window ends {b['ew_pct']:+.2f}%")
+    return ("<div style='color:#9db4d0;font-size:.9rem;'>Benchmark: "
+            + " · ".join(bits)
+            + " — <b>caution:</b> benchmark is 100% invested; the wheel sits "
+              "mostly in cash (vol-unmatched, not like-for-like).</div>")
+
+
+def mark_basis_line(snaps) -> str | None:
+    """C11: the equity curve confesses its own pricing basis. Uniform
+    stamped -> one quiet word. Unstamped (pre-C11) rows have an UNKNOWN
+    basis -- they span the mid era AND the post-2026-07-31 ask era before
+    stamping existed -- so the line says unknown, never guesses "mid"
+    (skeptic F2: the old render claimed a mid-series changeover on stores
+    where nothing changed, and mislabeled the boundary). A change between
+    two STAMPED rows is named at the exact row it happened."""
+    if not snaps:
+        return None
+    stamped = [s.get("mark_basis") for s in snaps if s.get("mark_basis")]
+    n_unstamped = len(snaps) - len(stamped)
+    if n_unstamped == 0 and len(set(stamped)) == 1:
+        return f"equity marked at {stamped[0]}"
+    bits = []
+    if n_unstamped:
+        bits.append(f"{n_unstamped} pre-stamp row(s) of unknown mark basis "
+                    f"(the mid → ask changeover 2026-07-31 predates stamping)")
+    prev, change = None, None
+    for s in snaps:
+        b = s.get("mark_basis")
+        if b and prev and b != prev:
+            change = (str(s.get("date"))[:10], prev, b)
+            break
+        if b:
+            prev = b
+    if change:
+        bits.append(f"mark basis changed {change[0]}: "
+                    f"{change[1]} → {change[2]}")
+    if not bits:
+        return f"equity marked at {stamped[0]}" if stamped else None
+    return ("; ".join(bits)
+            + " — early and late equity are not like-for-like")
+
+
+def fmt_sharpe(r) -> str:
+    """C4 cell: suppressed below MIN_SHARPE_OBS (em dash WITH the n, so the
+    owner sees why), else value ± one standard error. pd.isna, never
+    `is None` -- the compare grid's DataFrame coerces None to NaN (skeptic
+    F1), and a ≥30-obs curve whose equity touched 0 yields NaN outright
+    (F6): both must render as suppressed, never "nan ± nan"."""
+    if pd.isna(r["sharpe"]) or r["sharpe_suppressed"]:
+        return f"— (n={r['sharpe_n']})"
+    return f"{r['sharpe']:.2f} ± {r['sharpe_se']:.2f}"
+
+
+def fmt_win(r) -> str:
+    """C5 cell: realized-cash record, wins/losses shown. pd.isna for the
+    same F1 reason -- a young account's None win rate arrives here as NaN
+    whenever any other account has closed campaigns."""
+    if pd.isna(r["win_rate"]):
+        return "—"
+    return f"{r['win_rate']*100:.0f}% ({r['wins']}W/{r['losses']}L)"
+
+
 def dedupe_snaps(snaps):
     """C12: keep the LAST snapshot per date. The retry-window bug era left
     duplicate 2026-07-24 rows in every account; a duplicated index double-
@@ -241,6 +337,19 @@ def board(paths, capital, n, label, refresh="15s"):
     st.markdown(f"### {cap_label(capital)} account · N={n} &nbsp; {tag}", unsafe_allow_html=True)
     st.caption(f"${baseline:,.0f} capital · up to {n} positions · "
                f"{len(positions)} open · updates every {refresh}")
+    # C8: two clocks, both stamped -- board reads state.json (17:00 write,
+    # possibly re-marked intraday), compare reads snapshots; a difference
+    # between the pages is timing, not contradiction.
+    try:
+        import datetime as _dt
+        mt = _dt.datetime.fromtimestamp(Path(paths["state"]).stat().st_mtime)
+        state_stamp = mt.strftime("%Y-%m-%d %H:%M")
+    except OSError:
+        state_stamp = "—"
+    last_snap = str(snaps[-1].get("date"))[:10] if snaps else "—"
+    basis = mark_basis_line(snaps)   # C11
+    st.caption(f"state.json written {state_stamp} · last snapshot {last_snap}"
+               + (f" · {basis}" if basis else ""))
     naked = naked_days_line(state)
     if naked:
         st.warning(naked)   # C16
@@ -351,13 +460,28 @@ def compare_page():
     (equity == capital) until data accumulates."""
     gap_banner()
     st.markdown("### Compare · all 25 accounts")
+    st.markdown(concentration_line(), unsafe_allow_html=True)   # C7
+    bench = benchmark_line(rows_hint=None)                      # C6
+    if bench:
+        st.markdown(bench, unsafe_allow_html=True)
     st.caption("Capital x N grid. Equity/return from the last daily snapshot "
-               "(baseline = starting capital until snapshots accrue). Win rate = "
-               "closed put campaigns that avoided assignment (CLOSE_PUT + "
-               "PUT_EXPIRED) / all closed put campaigns.")
+               "(baseline = starting capital until snapshots accrue). Win = "
+               "campaign's realized cash > $0, all fills, commissions and "
+               "fees, from the trades ledger; open campaigns excluded and "
+               "counted separately (C5). Sharpe hidden below "
+               "30 observations; shown ± one standard error, rf 4.0%/yr "
+               "subtracted, annualised by actual observation frequency (C4). "
+               "Drawdown measured from starting capital (C10).")
 
     rows = account_metrics()
     df = pd.DataFrame(rows)
+    snap_dates = [r["last_snap_date"] for r in rows if r["last_snap_date"]]
+    if snap_dates:
+        # C8: when these numbers were taken -- a board page reads state.json
+        # and may be newer; a difference is two clocks, not a contradiction
+        st.caption(f"Snapshots as-of {max(snap_dates)} (oldest account "
+                   f"{min(snap_dates)}) — board pages read state.json and "
+                   f"may be newer.")
 
     disp = pd.DataFrame({
         "Account": df["label"],
@@ -368,8 +492,12 @@ def compare_page():
         "Trades": df["n_trades"],
         "Open": df["open_positions"],
         "Max DD": df["max_drawdown_pct"].map(lambda v: f"{v:.2f}%"),
-        "Sharpe": df["sharpe"].map(lambda v: "—" if v is None else f"{v:.2f}"),
-        "Win rate": df["win_rate"].map(lambda v: "—" if v is None else f"{v*100:.0f}%"),
+        # C4/C5 cells go through the NaN-safe formatters (skeptic F1: the
+        # DataFrame coerces None -> NaN in a float64 column, so an `is None`
+        # guard here is dead code and the real store rendered "nan% (0W/0L)")
+        "Sharpe": df.apply(fmt_sharpe, axis=1),
+        "Win rate": df.apply(fmt_win, axis=1),
+        "Camp. open": df["open_campaigns"],
     })
     st.markdown(disp.to_html(escape=False, index=False), unsafe_allow_html=True)
 

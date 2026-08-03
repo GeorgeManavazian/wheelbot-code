@@ -24,6 +24,27 @@ def test_snapshot_captures_equity_cash_and_positions():
     assert snap["date"] == pd.Timestamp("2026-07-17").isoformat()
 
 
+def test_snapshot_stamps_mark_basis_and_written_at():
+    """C11: every snapshot confesses which book side priced it -- imported
+    from the ENGINE constant, so a future basis change flows into the data
+    instead of silently rebasing the curve. C8: rows self-date their write."""
+    from src.engine_v2.options.portfolio import MARK_BASIS
+    snap = snapshot(_state(), equity=100_010.0, day=pd.Timestamp("2026-07-17"))
+    assert snap["mark_basis"] == MARK_BASIS == "ask"
+    assert snap.get("written_at"), "C8: snapshot rows must self-date"
+    # the stamp must FOLLOW the engine constant, not restate it -- a
+    # hardcoded "ask" in snapshots.py is two sources of truth that drift
+    import src.engine_v2.options.portfolio as pf
+    orig = pf.MARK_BASIS
+    try:
+        pf.MARK_BASIS = "ask@rth"
+        snap2 = snapshot(_state(), equity=1.0, day=pd.Timestamp("2026-07-17"))
+        assert snap2["mark_basis"] == "ask@rth", \
+            "C11: snapshots.py hardcodes the basis instead of importing it"
+    finally:
+        pf.MARK_BASIS = orig
+
+
 def test_snapshot_flat_state_has_empty_positions():
     snap = snapshot(PortfolioState(cash=100_000.0, positions=[]), 100_000.0,
                     pd.Timestamp("2026-07-17"))

@@ -44,6 +44,106 @@ def test_missing_spot_renders_no_distance_not_minus_100pct(tmp_path):
             f"C17: {spot_variant} rendered dist {rows[0]['_dist']}, not None"
 
 
+def test_mark_basis_line_uniform_vs_mixed():
+    """C11 render (re-pinned after skeptic F2: the first version claimed a
+    mid-series changeover on all-unstamped stores and mislabeled the
+    boundary): uniform stamped -> one quiet word; unstamped rows -> UNKNOWN
+    basis, never a guessed "mid"."""
+    from dashboard.monitor import mark_basis_line
+    uniform = [{"date": "2026-08-03", "mark_basis": "ask"},
+               {"date": "2026-08-04", "mark_basis": "ask"}]
+    assert mark_basis_line(uniform) == "equity marked at ask"
+    mixed = [{"date": "2026-07-25"},                       # pre-stamp era
+             {"date": "2026-08-03", "mark_basis": "ask"}]
+    line = mark_basis_line(mixed)
+    assert "not like-for-like" in line and "unknown" in line
+    assert "changed" not in line, \
+        "F2: one unstamped + one stamped row is not an observed change"
+    assert mark_basis_line([]) is None
+
+
+def test_mark_basis_line_f2_boundary_cases():
+    """Skeptic F2 receipts, pinned. (1) The REAL store shape today -- every
+    row unstamped -- must not claim anything 'changed mid-series'; nothing
+    did. (2) A change between two STAMPED rows is named at the exact row it
+    happened, with both bases. (3) Stamped-then-unstamped must not point the
+    warning at the wrong side."""
+    from dashboard.monitor import mark_basis_line
+    all_unstamped = [{"date": f"2026-07-{d}"} for d in (20, 21, 22)]
+    line = mark_basis_line(all_unstamped)
+    assert "unknown" in line and "changed" not in line
+    stamped_change = [{"date": "2026-07-20", "mark_basis": "mid"},
+                      {"date": "2026-07-21", "mark_basis": "mid"},
+                      {"date": "2026-08-01", "mark_basis": "ask"}]
+    line = mark_basis_line(stamped_change)
+    assert "changed 2026-08-01" in line and "mid → ask" in line
+    assert "2026-07-20" not in line, \
+        "F2: the changeover is at the first DIFFERENT stamped row"
+    tail_unstamped = [{"date": "2026-08-01", "mark_basis": "ask"},
+                      {"date": "2026-08-02"}]
+    line = mark_basis_line(tail_unstamped)
+    assert "unknown" in line and "changed" not in line
+
+
+def test_f1_formatters_survive_dataframe_nan_coercion():
+    """Skeptic F1 (HIGH): pd.DataFrame coerces win_rate=None to NaN in a
+    float64 column whenever any other account has closed campaigns, so an
+    `is None` guard in the render is dead code -- the real store rendered
+    'nan% (0W/0L)'. The formatters must judge with pd.isna ACROSS the
+    DataFrame boundary the unit tests previously never crossed."""
+    import pandas as pd
+    from dashboard.monitor import fmt_sharpe, fmt_win
+    rows = [{"sharpe": None, "sharpe_se": None, "sharpe_n": 7,
+             "sharpe_suppressed": True, "win_rate": None, "wins": 0,
+             "losses": 0},
+            {"sharpe": 1.5, "sharpe_se": 0.4, "sharpe_n": 40,
+             "sharpe_suppressed": False, "win_rate": 0.5, "wins": 1,
+             "losses": 1}]
+    df = pd.DataFrame(rows)
+    assert float != type(None) and df["win_rate"].dtype == "float64"
+    assert fmt_win(df.iloc[0]) == "—", "F1: the nan% (0W/0L) render is back"
+    assert fmt_sharpe(df.iloc[0]) == "— (n=7)"
+    assert fmt_win(df.iloc[1]) == "50% (1W/1L)"
+    assert fmt_sharpe(df.iloc[1]) == "1.50 ± 0.40"
+    # F6 leg: >=30-obs curve whose equity touched 0 -> NaN sharpe; must
+    # render suppressed, never "nan ± nan"
+    df2 = pd.DataFrame([{**rows[1], "sharpe": float("nan"),
+                         "sharpe_se": float("nan")}])
+    assert fmt_sharpe(df2.iloc[0]) == "— (n=40)"
+
+
+def test_concentration_and_benchmark_lines_render_defensively():
+    """C7: a young store must SAY it cannot estimate independence, never go
+    silently blank. C6: the benchmark line must always carry the
+    capital-matching caveat."""
+    from dashboard.monitor import concentration_line, benchmark_line
+    import live.compare as lc
+    import dashboard.monitor as dm
+    orig_gc, orig_bs = lc.grid_concentration, lc.benchmark_series
+    try:
+        lc.grid_concentration = lambda: {"n_eff": None, "rho_bar": None,
+                                         "n_decisions": 0, "n_sell_rows": 0,
+                                         "replication": None,
+                                         "top_ticker": None,
+                                         "top_premium_share": None}
+        assert "too few observations" in concentration_line()
+        lc.grid_concentration = lambda: {"n_eff": 1.3, "rho_bar": 0.74,
+                                         "n_decisions": 12, "n_sell_rows": 90,
+                                         "replication": 7.5,
+                                         "top_ticker": "DOW",
+                                         "top_premium_share": 0.43}
+        line = concentration_line()
+        assert "1.3" in line and "12 distinct" in line and "DOW" in line
+        lc.benchmark_series = lambda: {"window": ("2026-07-20", "2026-07-27"),
+                                       "spy_pct": -0.05, "ew_pct": 0.56,
+                                       "ew_names": 12}
+        b = benchmark_line()
+        assert "100% invested" in b and "SPY" in b, \
+            "C6: the capital-matching caveat is mandatory copy"
+    finally:
+        lc.grid_concentration, lc.benchmark_series = orig_gc, orig_bs
+
+
 def test_split_gap_records_two_disclosure_classes():
     """C2/C3: the banner asserted 'never traded' for every gap date -- false
     for 45.5% of realized P&L (07-23 closed DOW for $25,616 while labelled

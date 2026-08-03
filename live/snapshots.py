@@ -34,11 +34,20 @@ def snapshot(state, equity: float, day) -> dict:
                 **({"mark_quote_time": sh["mark_quote_time"]}
                    if "mark_quote_time" in sh else {})},
         })
+    from src.engine_v2.options.portfolio import MARK_BASIS
     return {
         "date": pd.Timestamp(day).normalize().isoformat(),
         "equity": float(equity), "cash": float(state.cash),
         "n_positions": len(state.positions),
         "days_flat": state.days_flat,
+        # C11: which book side priced this row's equity -- imported from the
+        # engine constant, never hardcoded here (two sources would drift).
+        # Pre-C11 rows lack the field == the mid-marked era; the dashboard
+        # annotates a mixed series instead of pretending it is like-for-like.
+        "mark_basis": MARK_BASIS,
+        # C8: self-dating -- a snapshot row consumed off-box can say when it
+        # was actually written, not just which trading day it describes.
+        "written_at": pd.Timestamp.now().isoformat(),
         "positions": positions,
     }
 
