@@ -38,6 +38,16 @@ from live.paths import state_root
 
 EPOCH_RE = re.compile(r"\.epoch-(\d{4}-\d{2}-\d{2})$")
 
+# Kept in the live store across a reset, and COPIED into the archive so the
+# archive is still a complete snapshot of the day.
+#   .git        -- the store IS the mirror repo; see the module docstring.
+#   config.json -- operational CONFIG (n, capital, zombie_threshold,
+#                  real_money), not track record. A reset that silently
+#                  reverted it to built-in defaults would change how the bot
+#                  trades as a side effect of clearing the books.
+PRESERVE = ("config.json",)
+KEEP_IN_PLACE = (".git",) + PRESERVE
+
 
 def epoch_path(logs_dir: str, day: str) -> str:
     return os.path.join(logs_dir, f".epoch-{day}")
@@ -72,11 +82,13 @@ def plan_reset(root: str = None, stamp: str = None) -> dict:
     parent = os.path.dirname(os.path.abspath(root)) or "."
     archive = os.path.join(parent, f"archive-{stamp}")
     try:
-        entries = sorted(e for e in os.listdir(root) if e != ".git")
+        names = sorted(os.listdir(root))
     except OSError:
-        entries = []
+        names = []
     return {"root": os.path.abspath(root), "archive": archive,
-            "moves": entries, "epoch": stamp}
+            "moves": [e for e in names if e not in KEEP_IN_PLACE],
+            "copies": [e for e in names if e in PRESERVE],
+            "epoch": stamp}
 
 
 def reset_store(root: str = None, stamp: str = None, confirm: bool = False) -> dict:
@@ -90,10 +102,12 @@ def reset_store(root: str = None, stamp: str = None, confirm: bool = False) -> d
     if os.path.exists(archive):
         raise RuntimeError(f"archive already exists, refusing to merge: {archive}")
 
-    if plan["moves"]:
+    if plan["moves"] or plan["copies"]:
         os.makedirs(archive, exist_ok=False)
         for name in plan["moves"]:
             shutil.move(os.path.join(root, name), os.path.join(archive, name))
+        for name in plan["copies"]:
+            shutil.copy2(os.path.join(root, name), os.path.join(archive, name))
 
     logs = os.path.join(root, "logs")
     os.makedirs(os.path.join(root, "accounts"), exist_ok=True)
@@ -118,6 +132,9 @@ def main(argv=None) -> int:
     print(f"epoch   : {plan['epoch']}")
     print(f"moving  : {len(plan['moves'])} entries")
     for name in plan["moves"]:
+        print(f"          {name}")
+    print(f"keeping : {len(plan['copies'])} (copied to the archive too)")
+    for name in plan["copies"]:
         print(f"          {name}")
     if not a.confirm:
         print("\nDRY RUN -- nothing moved. Re-run with --confirm.")

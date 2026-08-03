@@ -210,3 +210,39 @@ def test_gap_ledger_actually_written(tmp_path):
               logs_dir=str(root / "logs"), gaps_path=str(gaps))
     recs = [json.loads(l) for l in gaps.read_text().splitlines() if l.strip()]
     assert [r["date"] for r in recs] == ["2026-08-03"], recs
+
+
+# --- preserved operational config --------------------------------------------
+
+def test_config_json_survives_the_reset(tmp_path):
+    """config.json is CONFIG (n, capital, zombie_threshold, real_money), not
+    track record. A reset that archived it would silently revert the bot to
+    built-in defaults -- changing how it trades as a side effect of clearing
+    the books."""
+    root = _store(tmp_path)
+    (root / "config.json").write_text('{"n": 3, "capital": 250000}')
+    reset_store(str(root), "2026-08-03", confirm=True)
+
+    assert json.loads((root / "config.json").read_text()) == {"n": 3, "capital": 250000}
+    # and the archive is still a complete snapshot of the day
+    assert json.loads((tmp_path / "archive-2026-08-03" / "config.json").read_text()) \
+        == {"n": 3, "capital": 250000}
+
+
+def test_preserved_config_is_still_reported(tmp_path, capsys):
+    root = _store(tmp_path)
+    (root / "config.json").write_text("{}")
+    main(["--root", str(root), "--stamp", "2026-08-03"])
+    out = capsys.readouterr().out
+    assert "keeping : 1" in out and "config.json" in out
+
+
+def test_reset_with_only_preserved_entries_still_archives(tmp_path):
+    """A store holding nothing but config.json must still produce an archive
+    with the copy in it, not skip archiving because `moves` is empty."""
+    root = tmp_path / "live"
+    root.mkdir()
+    (root / "config.json").write_text('{"n": 1}')
+    reset_store(str(root), "2026-08-03", confirm=True)
+    assert (tmp_path / "archive-2026-08-03" / "config.json").exists()
+    assert (root / "config.json").exists()
