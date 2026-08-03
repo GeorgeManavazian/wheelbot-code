@@ -73,7 +73,12 @@ def test_sync_state_no_changes_still_pushes(tmp_path, monkeypatch):
         return real(args, cwd)
 
     monkeypatch.setattr(sync_mod, "_git", spy)
+    # Both seams are stubbed to mean "nothing staged": _staged_paths is what
+    # the guard scans (content-bearing paths); _staged_entries is what the
+    # commit gate reads (F4a -- a deletion-only tick must still commit, so the
+    # gate can no longer share the guard's deletion-filtered list).
     monkeypatch.setattr(sync_mod, "_staged_paths", lambda d: [])
+    monkeypatch.setattr(sync_mod, "_staged_entries", lambda d: [])
     assert sync_state(str(state), "msg", cfg_path=str(cfg)) is True
     assert "push" in seen
     assert "commit" not in seen        # nothing staged -> no empty commit
