@@ -238,3 +238,26 @@ def test_secret_guard_worktree_api_is_unchanged(tmp_path):
     assert secret_guard(["clean.json"], state_dir=str(tmp_path)) == []
     assert secret_guard(["dirty.log"], state_dir=str(tmp_path)) == ["dirty.log"]
     assert secret_guard(["gone.json"], state_dir=str(tmp_path)) == ["gone.json"]
+
+
+def test_commit_works_in_a_repo_the_bot_did_not_create(tmp_path, monkeypatch, capsys):
+    """Identity used to be set only on the init branch, so a mirror repo made
+    any other way (by hand -- which is how the VPS's own store was made --
+    restored, or cloned) had none. On a box with no global gitconfig the
+    commit then fails with "Author identity unknown" and the sync returns
+    False on every tick, permanently, with a message nothing reads.
+
+    Reproduced by clearing HOME so no global identity can be found; without
+    the per-sync config this fails on ANY machine, not just a bare VPS.
+    """
+    state, cfg, g = _repo(tmp_path)          # repo pre-created, no identity set
+    g("config", "--unset", "user.email")
+    g("config", "--unset", "user.name")
+    (state / "state.json").write_text('{"cash": 1.0}')
+    monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    _stub_push(monkeypatch)
+
+    assert sync_state(str(state), "eod", cfg_path=str(cfg)) is True
+    assert "commit failed" not in capsys.readouterr().out
+    assert g("log", "-1", "--format=%an").stdout.strip() == "wheelbot"

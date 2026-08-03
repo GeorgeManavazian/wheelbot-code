@@ -201,8 +201,15 @@ def sync_state(state_dir: str, message: str, cfg_path: str = GIT_CFG) -> bool:
     try:
         if not os.path.isdir(os.path.join(state_dir, ".git")):
             _git(["init", "-q", "-b", "main"], state_dir)
-            _git(["config", "user.email", "wheelbot@localhost"], state_dir)
-            _git(["config", "user.name", "wheelbot"], state_dir)
+        # Identity is set on EVERY sync, not only at init. It used to ride the
+        # init branch, so a repo created any other way -- by hand, restored
+        # from a backup, cloned -- had none, and `git commit` fails outright
+        # with "Author identity unknown" on a box with no global gitconfig
+        # (the VPS: `ubuntu` has no ~/.gitconfig). That is a permanently
+        # failing sync with a message nothing reads. Idempotent and local to
+        # the mirror repo, which the bot owns.
+        _git(["config", "user.email", "wheelbot@localhost"], state_dir)
+        _git(["config", "user.name", "wheelbot"], state_dir)
 
         # D13: self-healing .gitignore (ONLY *.tmp -- alerts-failed.jsonl and
         # *.bak-* are recovery artifacts and MUST stay synced), plus cleanup

@@ -1,6 +1,14 @@
 """Money-math for the live dashboard: _rows_and_equity must reproduce the same
 short-put equity the engine records (cash minus the short-leg liability)."""
-from dashboard.monitor import _rows_and_equity
+import pytest
+
+# The dashboard runs on the Mac only -- the VPS is headless and deliberately
+# carries neither streamlit nor plotly on a 954MB box. Declared as a skip
+# rather than hidden by not deploying the file, so the VPS run REPORTS the
+# gap ("1 skipped") instead of silently covering less than the Mac does.
+pytest.importorskip("streamlit", reason="dashboard deps are Mac-only")
+
+from dashboard.monitor import _rows_and_equity        # noqa: E402
 
 
 def test_short_put_equity_matches_engine_convention():
