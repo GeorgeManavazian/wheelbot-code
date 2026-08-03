@@ -81,16 +81,15 @@ def test_incomplete_snapshot_skips_day_instead_of_retry_spam(tmp_path, monkeypat
         raise AssertionError("A16: main() pulled an option chain live")
     monkeypatch.setattr(data, "chain_frame", no_live_chains)
 
-    save_chain_snapshot(obs, {}, pulled_at="t")   # present but missing GDX
+    # present but missing GDX; held_rows={} = a HEALTHY zero-leg held pull
+    # (A21), which also isolates this test from the real archive's held legs
+    # (accounts.py binds the store at import time) -- the old
+    # merge_held_legs stub is dead code on the non-smoke path since A21
+    save_chain_snapshot(obs, {}, pulled_at="t", held_rows={},
+                        held_stats={"requested": 0, "answered": 0,
+                                    "unquoted": []})
     alerts, gaps = [], []
     monkeypatch.setattr(run_daily, "send_alert", lambda *a: alerts.append(a))
-    # isolate from the real archive's held legs (accounts.py binds the store
-    # at import time) and from B4's wholesale-failure gate -- neither is this
-    # test's subject
-    monkeypatch.setattr(run_daily, "merge_held_legs",
-                        lambda *a, **k: {"requested": 0, "merged": 0,
-                                         "unquoted": [], "no_chain": [],
-                                         "error": None})
     monkeypatch.setattr(run_daily, "append_gap",
                         lambda date, reason, **kw: gaps.append((str(date), reason)))
     fake = types.ModuleType("schwab_client")
@@ -426,8 +425,11 @@ def test_holiday_with_dead_quote_endpoint_is_a_holiday_not_a_failed_run(tmp_path
 
 def test_trading_day_dead_quote_endpoint_still_fails_loud(tmp_path, monkeypatch, capsys):
     """A21c positive path (and the B4 wiring pin the Group B batch declared
-    missing): on a REAL trading day a wholesale held-marks failure must still
-    refuse the run BEFORE any account steps -- exit 1, loud, retried."""
+    missing): a wholesale held-marks failure must refuse the run BEFORE any
+    account steps -- exit 1, loud. Since A21 the live-pull path this exercises
+    exists only on --smoke; the production equivalent fails at the RTH runner
+    (in-window retries) or degrades via the D2 carried-marks day. This pin
+    keeps held_marks_failed's judge-then-refuse wiring honest."""
     import datetime as dt
     import sys
     import types

@@ -103,15 +103,68 @@ def rows_from_quotes(quotes: dict, contracts, obs) -> dict:
     return out
 
 
-def merge_held_legs(market, client, position_lists, obs) -> dict:
-    """Splice missing held legs into `market`'s chains. Returns run stats.
+def pull_held_quotes(client, position_lists, obs) -> dict:
+    """PULL half (A21 split): one batched Schwab quote pull for every distinct
+    held leg. Returns {"rows_by_ticker", "contracts", "requested", "answered",
+    "unquoted", "error"} and touches no market. Never raises: a failed pull
+    reports itself in "error" and must not take its caller down.
 
-    Only ADDS rows the chain does not already carry — the EOD chain is the
-    authoritative snapshot for the day and a quote pulled minutes later must not
-    restate it. Never raises: a failed quote pull leaves the run exactly as it
-    was before this fix existed (legs unmarked), which is worse but not wrong,
-    and must not take the daily run down with it."""
-    contracts = held_contracts(position_lists)
+    Since A21 this runs inside the RTH snapshot pass (run_chain_snapshot),
+    where the book is live; `--smoke` still calls it at run time as a
+    connectivity probe (throwaway, disclosed post-close)."""
+    out = {"rows_by_ticker": {}, "contracts": [],
+           "requested": 0, "answered": 0, "unquoted": [],
+           "error": None}
+    try:
+        # A21 skeptic F1: held_contracts sat OUTSIDE the guard, so ONE
+        # malformed position (strike=None in a hand-corrupted state file)
+        # crashed the whole snapshot runner -- nothing saved, every window
+        # tick dying identically, all 25 accounts losing the day with a
+        # wrong "no snapshot" diagnosis. "Never raises" now includes the
+        # contract derivation; a raise here degrades to the D2 path.
+        contracts = held_contracts(position_lists)
+    except Exception as e:
+        out["error"] = f"held_contracts: {type(e).__name__}: {e}"
+        return out
+    out["contracts"] = contracts
+    out["requested"] = len(contracts)
+    if not contracts:
+        return out
+    try:
+        resp = client.get_quotes([c["symbol"] for c in contracts])
+        data = resp.json() if hasattr(resp, "json") else resp
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+    if not isinstance(data, dict):
+        out["error"] = f"quote payload was {type(data).__name__}, not a dict"
+        return out
+    # B4 amendment (group skeptic F2): count legs the endpoint ANSWERED for
+    # (a dict payload entry), separately from legs it could quote. A worthless
+    # 0.00x0.00 book is ANSWERED-but-refused -- the endpoint is alive and the
+    # book is real; only zero answers is a wholesale endpoint failure.
+    out["answered"] = sum(1 for c in contracts
+                          if isinstance(data.get(c["symbol"]), dict))
+    out["rows_by_ticker"] = rows_from_quotes(data, contracts, obs)
+    quoted = {(r["ticker"], row["expiry"], row["strike"], row["right"])
+              for r in contracts
+              for row in out["rows_by_ticker"].get(r["ticker"], [])}
+    out["unquoted"] = [c["symbol"] for c in contracts
+                       if (c["ticker"], c["expiry"], c["strike"], c["right"])
+                       not in quoted]
+    return out
+
+
+def merge_pulled(market, pulled: dict, obs) -> dict:
+    """MERGE half (A21 split): splice a pull's rows into `market`'s chains and
+    return the legacy stats dict. Only ADDS rows the chain does not already
+    carry — the day's chain snapshot is authoritative and a quote must not
+    restate it.
+
+    `pulled` is pull_held_quotes' output OR load_held_rows' output (the RTH
+    snapshot store). When the store carries no per-leg contract metadata for
+    the no_chain attribution, unmatched legs are named by their unquoted
+    symbols only — same information, one door."""
     # `no_chain` is separate from `unquoted` on purpose. A leg whose ticker's
     # chain pull failed quotes perfectly well, so it never looks unquoted — but
     # there is nothing to splice it into, so it goes unmarked and its take-profit
@@ -119,40 +172,32 @@ def merge_held_legs(market, client, position_lists, obs) -> dict:
     # through a second door, and `merged: 0` is ALSO what a healthy run reports
     # when the leg is already inside the window. Without this the two are
     # indistinguishable and the run prints a success line either way.
-    stats = {"requested": len(contracts), "merged": 0, "unquoted": [],
-             "no_chain": [], "error": None, "answered": 0}
-    if not contracts:
+    stats = {"requested": pulled.get("requested", 0), "merged": 0,
+             "unquoted": list(pulled.get("unquoted", [])), "no_chain": [],
+             "error": pulled.get("error"),
+             "answered": pulled.get("answered", 0)}
+    if stats["error"]:
         return stats
-    try:
-        resp = client.get_quotes([c["symbol"] for c in contracts])
-        data = resp.json() if hasattr(resp, "json") else resp
-    except Exception as e:
-        stats["error"] = f"{type(e).__name__}: {e}"
-        return stats
-    if not isinstance(data, dict):
-        stats["error"] = f"quote payload was {type(data).__name__}, not a dict"
-        return stats
-
-    # B4 amendment (group skeptic F2): count legs the endpoint ANSWERED for
-    # (a dict payload entry), separately from legs it could quote. A worthless
-    # 0.00x0.00 book is ANSWERED-but-refused -- the endpoint is alive and the
-    # book is real; only zero answers is a wholesale endpoint failure.
-    stats["answered"] = sum(1 for c in contracts
-                            if isinstance(data.get(c["symbol"]), dict))
-    rows_by_ticker = rows_from_quotes(data, contracts, obs)
-    quoted = {(r["ticker"], row["expiry"], row["strike"], row["right"])
-              for r in contracts
-              for row in rows_by_ticker.get(r["ticker"], [])}
-    stats["unquoted"] = [c["symbol"] for c in contracts
-                         if (c["ticker"], c["expiry"], c["strike"], c["right"])
-                         not in quoted]
-    for ticker, rows in rows_by_ticker.items():
+    # A21 skeptic F6: gate on error ONLY -- a file carrying rows but empty
+    # stats must still merge them (rows are the ground truth; an empty
+    # rows_by_ticker makes the loop a no-op anyway, so legacy behavior on
+    # the pull path is unchanged).
+    contracts = pulled.get("contracts") or []
+    for ticker, rows in pulled.get("rows_by_ticker", {}).items():
         added = market.add_chain_rows(ticker, rows)
         stats["merged"] += added
         if added == 0 and market.chain(ticker, obs) is None:
-            stats["no_chain"] += [c["symbol"] for c in contracts
-                                  if c["ticker"] == ticker]
+            named = [c["symbol"] for c in contracts if c["ticker"] == ticker]
+            stats["no_chain"] += named if named else [ticker]
     return stats
+
+
+def merge_held_legs(market, client, position_lists, obs) -> dict:
+    """Live pull + merge in one step — the pre-A21 shape, kept for `--smoke`
+    (connectivity probe) and as the seam-equality reference. The production
+    17:00 path loads the RTH pull from the snapshot store instead."""
+    return merge_pulled(market, pull_held_quotes(client, position_lists, obs),
+                        obs)
 
 
 # `_num` now lives in live.marks — one coercion shared with contract_quotes, so

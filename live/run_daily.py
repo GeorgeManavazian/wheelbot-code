@@ -23,7 +23,7 @@ from live.universe import UNIVERSE
 from live.accounts import all_accounts, account_paths, account_label
 from live.alerts import send_alert
 from live.gaps import append_gap, append_correction
-from live.held_legs import merge_held_legs
+from live.held_legs import merge_held_legs, merge_pulled, held_contracts
 from live.escalations import update_escalations, ESCALATION_DAYS
 from live.config import load_run_config
 
@@ -304,6 +304,87 @@ def _live_market(universe, held, obs, client, target_dte, chains,
                       chop_max_fast_fall=chop_max_fast_fall)
 
 
+def missing_held_rows_day(position_lists, obs, alert_fn) -> dict:
+    """A21-D2 (owner 2026-08-02): the RTH snapshot exists but carries no held
+    rows -- the held-leg pull failed every in-window tick, or the file is
+    pre-A21. The day STEPS anyway: legs inside the chain window mark off the
+    RTH chains as usual; legs outside keep their carried mark (mark-None
+    mechanically suspends their TP -- trading off a missing photo is exactly
+    what we refuse to do), and the owner gets ONE alert naming the count.
+    Zero held legs -> the missing key is perfectly healthy, total silence.
+
+    Returns the merge-stats shape. The error string routes through the
+    existing degraded-day print; the caller must NOT treat this as
+    held_marks_failed (no 17:00 retry can rebuild an RTH snapshot)."""
+    contracts = held_contracts(position_lists)
+    stats = {"requested": len(contracts), "merged": 0, "unquoted": [],
+             "no_chain": [], "error": None, "answered": 0}
+    if not contracts:
+        return stats
+    stats["error"] = (f"held rows absent from the RTH snapshot -- A21-D2: "
+                      f"{len(contracts)} held leg(s) step with carried marks, "
+                      f"EOD TP suspended today")
+    alert_fn(f"HELD-LEG RTH QUOTES MISSING {pd.Timestamp(obs).date()}",
+             f"The RTH snapshot has no held-leg quotes (pull failed all "
+             f"window, or pre-A21 file). {len(contracts)} held leg(s) "
+             f"outside the chain window carry yesterday's marks and their "
+             f"EOD take-profit is suspended for today (owner D2, "
+             f"2026-08-02). Legs inside the chain window are unaffected. "
+             f"The day steps normally otherwise.")
+    return stats
+
+
+def resolve_held_merge(market, client, position_lists, obs, smoke, snap,
+                       alert_fn) -> tuple:
+    """A21 (owner D1/D2, 2026-08-02): outside --smoke the held-leg quotes
+    come from the RTH snapshot store, NEVER a 17:00 get_quotes -- at that
+    hour the options market has been closed for an hour and the live book is
+    the 3-4x-wide ghost that refused the RIG buy-back the real market
+    offered all day. Returns (merged_stats, held_d2).
+
+    Branches: --smoke keeps the live pull as a connectivity probe
+    (throwaway, disclosed post-close) · no snapshot at all -> inert zeros
+    (the day never steps; it is classified holiday/gap/retry downstream) ·
+    snapshot without held rows -> the D2 carried-marks day · snapshot with
+    held rows -> merge them, no network."""
+    if smoke:
+        return merge_held_legs(market, client, position_lists, obs), False
+    if snap is None:
+        return {"requested": 0, "merged": 0, "unquoted": [], "no_chain": [],
+                "error": None, "answered": 0}, False
+    from live.chain_store import load_held_rows
+    held = load_held_rows(obs)
+    if held is None:
+        return missing_held_rows_day(position_lists, obs, alert_fn), True
+    merged = merge_pulled(market, held, obs)
+    _print_held_drift(position_lists, held)
+    return merged, False
+
+
+def _print_held_drift(position_lists, held) -> list:
+    """A21 skeptic F7: a leg held at 17:00 but absent from the stored 15:2x
+    pull (position set changed, or its account's state file was unreadable at
+    snapshot time -- the runner's `if st is None: continue` door) appeared in
+    NO stat: not merged, not unquoted, not no_chain. Its TP was suspended
+    with zero disclosure. Cross-check and say it out loud."""
+    try:
+        current = held_contracts(position_lists)
+    except Exception:
+        return []   # F1 class: malformed positions already degrade loudly
+    row_keys = {(tk, r["expiry"], r["strike"], r["right"])
+                for tk, rows in held["rows_by_ticker"].items() for r in rows}
+    unq = set(held["unquoted"])
+    missing = [c["symbol"] for c in current
+               if (c["ticker"], c["expiry"], c["strike"], c["right"])
+               not in row_keys and c["symbol"] not in unq]
+    if missing:
+        print(f"HELD-LEG DRIFT -- {len(missing)} leg(s) held NOW but absent "
+              f"from the stored RTH pull: {missing}. Their marks carry and "
+              f"their EOD TP is suspended today (position set changed since "
+              f"15:2x, or a state file was unreadable at snapshot time).")
+    return missing
+
+
 def holiday_note(obs, smoke: bool = False) -> None:
     """D2 (owner 2026-08-01): a weekday the bot classifies as a holiday gets
     ONE informational email. On a real NYSE holiday (~9/yr) it is benign; on a
@@ -474,7 +555,8 @@ def main():
                   f"{probe['short']['contract']['strike']}P "
                   f"{probe['short']['contract']['expiry']} (merge-only)")
             position_lists = position_lists + [[probe]]
-    merged = merge_held_legs(market, client, position_lists, obs)
+    merged, held_d2 = resolve_held_merge(market, client, position_lists, obs,
+                                         args.smoke, snap, _alert)
     if merged["requested"]:
         print(f"held-leg quotes: {merged['merged']} spliced into chains "
               f"({merged['requested']} distinct legs held"
@@ -601,7 +683,11 @@ def main():
     # a dead quote endpoint on a market holiday used to exit 1 here and
     # retry-alert "FAILED (held-leg marks)" all evening for a day with no
     # session. No session means there are no marks to fail.
-    if held_marks_failed(merged):
+    # A21-D2: a held-rows-absent day is degraded BY DESIGN and must step --
+    # the snapshot is immutable after the window, so a 17:00 exit-1 here
+    # would retry-spam all evening for a file no retry can rebuild (the
+    # A16-F2 class). Its one alert already went out above.
+    if not held_d2 and held_marks_failed(merged):
         day = str(obs.date())
         msg = (f"{day}: held-leg quote pull failed WHOLESALE "
                f"({merged['requested']} leg(s) requested, error="
@@ -683,10 +769,14 @@ def main():
         # EVERY stepped day (empty list = surface ran clean = streak resets).
         # Keys are global across accounts (market/data conditions, not
         # sizing). --smoke never touches the counter file (A23 class).
-        esc = update_escalations(day, {
-            "unquoted_leg": merged["unquoted"],
-            "call_gated_unclosable": sorted(gated_all),
-        })
+        # A21: on a day the held-quote surface did not actually run (D2 day,
+        # or any pull error), OMIT unquoted_leg entirely -- an omitted kind
+        # neither advances nor resets (escalations.py contract), so a failed
+        # surface cannot launder a dead symbol's streak with a false "clean".
+        seen = {"call_gated_unclosable": sorted(gated_all)}
+        if merged["error"] is None:
+            seen["unquoted_leg"] = merged["unquoted"]
+        esc = update_escalations(day, seen)
         if esc:
             n_esc = sum(len(v) for v in esc.values())
             lines = []

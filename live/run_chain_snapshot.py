@@ -127,11 +127,12 @@ def main():
     client = get_client()
 
     obs = pd.Timestamp(now.date())
-    held_all, call_floors = set(), {}
+    held_all, call_floors, position_lists = set(), {}, []
     for (cap, n) in all_accounts():
         st = load_state(account_paths(cap, n)["state"])
         if st is None:
             continue
+        position_lists.append(st.positions)   # A21: held-leg RTH quote pull
         for p in st.positions:
             held_all.add(p["ticker"])
             # A4: the highest basis floor across accounts per CALL-phase
@@ -197,6 +198,15 @@ def main():
             print(f"A4: {tk} floor={floor:.2f} top_call={top:.2f} "
                   f"added={added} rows -- {status}")
 
+    # A21 (owner D1, 2026-08-02): pull every held leg's quote HERE, inside
+    # RTH, and persist it with the snapshot -- the 17:00 decision run (marks
+    # AND the EOD-backstop TP) reads this instead of the post-close ghost
+    # book that refused the RIG buy-back the real market offered all day.
+    # Runs BEFORE the save-clock recheck so a slow held pull can never bless
+    # post-close quotes (same F4 logic as the chains).
+    from live.held_legs import pull_held_quotes
+    pulled = pull_held_quotes(client, position_lists, obs)
+
     done = dt.datetime.now(ET)
     if not args.force and not save_still_rth(done):
         print(f"chain snapshot DISCARDED: pull finished {done:%H:%M} ET, past "
@@ -204,7 +214,49 @@ def main():
               f"must not be blessed as RTH (A16). Nothing saved.")
         return 1
 
-    path = save_chain_snapshot(obs, market._chains, pulled_at=now.isoformat())
+    # B4 idiom: an endpoint that ANSWERED for none of the requested legs is a
+    # wholesale failure even without an exception -- storing those stats would
+    # make the 17:00 run exit 1 against an immutable snapshot (A16-F2 class).
+    # Fail HERE instead, where in-window ticks can actually retry.
+    wholesale = pulled["requested"] > 0 and pulled["answered"] == 0
+    if pulled["error"] or wholesale:
+        # Analyst spec: a failed held pull saves the CHAIN snapshot anyway
+        # (entries must not lose the day over a quote-endpoint blip) but exits
+        # nonzero so every remaining in-window tick retries a cleaner pull
+        # that overwrites this file with held rows included. If the whole
+        # window fails, run_daily finds no held_rows key -> A21-D2 path.
+        # A21 skeptic F2: a LATER worse tick must not clobber an EARLIER
+        # tick's good held rows -- carry any same-day rows already on disk
+        # forward into this save (they are the same obs, same RTH window).
+        from live.chain_store import load_held_rows
+        prev = load_held_rows(obs)
+        kw = {}
+        if prev is not None:
+            kw = {"held_rows": prev["rows_by_ticker"],
+                  "held_stats": {"requested": prev["requested"],
+                                 "answered": prev["answered"],
+                                 "unquoted": prev["unquoted"]}}
+        path = save_chain_snapshot(obs, market._chains,
+                                   pulled_at=now.isoformat(), **kw)
+        why = pulled["error"] or (f"endpoint answered 0/{pulled['requested']} "
+                                  f"held legs")
+        kept = " (earlier tick's held rows carried forward)" if kw else \
+               " WITHOUT held rows"
+        print(f"HELD-LEG RTH PULL FAILED ({why}) -- chain snapshot saved"
+              f"{kept} -> {path}; exiting 1 so remaining window ticks retry.")
+        return 1
+
+    path = save_chain_snapshot(
+        obs, market._chains, pulled_at=now.isoformat(),
+        held_rows=pulled["rows_by_ticker"],
+        held_stats={"requested": pulled["requested"],
+                    "answered": pulled["answered"],
+                    "unquoted": pulled["unquoted"]})
+    if pulled["requested"]:
+        print(f"held-leg RTH quotes: {pulled['answered']}/{pulled['requested']}"
+              f" answered"
+              f"{', ' + str(len(pulled['unquoted'])) + ' unquoted' if pulled['unquoted'] else ''}"
+              f" -- stored with the snapshot (A21)")
     print(f"chain snapshot {obs.date()}: {market.chains_ok}/{market.chain_attempts} "
           f"chains for {len(held_all)} held + good-to-rent -> {path}")
     if market.skipped_chains:

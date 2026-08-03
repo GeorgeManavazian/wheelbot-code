@@ -27,10 +27,20 @@ def snapshot_path(obs) -> str:
     return in_state("chains", f"{pd.Timestamp(obs).date()}.json")
 
 
-def save_chain_snapshot(obs, chains: dict, pulled_at: str, path=None) -> str:
+def save_chain_snapshot(obs, chains: dict, pulled_at: str, path=None,
+                        held_rows: dict | None = None,
+                        held_stats: dict | None = None) -> str:
     """Persist {ticker -> chain DataFrame} for `obs`. Atomic (tmp + rename):
     the 17:00 reader must never see a half-written file from a snapshot pass
-    that died mid-dump."""
+    that died mid-dump.
+
+    A21: `held_rows` ({ticker -> [row dict, ...]}, rows_from_quotes shape) and
+    `held_stats` ride under SEPARATE top-level keys, never inside `chains` --
+    the chains round-trip rebuilds DataFrames with fixed columns and silently
+    drops anything extra (A21b, executed proof), which would kill the
+    held_only flag and leak held legs into the candidate set. Omitting them
+    (None) writes no key at all: "held pull failed / pre-A21 file" stays
+    distinguishable from "pulled fine, zero held legs" ({})."""
     obs = pd.Timestamp(obs).normalize()
     path = path or snapshot_path(obs)
     ser = {}
@@ -40,6 +50,13 @@ def save_chain_snapshot(obs, chains: dict, pulled_at: str, path=None) -> str:
         d["expiry"] = d["expiry"].astype(str)
         ser[tk] = d.to_dict("records")
     payload = {"obs": str(obs.date()), "pulled_at": pulled_at, "chains": ser}
+    if held_rows is not None:
+        hser = {}
+        for tk, rows in held_rows.items():
+            hser[tk] = [{**r, "date": str(r["date"]), "expiry": str(r["expiry"])}
+                        for r in rows]
+        payload["held_rows"] = hser
+        payload["held_stats"] = held_stats or {}
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
@@ -94,6 +111,58 @@ def load_chain_snapshot(obs, path=None):
     except (ValueError, TypeError, KeyError):
         return None
     return out
+
+
+def load_held_rows(obs, path=None):
+    """The snapshot's held-leg RTH quote pull for exactly `obs`, or None.
+
+    None = the file has no held pull (pre-A21 snapshot, or the RTH held pull
+    failed all window) -> the caller takes the A21-D2 carried-marks path.
+    A present-but-empty pull ({} rows, stats requested=0) is a HEALTHY answer:
+    there were no held legs.
+
+    Returns {"rows_by_ticker": {ticker: [row, ...]}, "requested", "answered",
+    "unquoted"} -- merge_pulled's input shape. Every row gets `held_only`
+    FORCED to True here (A21b/F3: the flag is a security boundary -- one
+    account's held leg must never become a candidate entry for the other 24 --
+    so it is re-imposed at load rather than trusted from any file). Rows are
+    validated like the chains (F1 class): anything malformed -> None, never a
+    crash and never a served row."""
+    obs = pd.Timestamp(obs).normalize()
+    path = path or snapshot_path(obs)
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+    if not isinstance(payload, dict) or payload.get("obs") != str(obs.date()):
+        return None
+    raw = payload.get("held_rows")
+    if not isinstance(raw, dict):
+        return None
+    stats = payload.get("held_stats")
+    stats = stats if isinstance(stats, dict) else {}
+    out = {}
+    try:
+        for tk, rows in raw.items():
+            if not isinstance(rows, list) or not all(
+                    isinstance(r, dict) and set(_CHAIN_COLS) <= set(r)
+                    for r in rows):
+                return None
+            out[tk] = [{**r,
+                        "date": pd.Timestamp(r["date"]),
+                        "expiry": pd.Timestamp(r["expiry"]),
+                        "held_only": True} for r in rows]
+        # A21 skeptic F3: the stats coercions must sit INSIDE the guard --
+        # a corrupt held_stats (unquoted: null) otherwise raised out of the
+        # 17:00 run on every 5-min retry all evening, where the design
+        # answer for any bad file is "None -> the D2 degrade".
+        return {"rows_by_ticker": out,
+                "requested": int(stats.get("requested", 0)),
+                "answered": int(stats.get("answered", 0)),
+                "unquoted": list(stats.get("unquoted", []))}
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 def snapshot_pulled_at(obs, path=None):

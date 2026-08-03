@@ -76,10 +76,18 @@ def test_run_daily_wiring_pins():
     assert re.search(r'gated_all \|= \{str\(w\[2\]\) for w in r\.warnings'
                      r'[\s\S]{0,80}call_gated_unclosable', src), \
         "C16b: call_gated_unclosable is not collected across accounts"
-    assert re.search(r'if not args\.smoke:[\s\S]{0,400}update_escalations\('
-                     r'[\s\S]{0,200}unquoted_leg[\s\S]{0,200}call_gated_unclosable',
+    # A21 re-pin: both kinds still wired, still smoke-gated -- PLUS the new
+    # error gate (a day the held-quote surface did not run must OMIT
+    # unquoted_leg, never pass a false "clean" that resets a dead symbol's
+    # streak).
+    assert re.search(r'if not args\.smoke:[\s\S]{0,700}'
+                     r'seen = \{"call_gated_unclosable": sorted\(gated_all\)\}'
+                     r'[\s\S]{0,500}if merged\["error"\] is None:'
+                     r'[\s\S]{0,100}seen\["unquoted_leg"\] = merged\["unquoted"\]'
+                     r'[\s\S]{0,100}update_escalations\(day, seen\)',
                      src), \
-        "A10b/C16b: update_escalations not wired (or not smoke-gated)"
+        "A10b/C16b: update_escalations not wired (or not smoke-gated, or " \
+        "the A21 failed-surface omit rule is gone)"
     assert re.search(r'update_escalations\([\s\S]{0,1500}ESCALATION_DAYS', src) and \
         re.search(r'if esc:[\s\S]{0,1500}_alert\(', src), \
         "A10b/C16b: escalation result does not reach _alert"

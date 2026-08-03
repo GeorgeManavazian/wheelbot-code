@@ -62,8 +62,11 @@ def _wire(monkeypatch, tmp_path, market, start=None, done=None, argv=None):
     monkeypatch.setattr(lc, "load_run_config",
                         lambda *a, **k: {"zombie_threshold": 0.5})
     saved = []
+    # **kw: A21 passes held_rows/held_stats; the E8 wiring assertions key on
+    # WHETHER a save happened, and the held kwargs have their own pins
+    # (test_held_rows_snapshot + chain_store round-trip tests)
     monkeypatch.setattr(cs, "save_chain_snapshot",
-                        lambda obs, chains, pulled_at: saved.append(obs)
+                        lambda obs, chains, pulled_at, **kw: saved.append(obs)
                         or str(tmp_path / "snap.parquet"))
     monkeypatch.setattr(sys, "argv", argv or ["run_chain_snapshot.py"])
     return rcs, saved
