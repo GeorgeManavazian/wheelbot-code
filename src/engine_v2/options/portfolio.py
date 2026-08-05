@@ -11,6 +11,7 @@ from .select import (select_contract, option_mark, liquidity_ok,
                      at_risky_window_edge)
 from .fills import try_take_profit, tp_exit_feasible, credit_ok, yield_ok
 from .earnings import in_blackout
+from .iv_rank import iv_rank_ok
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, sell_proceeds,
                     buy_cost, GATE_STALENESS_DAYS)
 from ..regime.state import is_good_renting_weather
@@ -452,6 +453,22 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                     if (d, "entry_gated_earnings", tk) not in warnings:
                         warnings.append((d, "entry_gated_earnings", tk))
                     continue
+            if cfg.min_iv_rank is not None:
+                # This ticker's implied vol is cheap against its own trailing
+                # 252 observations -- we would be selling insurance into a calm
+                # tape, which measured -11.8 bps mean return on collateral
+                # against +13.7 in the top decile. Veto like A2/A3: never
+                # substitute a different strike or expiry to find richer vol,
+                # never silent. Deduped for the same reason as the A2 warning.
+                # getattr like the earnings calendar: a market without the
+                # capability leaves the gate inert rather than raising, and a
+                # market that HAS it returns None for a name it cannot rank --
+                # unknown allows, and the caller counts it (see iv_rank.py).
+                rk = getattr(market, "iv_rank", None)
+                if rk is not None and not iv_rank_ok(rk(tk, d), cfg)[0]:
+                    if (d, "entry_gated_iv_rank", tk) not in warnings:
+                        warnings.append((d, "entry_gated_iv_rank", tk))
+                    continue
             if row is None:
                 # deduped (A12 skeptic F4): the pool now includes unaffordable
                 # tickers and rebuilds per while-iteration
@@ -571,7 +588,8 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
                         selector: str = "vol_pctile",
                         n_slots: int = 1,
                         universe: list | None = None,
-                        earnings=None) -> PortfolioResult:
+                        earnings=None,
+                        iv_history=None) -> PortfolioResult:
     if selector not in ("vol_pctile", "chop"):
         raise ValueError(f"selector must be 'vol_pctile' or 'chop', got {selector!r}")
     if n_slots < 1:
@@ -613,9 +631,15 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
         raise ValueError("earnings_blackout=True needs an earnings calendar — "
                          "pass earnings=EarningsCalendar.load() (build it with "
                          "scripts/pull_earnings.py)")
+    if cfg.min_iv_rank is not None and iv_history is None:
+        # Same stance as the earnings gate above: a floor that is SET but has
+        # no history to measure against would pass every entry as "unknown",
+        # which reads in the log exactly like a gate that is working.
+        raise ValueError("min_iv_rank needs an IV history — pass "
+                         "iv_history=IVHistory.from_chains(chains)")
 
     market = BatchMarket(chains, regime_states, clean_start, universe,
-                         earnings=earnings)
+                         earnings=earnings, iv_history=iv_history)
     dates = sorted({pd.Timestamp(d) for t in universe
                     for d in pd.to_datetime(chains[t]["date"]).unique()})
     mult = cfg.contract_multiplier

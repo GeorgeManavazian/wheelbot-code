@@ -21,7 +21,7 @@ class BatchMarket:
     """Market over fully-preloaded backtest chains + regime states."""
 
     def __init__(self, chains: dict, regime_states: dict, clean_start: dict,
-                 universe: list, earnings=None):
+                 universe: list, earnings=None, iv_history=None):
         self._und = {t: chains[t].groupby("date")["underlying"].first()
                      for t in universe}
         self._by_date = {t: {pd.Timestamp(k): g
@@ -31,6 +31,7 @@ class BatchMarket:
         self._clean_start = clean_start
         self._universe = list(universe)
         self._earnings = earnings
+        self._iv_history = iv_history
 
     @property
     def universe(self) -> list:
@@ -81,3 +82,13 @@ class BatchMarket:
         trustworthy from here", a data-integrity fact, and overloading it with a
         strategy veto would make blocked entries invisible in the run log."""
         return None if self._earnings is None else self._earnings.dates(ticker)
+
+    def iv_rank(self, ticker, day):
+        """This ticker's IV percentile against its own trailing window, for the
+        IV-rank gate. None = unmeasurable (allow, and the caller counts it).
+
+        The slice to observations at or before `day` happens inside
+        IVHistory.rank, not here -- see iv_rank.py on why that is deliberate."""
+        if self._iv_history is None:
+            return None
+        return self._iv_history.rank(ticker, day)

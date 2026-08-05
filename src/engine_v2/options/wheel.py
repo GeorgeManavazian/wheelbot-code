@@ -105,6 +105,29 @@ class WheelConfig:
     # 0.40 delta, and the least generous real name (XLU) is 8.4%, so 0.08 is a
     # junk filter rather than a tuning surface. None = off, byte-identical.
     min_ann_yield_on_collateral: float | None = None
+    # IV-rank floor (measured 2026-08-04). VETO on new short-put entries whose
+    # implied vol is cheap against that same ticker's own trailing 252
+    # observations -- Natenberg's relative volatility rank, p.72-74: "when
+    # relative volatility is high (8-10), focus on SELLING premium." This is
+    # the first rule in the engine that reads `iv` at all; every existing gate
+    # measures risk, none measures the price paid for it. Over 42,226 gated
+    # ticker-days on 153 names (2024-01 -> 2026-07, delta 0.40 / DTE 5-10 /
+    # TP 25%), mean return on collateral is -11.8 bps overall and crosses zero
+    # only around rank 0.85-0.88, reaching +13.7 bps at 0.90 and +19.7 at 0.95
+    # -- a monotone ramp, positive in 2024, 2025 and 2026 separately.
+    #
+    # MEASURED AND REJECTED AS A VETO (2026-08-04). On the real portfolio it
+    # raises P&L per campaign ~14% and HALVES campaign count, costing 18 points
+    # of total return (+43.0% -> +24.9% at 0.88) and 0.26 of Sharpe. The signal
+    # is real; the veto is the wrong instrument, because the wheel's return
+    # comes from capital turnover. Kept default-off as the measurement
+    # instrument for the open ranking question -- see the vault note
+    # "IV rank as an entry veto -- measured, rejected". Do not switch this on
+    # without re-reading it.
+    #
+    # Needs the market to supply iv_rank(); without it the gate is inert.
+    # None = off, so every existing result stays byte-identical.
+    min_iv_rank: float | None = None
 
     @property
     def any_regime_gate(self) -> bool:
