@@ -146,3 +146,51 @@ def try_take_profit(*, mark, credit, contracts, cfg, day, expiry,
                             day if day_stamp is None else day_stamp, "quote",
                             contracts)
     return FillDecision(False, via="no_fill")
+
+
+def credit_ok(credit, strike, cfg):
+    """(allowed, reason) for a NEW short-put entry under the intrinsic filter.
+
+    A put trading at a large fraction of its own strike is deep in the money:
+    the credit is mostly intrinsic value, so selling it is a stock purchase
+    dressed as premium. The wheel is supposed to be paid for taking assignment
+    RISK; here assignment is near-certain and already priced in.
+
+    Mirrors tp_exit_feasible's shape: cap unset (None) -> always allowed, so
+    the default path is byte-identical. A non-positive strike cannot be
+    measured and is refused rather than divided by.
+    """
+    cap = getattr(cfg, "max_credit_pct_of_strike", None)
+    if cap is None:
+        return True, ""
+    if strike <= 0:
+        return False, "bad_strike"
+    if credit > cap * strike:
+        return False, "credit_is_intrinsic"
+    return True, ""
+
+
+def yield_ok(credit, strike, dte, cfg):
+    """(allowed, reason) for a NEW short-put entry under the collateral-yield
+    floor.
+
+    A put that pays a negligible fraction of the cash its strike locks up is
+    not a premium trade -- the owner's case is $10 of credit against $100,000
+    of collateral for 11 days, which annualises to 0.33% against a measured
+    median of ~31% for an ordinary 0.30-delta 11-day put.
+
+    The pre-existing minimum (tp_exit_floor) is ABSOLUTE and strike-blind, so
+    it cannot see this. Mirrors credit_ok's shape: floor unset (None) ->
+    always allowed, so the default path is byte-identical. A non-positive
+    strike or dte cannot be measured and is refused rather than divided by.
+    """
+    floor = getattr(cfg, "min_ann_yield_on_collateral", None)
+    if floor is None:
+        return True, ""
+    if strike <= 0:
+        return False, "bad_strike"
+    if dte <= 0:
+        return False, "bad_dte"
+    if (credit / strike) * (365.0 / dte) < floor:
+        return False, "yield_below_floor"
+    return True, ""

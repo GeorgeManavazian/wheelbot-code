@@ -21,7 +21,7 @@ class BatchMarket:
     """Market over fully-preloaded backtest chains + regime states."""
 
     def __init__(self, chains: dict, regime_states: dict, clean_start: dict,
-                 universe: list):
+                 universe: list, earnings=None):
         self._und = {t: chains[t].groupby("date")["underlying"].first()
                      for t in universe}
         self._by_date = {t: {pd.Timestamp(k): g
@@ -30,6 +30,7 @@ class BatchMarket:
         self._states = regime_states
         self._clean_start = clean_start
         self._universe = list(universe)
+        self._earnings = earnings
 
     @property
     def universe(self) -> list:
@@ -72,3 +73,11 @@ class BatchMarket:
     def eligible(self, ticker, day) -> bool:
         cs = self._clean_start.get(ticker)
         return cs is None or pd.Timestamp(day) >= pd.Timestamp(cs)
+
+    def earnings_dates(self, ticker):
+        """Scheduled prints for the blackout gate. None = unknown (allow, and
+        the caller counts it); [] = known to have none. Deliberately a separate
+        method from eligible(): eligible() means "this ticker's stored chain is
+        trustworthy from here", a data-integrity fact, and overloading it with a
+        strategy veto would make blocked entries invisible in the run log."""
+        return None if self._earnings is None else self._earnings.dates(ticker)

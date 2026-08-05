@@ -13,12 +13,13 @@ from src.engine_v2.options.market import _row_before
 class LiveMarket:
     def __init__(self, universe, held_tickers, obs_date, *, closes_fn, chain_fn,
                  chop_max_ma_spread=None, chop_max_fast_spread=None,
-                 chop_max_fast_fall=None):
+                 chop_max_fast_fall=None, earnings=None):
         self._universe = list(universe)
         self._obs = pd.Timestamp(obs_date).normalize()
         self._chop_max_ma_spread = chop_max_ma_spread
         self._chop_max_fast_spread = chop_max_fast_spread
         self._chop_max_fast_fall = chop_max_fast_fall
+        self._earnings = earnings
         self._closes = {}   # ticker -> close Series
         self._rows = {}     # ticker -> prior-day regime row (or None)
         self._chains = {}   # ticker -> chain df (only pulled ones)
@@ -176,3 +177,11 @@ class LiveMarket:
 
     def eligible(self, ticker, day):
         return True
+
+    def earnings_dates(self, ticker):
+        """Scheduled prints for the blackout gate. None = unknown (allow, and
+        the caller counts it); [] = known to have none. The calendar is built
+        offline by scripts/pull_earnings.py and passed in, so a live run never
+        depends on a third vendor being reachable at decision time -- a stale
+        calendar degrades the gate, an unreachable one would stop the bot."""
+        return None if self._earnings is None else self._earnings.dates(ticker)

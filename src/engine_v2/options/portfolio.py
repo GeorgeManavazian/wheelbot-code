@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 import pandas as pd
 from .select import (select_contract, option_mark, liquidity_ok,
                      at_risky_window_edge)
-from .fills import try_take_profit, tp_exit_feasible
+from .fills import try_take_profit, tp_exit_feasible, credit_ok, yield_ok
+from .earnings import in_blackout
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, sell_proceeds,
                     buy_cost, GATE_STALENESS_DAYS)
 from ..regime.state import is_good_renting_weather
@@ -413,6 +414,44 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                 if (d, "entry_gated_unclosable", tk) not in warnings:
                     warnings.append((d, "entry_gated_unclosable", tk))
                 continue
+            if not credit_ok(mark.bid, c.strike, cfg)[0]:
+                # Intrinsic filter: this credit is mostly moneyness, not
+                # volatility -- a stock purchase wearing a premium costume.
+                # Veto like A2/A3: never substitute another strike, never
+                # silent. Deduped for the same reason as the A2 warning (the
+                # n_slots while-loop revisits gated tickers each iteration).
+                if (d, "entry_gated_intrinsic", tk) not in warnings:
+                    warnings.append((d, "entry_gated_intrinsic", tk))
+                continue
+            if not yield_ok(mark.bid, c.strike, (c.expiry - d).days, cfg)[0]:
+                # Collateral-yield floor: a negligible return on the cash the
+                # strike locks up (the owner's $10-against-$100k case). Veto
+                # like A2/A3 -- never substitute another strike, never
+                # silent. Placed AFTER select_contract so dte is the real
+                # expiry, not target_dte. Deduped for the same reason as the
+                # A2 warning (the n_slots while-loop revisits gated tickers
+                # each iteration).
+                if (d, "entry_gated_low_yield", tk) not in warnings:
+                    warnings.append((d, "entry_gated_low_yield", tk))
+                continue
+            if cfg.earnings_blackout:
+                # A scheduled print inside the put's life. Veto like A2/A3 --
+                # never substitute a different expiry that dodges the date,
+                # never silent. Placed AFTER select_contract so the window's
+                # right edge is the real expiry, not target_dte. Deduped for
+                # the same reason as the A2 warning (the n_slots while-loop
+                # revisits gated tickers each iteration).
+                # getattr, not a required method: markets grow capabilities the
+                # way bounded_settle_price does, so the ~20 test fakes and any
+                # market without a calendar leave the gate inert rather than
+                # raising. A market that HAS the method returns None for a
+                # ticker it has no data on -- unknown allows, and the caller
+                # counts it (see earnings.py).
+                cal = getattr(market, "earnings_dates", None)
+                if cal is not None and in_blackout(cal(tk), d, c.expiry):
+                    if (d, "entry_gated_earnings", tk) not in warnings:
+                        warnings.append((d, "entry_gated_earnings", tk))
+                    continue
             if row is None:
                 # deduped (A12 skeptic F4): the pool now includes unaffordable
                 # tickers and rebuilds per while-iteration
@@ -531,7 +570,8 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
                         clean_start: dict | None = None,
                         selector: str = "vol_pctile",
                         n_slots: int = 1,
-                        universe: list | None = None) -> PortfolioResult:
+                        universe: list | None = None,
+                        earnings=None) -> PortfolioResult:
     if selector not in ("vol_pctile", "chop"):
         raise ValueError(f"selector must be 'vol_pctile' or 'chop', got {selector!r}")
     if n_slots < 1:
@@ -565,8 +605,17 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
                 raise ValueError(f"universe member {t} has no regime_states — "
                                  f"routing without state is a bug, not a run")
     clean_start = {**DEFAULT_CLEAN_START, **(clean_start or {})}
+    if cfg.earnings_blackout and earnings is None:
+        # Fail loudly rather than run a no-op gate. Same stance as the A2
+        # liquidity gate: a threshold that is SET but unmeasurable must refuse,
+        # never silently pass. A gate believed to be on while it is structurally
+        # inert is the exact defect class the 2026-07-29 audits kept finding.
+        raise ValueError("earnings_blackout=True needs an earnings calendar — "
+                         "pass earnings=EarningsCalendar.load() (build it with "
+                         "scripts/pull_earnings.py)")
 
-    market = BatchMarket(chains, regime_states, clean_start, universe)
+    market = BatchMarket(chains, regime_states, clean_start, universe,
+                         earnings=earnings)
     dates = sorted({pd.Timestamp(d) for t in universe
                     for d in pd.to_datetime(chains[t]["date"]).unique()})
     mult = cfg.contract_multiplier

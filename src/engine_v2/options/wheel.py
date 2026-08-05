@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import pandas as pd
 from .select import (select_contract, select_roll_contract, option_mark,
                      liquidity_ok, at_risky_window_edge)
-from .fills import try_take_profit, tp_exit_feasible
+from .fills import try_take_profit, tp_exit_feasible, credit_ok, yield_ok
 
 MAX_ROLLS_PER_CAMPAIGN = 2   # then the normal expiry path (assignment) applies
 
@@ -78,6 +78,33 @@ class WheelConfig:
     liq_max_rel_spread: float | None = None    # reject if (ask-bid)/((bid+ask)/2) > this
     liq_min_open_interest: float | None = None # reject if open_interest missing/NaN or < this
     liq_min_volume: float | None = None        # reject if volume missing/NaN or < this
+    # Intrinsic filter. A short put whose credit is a large fraction of the
+    # strike is not a volatility sale -- it is mostly INTRINSIC value, i.e.
+    # buying the stock with extra steps while booking the purchase discount as
+    # "premium collected". Measured on the 2.53y 500k run: 2 of 299 entries
+    # exceeded 3% (NOK @ 37.2%, HL @ 9.4%) and those two carried -$47,150 of
+    # the -$64,650 total share-leg loss -- 73% of the damage from 0.7% of the
+    # trades. Median entry is 0.52% of strike, so a 3% cap is nearly inert.
+    # None = off, so every existing result stays byte-identical.
+    max_credit_pct_of_strike: float | None = None
+    # Earnings blackout (spec 2026-08-03). VETO on new short-put entries when a
+    # scheduled print falls inside [obs_date, expiry + 1 day]. Puts only --
+    # covered calls are exempt for the same reason the A2 liquidity gate exempts
+    # them: refusing a call leaves assigned shares honestly naked, which is
+    # worse. A boolean, not a window: the +1 day is the after-close correction
+    # (see earnings.BLACKOUT_BUFFER_DAYS), not a tuning surface. Default False
+    # like every gate above, so the plain path stays byte-identical. Needs the
+    # market to supply earnings_dates(); without it the gate is inert.
+    earnings_blackout: bool = False
+    # Collateral-yield floor (spec 2026-08-04). VETO on new short-put entries
+    # whose credit is a negligible return on the cash the strike locks up:
+    # (credit/strike) * (365/dte) < this. The pre-existing minimum credit
+    # (tp_exit_floor) is ABSOLUTE -- $2.50/contract at the live config -- so a
+    # $1,000-strike put locking $100,000 clears it on $2.50. Measured medians
+    # over 2024-01 -> 2026-07 are 18.3%/30.9%/45.6% annualised at 0.20/0.30/
+    # 0.40 delta, and the least generous real name (XLU) is 8.4%, so 0.08 is a
+    # junk filter rather than a tuning surface. None = off, byte-identical.
+    min_ann_yield_on_collateral: float | None = None
 
     @property
     def any_regime_gate(self) -> bool:
@@ -348,6 +375,22 @@ def run_wheel(chain: pd.DataFrame, cfg: WheelConfig, intraday=None,
                         and not tp_exit_feasible(mark.bid, cfg)[0]:
                     # A3: the entry's own TP exit is unsatisfiable/net-negative
                     warnings.append((d, "entry_gated_unclosable", cfg.ticker))
+                    liq = False
+                if liq and c is not None and c != closed_today and mark is not None \
+                        and not credit_ok(mark.bid, c.strike, cfg)[0]:
+                    # Intrinsic filter: the credit is mostly moneyness, not
+                    # volatility. Veto like A2/A3 -- never substitute a
+                    # different strike, and never silently.
+                    warnings.append((d, "entry_gated_intrinsic", cfg.ticker))
+                    liq = False
+                if liq and c is not None and c != closed_today and mark is not None \
+                        and not yield_ok(mark.bid, c.strike,
+                                         (c.expiry - d).days, cfg)[0]:
+                    # Collateral-yield floor: this credit is a negligible
+                    # return on the cash the strike locks up. Veto like
+                    # A2/A3 -- never substitute, never silently. dte comes
+                    # from the SELECTED contract's expiry, not target_dte.
+                    warnings.append((d, "entry_gated_low_yield", cfg.ticker))
                     liq = False
                 if c is not None and c != closed_today and mark is not None and liq:
                     n = int(cash // (c.strike * mult))
