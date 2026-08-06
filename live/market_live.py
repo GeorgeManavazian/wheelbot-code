@@ -13,13 +13,14 @@ from src.engine_v2.options.market import _row_before
 class LiveMarket:
     def __init__(self, universe, held_tickers, obs_date, *, closes_fn, chain_fn,
                  chop_max_ma_spread=None, chop_max_fast_spread=None,
-                 chop_max_fast_fall=None, earnings=None):
+                 chop_max_fast_fall=None, earnings=None, iv_history=None):
         self._universe = list(universe)
         self._obs = pd.Timestamp(obs_date).normalize()
         self._chop_max_ma_spread = chop_max_ma_spread
         self._chop_max_fast_spread = chop_max_fast_spread
         self._chop_max_fast_fall = chop_max_fast_fall
         self._earnings = earnings
+        self._iv_history = iv_history
         self._closes = {}   # ticker -> close Series
         self._rows = {}     # ticker -> prior-day regime row (or None)
         self._chains = {}   # ticker -> chain df (only pulled ones)
@@ -185,3 +186,26 @@ class LiveMarket:
         depends on a third vendor being reachable at decision time -- a stale
         calendar degrades the gate, an unreachable one would stop the bot."""
         return None if self._earnings is None else self._earnings.dates(ticker)
+
+    def iv_rankable(self) -> bool:
+        """Can this market rank on IV at all? step_one_day refuses to sort on
+        iv_rank without this declaration.
+
+        Mirrors BatchMarket.iv_rankable exactly, and for the same reason: the
+        method existing proves nothing. A LiveMarket built with iv_history=None
+        answers None for every ticker, which scores every candidate NEUTRAL and
+        degrades the sort to universe order while logging like a working run.
+        Only a non-empty history is evidence."""
+        return self._iv_history is not None and len(self._iv_history) > 0
+
+    def iv_rank(self, ticker, day):
+        """This ticker's IV percentile against its own trailing window. None =
+        unmeasurable (absent ticker, or under MIN_RANK_OBS trailing obs).
+
+        The slice to observations at or before `day` happens inside
+        IVHistory.rank, NOT here -- deliberately, see iv_rank.py. Re-slicing at
+        the call site is how a caller forgets, and forgetting here is
+        look-ahead in the live bot."""
+        if self._iv_history is None:
+            return None
+        return self._iv_history.rank(ticker, day)

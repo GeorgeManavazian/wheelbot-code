@@ -207,6 +207,22 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
     """One trading day: manage held positions, drop finished campaigns, fill
     empty slots, mark equity. Mutates `state`; returns today's outputs. The
     SAME logic the batch backtest runs — reading through the Market seam."""
+    if cfg.rank_by == "iv_rank":
+        # The guard has to be HERE, not only in run_portfolio_wheel: the live
+        # bot calls step_one_day directly (live/run_daily.py, paper_step), so a
+        # guard in the batch driver alone leaves the live path wide open. With
+        # no history every name scores NEUTRAL, the tie breaks on
+        # market.universe.index(tk), and the run prints a full plausible set of
+        # trades chosen by universe ORDER. A market must therefore declare the
+        # capability out loud -- absent declaration is not consent, it is what
+        # LiveMarket and ~20 test fakes all looked like.
+        rankable = getattr(market, "iv_rankable", None)
+        if rankable is None or not rankable():
+            raise ValueError(
+                "rank_by='iv_rank' needs a market that can rank on IV — this "
+                f"{type(market).__name__} cannot (no usable IV history). "
+                "Backtest: pass iv_history=IVHistory.from_chains(chains). "
+                "Live: pass iv_history= into LiveMarket.")
     d = pd.Timestamp(day)
     cash = state.cash
     positions = state.positions

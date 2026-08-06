@@ -305,7 +305,7 @@ def paper_step(state, market, cfg, n_slots, trades_path, state_path,
 
 def _live_market(universe, held, obs, client, target_dte, chains,
                  chop_max_ma_spread=None, chop_max_fast_spread=None,
-                 chop_max_fast_fall=None):
+                 chop_max_fast_fall=None, earnings=None, iv_history=None):
     """`chains` is REQUIRED and names the chain source out loud (A16):
     a dict = the day's RTH snapshot (17:00 decision runs pass this; a candidate
     absent from it is a failed pull, counted in skipped_chains); None = pull
@@ -322,12 +322,18 @@ def _live_market(universe, held, obs, client, target_dte, chains,
             if tk not in chains:
                 raise KeyError(f"{tk} not in the RTH chain snapshot")
             return chains[tk]
+    # earnings= and iv_history= are pass-throughs, NOT built here: both are
+    # offline artifacts, and a live run must never depend on a third vendor
+    # being reachable at decision time. Defaults of None keep the current
+    # production path byte-identical -- the gate/sort that needs one refuses to
+    # run without it rather than degrading silently (portfolio.step_one_day).
     return LiveMarket(universe, held, obs,
                       closes_fn=lambda tk: daily_closes(client, tk),
                       chain_fn=chain_fn,
                       chop_max_ma_spread=chop_max_ma_spread,
                       chop_max_fast_spread=chop_max_fast_spread,
-                      chop_max_fast_fall=chop_max_fast_fall)
+                      chop_max_fast_fall=chop_max_fast_fall,
+                      earnings=earnings, iv_history=iv_history)
 
 
 def missing_held_rows_day(position_lists, obs, alert_fn) -> dict:

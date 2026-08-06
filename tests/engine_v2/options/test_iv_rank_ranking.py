@@ -34,7 +34,8 @@ Spec: this file + [[2026-08-04 - IV rank as an entry veto, measured and rejected
 import pandas as pd
 import pytest
 
-from src.engine_v2.options.iv_rank import NEUTRAL_IV_RANK
+from src.engine_v2.options.iv_rank import NEUTRAL_IV_RANK, IVHistory
+from src.engine_v2.options.market import BatchMarket
 from src.engine_v2.options.portfolio import (PortfolioState, run_portfolio_wheel,
                                              step_one_day)
 from src.engine_v2.options.wheel import WheelConfig
@@ -55,8 +56,18 @@ def _chain():
     return ch
 
 
-class M:
-    """Multi-ticker market fake carrying BOTH ranking variables per ticker.
+def _states_row(vol_pctile):
+    """One regime row, dated strictly before D so step_one_day reads it."""
+    df = pd.DataFrame([["uptrend", "calm", vol_pctile]],
+                      columns=["trend", "vol", "vol_pctile"],
+                      index=pd.to_datetime([D - pd.Timedelta(days=1)]))
+    return df
+
+
+class _Undeclared:
+    """Multi-ticker market fake carrying BOTH ranking variables per ticker,
+    but NOT declaring iv_rankable() -- what LiveMarket was, and what every
+    market fake in this repo looks like by default.
 
     `names` maps ticker -> (vol_pctile, iv_rank). An iv_rank of None is the
     unmeasurable case (absent ticker or too few trailing observations).
@@ -85,6 +96,13 @@ class M:
 
     def iv_rank(self, tk, day):
         return self._names[tk][1]
+
+
+class M(_Undeclared):
+    """The same fake, declaring that it can actually rank on IV."""
+
+    def iv_rankable(self):
+        return True
 
 
 def _pcfg(**kw):
@@ -199,3 +217,68 @@ def test_unknown_rank_by_is_rejected():
     with pytest.raises(ValueError, match="rank_by must be"):
         run_portfolio_wheel({"SPY": _chain()}, _pcfg(rank_by="iv_ranks"),
                             regime_states={"SPY": pd.DataFrame()})
+
+
+# --- the same refusal, from the LIVE entry point -----------------------------
+#
+# The guard above lives in run_portfolio_wheel. The live bot does not call it:
+# live/run_daily.py calls step_one_day directly (paper_step). So the batch path
+# went through the door with the alarm on it and the live path went through a
+# door with no alarm at all -- a ranker scoring every name NEUTRAL, selection
+# falling through to `market.universe.index(tk)`, and ~531 dedup'd
+# entry_ranked_iv_unknown warnings a day as the only trace. That is the exact
+# defect class the 2026-07-29 audits kept finding, authored by accident while
+# writing the guard meant to prevent it.
+#
+# A market must therefore DECLARE that it can rank on IV. Absent declaration is
+# not "probably fine": ~20 test fakes and the shipped LiveMarket all lacked the
+# capability entirely, and silence read as consent.
+
+def test_iv_rank_sort_refuses_from_step_one_day_when_undeclared():
+    with pytest.raises(ValueError, match="rank_by='iv_rank'"):
+        _step(_Undeclared(OPPOSED), _pcfg(rank_by="iv_rank"))
+
+
+# --- and the real BatchMarket must still get THROUGH that guard --------------
+#
+# A guard that refuses everything is not a guard, it is an outage. This is the
+# end-to-end proof that the backtest arm the A/B was measured on still runs:
+# real chains -> real IVHistory -> BatchMarket -> step_one_day.
+
+def _ramp_history(last_iv_by_ticker):
+    """A real IVHistory: 252 trailing observations per ticker ending on D.
+
+    The first 251 ramp 0.100 -> 0.350, so a final value above the top ranks
+    ~1.0 and one below the bottom ranks 0.0. Deliberately over MIN_RANK_OBS
+    (150) -- a thinner series would return None and the test would pass for
+    the wrong reason.
+    """
+    days = pd.bdate_range(end=D, periods=252)
+    ramp = [0.100 + i / 1000.0 for i in range(251)]
+    return IVHistory({tk: pd.Series(ramp + [last], index=days)
+                      for tk, last in last_iv_by_ticker.items()})
+
+
+# vol_pctile says SPY (0.99 vs 0.10); IV rank says GDX (0.40 rich vs 0.05
+# cheap). Whichever key drives the sort, the other would have picked the loser.
+_OPPOSED_STATES = {
+    "SPY": _states_row(0.99),
+    "GDX": _states_row(0.10),
+}
+
+
+def test_batch_market_ranks_on_iv_end_to_end():
+    port = run_portfolio_wheel(
+        {"SPY": _chain(), "GDX": _chain()}, _pcfg(rank_by="iv_rank"),
+        _OPPOSED_STATES, universe=["SPY", "GDX"], n_slots=1,
+        iv_history=_ramp_history({"SPY": 0.05, "GDX": 0.40}))
+    assert [t.contract.root for t in port.trades if t.action == "SELL_PUT"] \
+        == ["GDX"], "BatchMarket did not rank on IV through run_portfolio_wheel"
+
+
+def test_batch_market_without_a_history_is_not_rankable():
+    """The declaration must be about the history, not about the class. A
+    BatchMarket built with iv_history=None looks identical from the outside --
+    it HAS an iv_rank() method, which returns None for every name."""
+    m = BatchMarket({"SPY": _chain()}, _OPPOSED_STATES, {}, ["SPY"])
+    assert m.iv_rankable() is False

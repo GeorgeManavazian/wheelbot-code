@@ -83,6 +83,17 @@ class BatchMarket:
         strategy veto would make blocked entries invisible in the run log."""
         return None if self._earnings is None else self._earnings.dates(ticker)
 
+    def iv_rankable(self) -> bool:
+        """Can this market rank on IV AT ALL? The declaration step_one_day
+        requires before it will sort on iv_rank.
+
+        Deliberately about the HISTORY, not the class: a BatchMarket built with
+        iv_history=None still has an iv_rank() method, and it returns None for
+        every name -- so every candidate scores NEUTRAL and the sort silently
+        degrades to universe order. Method-presence is therefore not evidence
+        of anything; only a non-empty history is."""
+        return self._iv_history is not None and len(self._iv_history) > 0
+
     def iv_rank(self, ticker, day):
         """This ticker's IV percentile against its own trailing window, for the
         IV-rank gate. None = unmeasurable (allow, and the caller counts it).
