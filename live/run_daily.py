@@ -46,6 +46,32 @@ FROZEN = dict(put_delta=0.30, call_delta=0.50, target_dte=11,
               # = refuse.
               liq_max_rel_spread=0.10, liq_min_open_interest=250,
               liq_min_volume=25,
+              # Collateral-yield floor (spec 2026-08-04, engine commit 682823e).
+              # VETO on new short-put entries whose credit is a negligible return
+              # on the cash the strike locks up: (credit/strike)*(365/dte) < this.
+              # The pre-existing minimum credit is ABSOLUTE ($2.50/contract here),
+              # so a $1,000-strike put locking $100,000 cleared it on $2.50 -- the
+              # owner's $10-against-$100k case. Measured medians 2024-01 -> 2026-07
+              # are 18.3/30.9/45.6% annualised at 0.20/0.30/0.40 delta and the
+              # least generous real name (XLU) is 8.4%, so 0.08 is a junk filter,
+              # not a tuning surface. Wired into FROZEN 2026-08-06: the engine had
+              # it from 682823e but this dict did not set it, so the live bot was
+              # running WITHOUT it while _STATUS reported the config work done.
+              min_ann_yield_on_collateral=0.08,
+              # Intrinsic filter (same spec/commit, same 2026-08-06 wiring gap).
+              # A short put whose credit is a large fraction of the strike is not
+              # a volatility sale -- it is mostly INTRINSIC value, a stock purchase
+              # wearing a premium costume. On the 2.53y 500k run, 2 of 299 entries
+              # exceeded 3% (NOK 37.2%, HL 9.4%) and carried -$47,150 of the
+              # -$64,650 total share-leg loss: 73% of the damage from 0.7% of the
+              # trades. Median entry is 0.52% of strike, so 3% is nearly inert.
+              max_credit_pct_of_strike=0.03,
+              # NOT SET: earnings_blackout. The flag alone would be a ZOMBIE GATE
+              # --  _live_market() never constructs LiveMarket with `earnings=`,
+              # so earnings_dates() returns None, in_blackout() allows, and the
+              # gate reads as ON while doing nothing. It also needs data/earnings/
+              # *.parquet on the VPS, which is untracked and outside the
+              # live/ src/ deploy/ rsync. Owner and Claude to wire together.
               # A13 (2026-08-02): pass-through fees (OCC/ORF/SEC/TAF) as one
               # flat per-contract-side adder -- PROVISIONAL $0.05, owner
               # verifies against the first real statement (the audit's
