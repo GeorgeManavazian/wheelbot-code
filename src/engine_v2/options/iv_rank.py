@@ -34,6 +34,15 @@ RANK_WINDOW = 252
 # Below this many trailing observations a percentile is not a percentile. A
 # name ranked against 12 days would qualify or fail on noise.
 MIN_RANK_OBS = 150
+# Where an UNMEASURABLE rank sorts when IV rank is the sort key (owner
+# decision 2026-08-05). A veto can wave unknowns through harmlessly; a sort
+# must physically place them. Sorting them last would silently de-prioritise
+# every thin-history name -- a filter wearing a sort's clothes, which is the
+# exact failure mode that killed the veto (campaign count 254 -> 130). Neutral
+# means neutral in both directions: it outranks a measurably cheap name and
+# loses to a measurably rich one. NOT a tuning knob -- it is the midpoint of a
+# percentile, and moving it re-introduces the bias it exists to avoid.
+NEUTRAL_IV_RANK = 0.5
 
 
 class IVHistory:

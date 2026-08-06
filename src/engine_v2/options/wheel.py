@@ -128,6 +128,22 @@ class WheelConfig:
     # Needs the market to supply iv_rank(); without it the gate is inert.
     # None = off, so every existing result stays byte-identical.
     min_iv_rank: float | None = None
+    # IV rank as the SORT KEY rather than a veto (owner approved 2026-08-05,
+    # after min_iv_rank above was measured and rejected). The pool is ranked
+    # by `vol_pctile` -- REALIZED vol, highest first -- so the engine picks the
+    # riskiest name and never reads the price it is paid for that risk. Worse,
+    # the chop weather gate has already capped realized vol at the 75th
+    # percentile, so the sort chooses inside a 70-75th percentile sliver on
+    # the wrong variable.
+    #
+    # A sort is the right instrument where a veto was the wrong one: it
+    # changes WHICH names fill the slots, never HOW MANY, so it does not pay
+    # the turnover cost that halved campaign count (254 -> 130) and cost 18
+    # points of return. Unknown ranks sort at NEUTRAL_IV_RANK, never last --
+    # see iv_rank.py on why last would rebuild the filter.
+    #
+    # "vol_pctile" = off, so every existing result stays byte-identical.
+    rank_by: str = "vol_pctile"
 
     @property
     def any_regime_gate(self) -> bool:

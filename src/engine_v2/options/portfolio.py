@@ -11,7 +11,7 @@ from .select import (select_contract, option_mark, liquidity_ok,
                      at_risky_window_edge)
 from .fills import try_take_profit, tp_exit_feasible, credit_ok, yield_ok
 from .earnings import in_blackout
-from .iv_rank import iv_rank_ok
+from .iv_rank import NEUTRAL_IV_RANK, iv_rank_ok
 from .wheel import (Trade, WheelConfig, is_unpaid_decline, sell_proceeds,
                     buy_cost, GATE_STALENESS_DAYS)
 from ..regime.state import is_good_renting_weather
@@ -477,7 +477,28 @@ def step_one_day(state, market, day, cfg, *, selector, n_slots) -> StepResult:
                 pct = -1.0
             else:
                 pct = float(row["vol_pctile"])
-            pool.append((-pct, market.universe.index(tk), tk, c, mark))
+            if cfg.rank_by == "iv_rank":
+                # Rank on the price PAID for risk, not the risk taken. This
+                # reorders the pool; it never removes a member -- the veto
+                # (min_iv_rank, above) was measured and rejected precisely
+                # because refusing entries leaves slots idle. getattr like the
+                # gate: a market without the capability ranks everything
+                # neutral rather than raising, and run_portfolio_wheel refuses
+                # to start in that state so it cannot happen silently.
+                rk = getattr(market, "iv_rank", None)
+                key = rk(tk, d) if rk is not None else None
+                if key is None:
+                    # Unmeasurable -> neutral, and COUNTED. How many names were
+                    # ranked on a neutral is the only way to tell afterwards
+                    # whether the unknown-handling decision moved the result.
+                    # Deduped for the same reason as the gate warnings: the
+                    # n_slots while-loop re-ranks the pool every iteration.
+                    if (d, "entry_ranked_iv_unknown", tk) not in warnings:
+                        warnings.append((d, "entry_ranked_iv_unknown", tk))
+                    key = NEUTRAL_IV_RANK
+            else:
+                key = pct
+            pool.append((-key, market.universe.index(tk), tk, c, mark))
         if not pool:
             break
         pool.sort()
@@ -592,6 +613,12 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
                         iv_history=None) -> PortfolioResult:
     if selector not in ("vol_pctile", "chop"):
         raise ValueError(f"selector must be 'vol_pctile' or 'chop', got {selector!r}")
+    if cfg.rank_by not in ("vol_pctile", "iv_rank"):
+        # A typo'd sort key must never fall back to the default: the run would
+        # print a full set of trades that silently answers a different question
+        # than the one the arm claims to be testing.
+        raise ValueError(f"rank_by must be 'vol_pctile' or 'iv_rank', "
+                         f"got {cfg.rank_by!r}")
     if n_slots < 1:
         raise ValueError(f"n_slots must be >= 1, got {n_slots}")
     if cfg.roll_tested_puts or cfg.put_stop_mult is not None or \
@@ -636,6 +663,14 @@ def run_portfolio_wheel(chains: dict, cfg: WheelConfig, regime_states: dict,
         # no history to measure against would pass every entry as "unknown",
         # which reads in the log exactly like a gate that is working.
         raise ValueError("min_iv_rank needs an IV history — pass "
+                         "iv_history=IVHistory.from_chains(chains)")
+    if cfg.rank_by == "iv_rank" and iv_history is None:
+        # Same stance as the floor above, and it matters MORE for a sort: with
+        # no history every name ranks NEUTRAL, so the pool keeps its universe
+        # tie order and the run prints a full, plausible set of trades. A veto
+        # with no history at least trades like the baseline; a ranker with no
+        # history looks like it is working and is answering nothing.
+        raise ValueError("rank_by='iv_rank' needs an IV history — pass "
                          "iv_history=IVHistory.from_chains(chains)")
 
     market = BatchMarket(chains, regime_states, clean_start, universe,
