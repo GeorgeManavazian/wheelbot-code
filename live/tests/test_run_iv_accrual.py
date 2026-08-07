@@ -91,7 +91,11 @@ def wired(monkeypatch, tmp_path):
         # the prog name so main()'s own --force flag is the only thing parsed.
         monkeypatch.setattr(sys, "argv", ["run_iv_accrual.py"])
         fake = types.ModuleType("schwab_client")
-        fake.get_client = lambda: object()
+        client_calls = []
+        # get_client() is an OAuth/token round-trip in production -- real work,
+        # not a free stub. Recording calls lets refusal tests prove the gate
+        # runs BEFORE that work, not just before the chain pulls.
+        fake.get_client = lambda: client_calls.append(1) or object()
         monkeypatch.setitem(sys.modules, "schwab_client", fake)
         monkeypatch.setattr(lu, "UNIVERSE", list(universe))
         monkeypatch.setattr(cs, "load_chain_snapshot", lambda obs: snapshot)
@@ -122,46 +126,64 @@ def wired(monkeypatch, tmp_path):
         monkeypatch.setattr(ria, "observations_for",
                             lambda tk, frame, obs: [{"ticker": tk, "iv": 0.3}])
         rc = ria.main()
-        return rc, saved, pulled
+        return rc, saved, pulled, client_calls
     return _run
 
 
 def test_refuses_before_the_trading_snapshot_exists(wired):
-    rc, saved, pulled = wired(snapshot=None)
+    rc, saved, pulled, client_calls = wired(snapshot=None)
     assert rc != 0
     assert saved == {}, "nothing saved"
     assert pulled == [], "no API calls -- trading eats first"
+    assert client_calls == [], \
+        "get_client() (an OAuth round-trip) must not run before the gate either"
 
 
 def test_refuses_outside_the_window(wired):
-    rc, saved, _ = wired(start=_at(17, 0))
+    rc, saved, pulled, _ = wired(start=_at(17, 0))
     assert rc != 0 and saved == {}
+    assert pulled == [], \
+        "no chain pulls -- deleting the window gate must not stay green just " \
+        "because every ticker also fails on an unset frame"
 
 
 def test_refuses_when_frozen_is_off_grid(wired):
-    rc, saved, pulled = wired(frozen={"put_delta": 0.25, "target_dte": 9})
+    rc, saved, pulled, _ = wired(frozen={"put_delta": 0.25, "target_dte": 9})
     assert rc != 0
     assert saved == {} and pulled == []
 
 
 def test_happy_path_saves_and_exits_zero(wired):
     df = pd.DataFrame({"x": [1]})
-    rc, saved, pulled = wired(frames={"GDX": df, "SPY": df})
+    rc, saved, pulled, _ = wired(frames={"GDX": df, "SPY": df})
     assert rc == 0
     assert sorted(pulled) == ["GDX", "SPY"]
     assert {r["ticker"] for r in saved["records"]} == {"GDX", "SPY"}
 
 
 def test_wholesale_pull_failure_saves_nothing_useful_and_exits_one(wired):
-    rc, saved, pulled = wired(frames={})       # every ticker raises
+    rc, saved, pulled, _ = wired(frames={})       # every ticker raises
     assert rc != 0
     assert sorted(pulled) == ["GDX", "SPY"], "it tried all of them"
 
 
+def test_partial_failure_saves_the_good_records_and_exits_one(wired):
+    """3-ticker universe, one bad chain: attempted=3 ok=2 gives a 1/3 chain
+    failure ratio, under the 0.5 threshold -- so this reaches the PARTIAL
+    branch (save what came in, exit 1) rather than the wholesale-FAILED one."""
+    df = pd.DataFrame({"x": [1]})
+    rc, saved, pulled, _ = wired(universe=("GDX", "SPY", "IWM"),
+                                 frames={"GDX": df, "SPY": df})
+    assert rc != 0
+    assert sorted(pulled) == ["GDX", "IWM", "SPY"]
+    assert {r["ticker"] for r in saved["records"]} == {"GDX", "SPY"}, \
+        "the two good chains are saved even though IWM failed"
+
+
 def test_resume_skips_tickers_already_recorded_today(wired):
     df = pd.DataFrame({"x": [1]})
-    rc, saved, pulled = wired(frames={"SPY": df},
-                              prior=[{"ticker": "GDX", "iv": 0.2}])
+    rc, saved, pulled, _ = wired(frames={"SPY": df},
+                                 prior=[{"ticker": "GDX", "iv": 0.2}])
     assert pulled == ["SPY"], "GDX was already done"
     assert {r["ticker"] for r in saved["records"]} == {"GDX", "SPY"}, \
         "prior records are carried forward, not dropped"
@@ -169,7 +191,7 @@ def test_resume_skips_tickers_already_recorded_today(wired):
 
 def test_a_slow_pull_past_the_deadline_is_discarded(wired):
     df = pd.DataFrame({"x": [1]})
-    rc, saved, _ = wired(frames={"GDX": df, "SPY": df},
-                         start=_at(15, 50), done=_at(16, 30))
+    rc, saved, _, _ = wired(frames={"GDX": df, "SPY": df},
+                            start=_at(15, 50), done=_at(16, 30))
     assert rc != 0
     assert saved == {}, "post-close quotes must never be stamped RTH"
