@@ -194,3 +194,62 @@ def test_missing_token_file_still_reaches_the_nag(sb):
     sb.tick(dow="6", hm="1000")
     assert any("token-age" in c for c in sb.calls()), \
         "D5b: an absent token file must still be judged by run_notify"
+
+
+# ---- IV accrual block (2026-08-07) ---------------------------------------
+# The block must be GATED on the chain snapshot's marker: the accrual pull is
+# 547 chains and must never take the window or the API budget from the ~12-chain
+# trading pull the day's decision depends on.
+
+def _ran(calls, script):
+    return any(script in c for c in calls)
+
+
+def test_iv_accrual_does_not_run_before_the_chain_snapshot(tmp_path):
+    sb = Sandbox(tmp_path)
+    sb.tick(dow="5", hm="1530", today="2026-07-17",
+            env={"TICK_RC_run_chain_snapshot": "1"})
+    assert _ran(sb.calls(), "run_chain_snapshot.py")
+    assert not _ran(sb.calls(), "run_iv_accrual.py"), \
+        "547-chain pull must not run while the trading snapshot is unfinished"
+
+
+def test_iv_accrual_runs_once_the_chain_snapshot_marker_exists(tmp_path):
+    sb = Sandbox(tmp_path)
+    (sb.logs / ".chainsnap-2026-07-17").touch()
+    sb.tick(dow="5", hm="1530", today="2026-07-17")
+    assert _ran(sb.calls(), "run_iv_accrual.py")
+    assert (sb.logs / ".ivaccrual-2026-07-17").exists()
+
+
+def test_iv_accrual_marker_is_written_only_on_success(tmp_path):
+    sb = Sandbox(tmp_path)
+    (sb.logs / ".chainsnap-2026-07-17").touch()
+    sb.tick(dow="5", hm="1530", today="2026-07-17",
+            env={"TICK_RC_run_iv_accrual": "1"})
+    assert not (sb.logs / ".ivaccrual-2026-07-17").exists(), \
+        "a failed pull must retry on every remaining in-window tick"
+
+
+def test_iv_accrual_failure_does_not_fail_the_tick(tmp_path):
+    """An IV outage must never alert-storm or mark a trading day failed."""
+    sb = Sandbox(tmp_path)
+    (sb.logs / ".chainsnap-2026-07-17").touch()
+    r = sb.tick(dow="5", hm="1530", today="2026-07-17",
+                env={"TICK_RC_run_iv_accrual": "1"})
+    assert r.returncode == 0
+
+
+def test_iv_accrual_does_not_rerun_once_done(tmp_path):
+    sb = Sandbox(tmp_path)
+    (sb.logs / ".chainsnap-2026-07-17").touch()
+    (sb.logs / ".ivaccrual-2026-07-17").touch()
+    sb.tick(dow="5", hm="1530", today="2026-07-17")
+    assert not _ran(sb.calls(), "run_iv_accrual.py")
+
+
+def test_iv_accrual_does_not_run_on_a_weekend(tmp_path):
+    sb = Sandbox(tmp_path)
+    (sb.logs / ".chainsnap-2026-07-18").touch()
+    sb.tick(dow="6", hm="1530", today="2026-07-18")
+    assert not _ran(sb.calls(), "run_iv_accrual.py")

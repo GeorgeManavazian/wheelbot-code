@@ -187,7 +187,7 @@ for (put_delta, target_dte) in ACCRUAL_GRID:    ← 6 cells, pure CPU
       → applies its own derived_band(target_dte), then nearest |delta|
       → None  ⇒  no observation for THIS CELL today (correct, not an error)
     implied_vol_put(price=mid, underlying=..., strike=..., dte=...,
-                    rate=rate/100, div_yield=div_yield/100)
+                    rate=..., div_yield=...)     # already decimals, see _pct
       → one record, appended to today's file
 ```
 
@@ -215,6 +215,9 @@ its per-contract `volatility`. `scratchpad/diag_schwab_iv_fit.py:31` divides bot
 Passing `4.0` where `0.04` is meant does not raise and does not warn. It returns a
 plausible IV that is wrong on every contract, permanently, in a series whose whole purpose
 is internal consistency. **Gets a dedicated test.**
+
+The conversion is hoisted into `otm_put_frame` (`_pct`) so there is exactly ONE
+conversion site rather than one per grid cell.
 
 ### ⚠ Hazard: `put_delta` and `target_dte` are part of the scale
 
