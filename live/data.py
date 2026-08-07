@@ -183,6 +183,58 @@ def otm_call_frame(client, ticker: str, target_dte: int, obs_date=None) -> pd.Da
     return chain_from_json(r.json(), obs_date or today)
 
 
+# IV-accrual request window, in days from today. It must span EVERY DTE band in
+# live/iv_accrual.py's ACCRUAL_GRID, not just the live config's:
+#     derived_band(7)  = (5, 10)
+#     derived_band(11) = (9, 14)   ->  union 5..14
+# plus one day of slack each side, because Schwab's daysToExpiration need not
+# agree with (expiry - today).days at the edges. A window sized for
+# target_dte=11 alone silently yields NO observation for any DTE-7 grid cell.
+IV_WINDOW_LO, IV_WINDOW_HI = 4, 15
+
+
+def _pct(v):
+    """Schwab percent -> decimal. None-safe.
+
+    interestRate/dividendYield are PERCENT (3.707 == 3.707%), the same
+    convention as the per-contract `volatility` field, while implied_vol_put
+    takes decimals. Passing 3.707 neither raises nor warns -- it returns a
+    plausible IV that is wrong on every contract, permanently. This is the ONE
+    conversion site; nothing downstream divides by 100 again.
+    (Convention proven in scratchpad/diag_schwab_iv_fit.py, 2026-08-06.)"""
+    f = _num(v)
+    return None if f is None else f / 100.0
+
+
+def otm_put_frame(client, ticker: str, obs_date=None) -> pd.DataFrame:
+    """Every listed OUT-OF-THE-MONEY PUT across the IV-accrual DTE window, plus
+    the chain header's rate and dividend yield as decimal columns.
+
+    PUT-only is load-bearing, the mirror image of otm_call_frame's CALL-only
+    note: these rows exist to be measured, never to be traded. They are written
+    to the IV store and never spliced into a LiveMarket, so no account can ever
+    see a far-OTM put as an entry candidate.
+
+    strike_range=OUT_OF_THE_MONEY rather than a strike_count guess: chain_frame's
+    12-strike spot-centred window reaches only ~+/-3.8%, and a 0.30-delta put at
+    11 DTE can sit further out on a low-vol name -- which would mean pulling 547
+    chains and still missing the one contract each is for."""
+    from schwab.client import Client
+    today = dt.datetime.now(_ET).date()   # A22/B7: ET, never the box clock
+    r = throttle(client.get_option_chain, ticker,
+                 contract_type=Client.Options.ContractType.PUT,
+                 strike_range=Client.Options.StrikeRange.OUT_OF_THE_MONEY,
+                 from_date=today + dt.timedelta(days=IV_WINDOW_LO),
+                 to_date=today + dt.timedelta(days=IV_WINDOW_HI))
+    if r.status_code != 200:
+        raise RuntimeError(f"{ticker} otm_put_chain -> HTTP {r.status_code}")
+    payload = r.json()
+    df = chain_from_json(payload, obs_date or today)
+    df["rate"] = _pct(payload.get("interestRate"))
+    df["div_yield"] = _pct(payload.get("dividendYield"))
+    return df
+
+
 def throttle(fn, *args, retries: int = 2, backoff: float = 1.0, **kwargs):
     """Call fn(*args, **kwargs); on a transient 429/502 Response, sleep and retry
     up to `retries` times. Returns the final Response (caller checks status)."""
