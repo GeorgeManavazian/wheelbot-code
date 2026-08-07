@@ -52,11 +52,42 @@ class IVHistory:
     """
 
     def __init__(self, by_ticker: dict | None = None,
-                 window: int = RANK_WINDOW, min_obs: int = MIN_RANK_OBS):
+                 window: int = RANK_WINDOW, min_obs: int = MIN_RANK_OBS,
+                 sources: dict | None = None):
         self._by = {t: pd.Series(s).sort_index()
                     for t, s in (by_ticker or {}).items()}
         self._window = window
         self._min_obs = min_obs
+        # Ticker -> the scale its series was measured on ("<source>/<solver>").
+        # A permanent property of the TICKER, never of a batch: see append().
+        self._sources = dict(sources or {})
+
+    def source(self, ticker: str):
+        """The scale this ticker's series is on, or None if unstamped."""
+        return self._sources.get(ticker)
+
+    def append(self, ticker: str, obs_date, iv: float, source: str) -> None:
+        """Extend one ticker's series, REFUSING a change of scale.
+
+        A percentile compares a ticker only to its own past, so a mid-window
+        source/solver change shifts every later observation relative to that past
+        and pins the rank toward 0 or 1 -- with nothing in the logs looking wrong.
+        Changing source means REBUILDING the ticker's history, not appending to
+        it, so this raises rather than warns.
+        """
+        known = self._sources.get(ticker)
+        if known is not None and known != source:
+            raise ValueError(
+                f"{ticker}: refusing to append an observation from source "
+                f"{source!r} to a series measured on {known!r}. A source change "
+                f"must REBUILD this ticker's history, not extend it -- see "
+                f"tests/engine_v2/options/test_iv_provenance.py")
+        s = self._by.get(ticker)
+        obs_date = pd.Timestamp(obs_date)
+        self._by[ticker] = (pd.Series({obs_date: float(iv)}) if s is None
+                            else pd.concat([s, pd.Series({obs_date: float(iv)})])
+                            ).sort_index()
+        self._sources[ticker] = source
 
     @classmethod
     def from_chains(cls, chains: dict, cfg, window: int = RANK_WINDOW,
