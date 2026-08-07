@@ -41,6 +41,18 @@ per ticker per day.
 - Coverage. This moves no ticker into the rankable column; 108/547 stands until history is
   purchased or ~150 days accrue.
 
+### Backtests are unaffected (asked 2026-08-07, verified)
+
+Backtests build their history with `IVHistory.from_chains(chains, cfg)` — rebuilt in
+memory, from the raw stored chains, on every run, for whatever `cfg` is passed. They set no
+provenance stamp and never call `append` (`append` has no non-test callers). So a backtest
+may sweep `put_delta` and `target_dte` freely; nothing here constrains it.
+
+The asymmetry is the reason this whole design exists: a backtest keeps the raw chains and
+can always re-derive, while **Schwab has no historical chain endpoint** — `live/data.py`
+states it plainly, a day not captured is unmeasurable forever. Live writes in permanent
+ink, which is why live needs a lock and a grid and the backtest needs neither.
+
 ## Owner decisions this design encodes (2026-08-07)
 
 1. **A separate accrual pull**, not a widening of the existing trading pull. The trading
@@ -53,6 +65,20 @@ per ticker per day.
 4. **Failure is judged on the pull, not the yield.** A low observation count is a real
    property of thin expiry ladders, not an outage.
 5. **Write side only** (see Scope).
+6. **Record a small config GRID, not just the live config.** The pull already downloads
+   every OTM put; recording only the one contract `FROZEN` would sell throws away the other
+   ~59 already in hand, and Schwab has no historical chain endpoint to get them back. The
+   grid makes a `put_delta`/`target_dte` change a column switch instead of a 150-day
+   rebuild — see the hazard section.
+
+```python
+# live/run_iv_accrual.py
+ACCRUAL_GRID = [(0.20, 7), (0.20, 11), (0.30, 7), (0.30, 11), (0.40, 7), (0.40, 11)]
+```
+
+   Not arbitrary: 0.30/11 is `FROZEN`; 0.20 is the delta the owner described the strategy
+   as on 2026-08-03; 0.40/7 is the sweep's top arm. These are the configs actually in play.
+   Six `select_contract` calls per ticker per day is pure CPU — **no additional API cost.**
 
 ## Architecture
 
@@ -68,9 +94,20 @@ No existing function's behavior changes. `chain_from_json`, `_CHAIN_COLS`, `chai
 
 ### `otm_put_frame(client, ticker, target_dte, obs_date=None)`
 
-PUT-only, `strike_range=OUT_OF_THE_MONEY`, request window `[today+8, today+15]` for
-`target_dte=11`. Calls `chain_from_json` unchanged, then attaches `rate` and `div_yield`
-columns read from the chain header (`interestRate`, `dividendYield`).
+PUT-only, `strike_range=OUT_OF_THE_MONEY`, request window `[today+4, today+15]`. Calls
+`chain_from_json` unchanged, then attaches `rate` and `div_yield` columns read from the
+chain header (`interestRate`, `dividendYield`).
+
+**The window must cover every DTE band in `ACCRUAL_GRID`, not just the live one.**
+`derived_band(target_dte) = (max(5, target_dte - 2), target_dte + 3)`, so:
+
+    derived_band(7)  = (5, 10)
+    derived_band(11) = (9, 14)
+    union            =  5..14   →  request +4/+15 (one day slack each side)
+
+A window sized for `target_dte=11` alone would silently produce **no observation at all**
+for every DTE-7 grid cell — the failure this grid exists to prevent, arriving through the
+request window.
 
 Mirrors `otm_call_frame` (A4), including its reasoning: `strike_range=OUT_OF_THE_MONEY`
 gets exactly what the exchange lists with no `strike_count` guess, so the ~0.30-delta put
@@ -79,10 +116,9 @@ measured at about ±3.8% — a 0.30-delta put at 11 DTE can sit further OTM than
 low-vol name, which would mean pulling 547 chains and still missing the one contract each
 is for.
 
-The request window is `+8/+15` rather than exactly `derived_band(11) = (9, 14)` because
-Schwab's `daysToExpiration` need not agree with `(expiry - today).days` at the edges. One
-day of slack each side, with the exact band filter applied downstream by
-`select_contract`.
+The one day of slack each side exists because Schwab's `daysToExpiration` need not agree
+with `(expiry - today).days` at the edges. The exact band filter is applied downstream by
+`select_contract`, per grid cell.
 
 **`PUT`-only is load-bearing**, the mirror image of A4's `CALL`-only note: these rows must
 never reach `market._chains`, or every account sharing the market gains far-OTM puts as
@@ -91,7 +127,8 @@ tradeable entry candidates. The accrual runner builds no `LiveMarket` and never 
 
 ### `live/iv_store.py`
 
-`data/live/iv/YYYY-MM-DD.json`, one file per trading day, ~547 records.
+`data/live/iv/YYYY-MM-DD.json`, one file per trading day. Up to **6 records per ticker**
+(one per `ACCRUAL_GRID` cell), so ~3,300 records at full coverage.
 
 Two contracts copied from `chain_store`, for the same reasons stated there:
 
@@ -107,9 +144,17 @@ Record shape — **the solver inputs are stored alongside the answer**, so a sol
 change can rebuild the series from disk without re-pulling or re-purchasing anything:
 
 ```
-ticker, expiry, strike, dte, delta, bid, ask, mid,
+ticker, put_delta, target_dte,          ← which grid cell this row answers
+expiry, strike, dte, delta, bid, ask, mid,
 underlying, rate, div_yield, iv, source
 ```
+
+`(ticker, put_delta, target_dte)` is the series key. Six grid cells means six independent
+series per ticker, each accruing in parallel from day 1 and each warming up to
+`MIN_RANK_OBS` on the same schedule — so switching the live config to another grid cell
+costs **no warm-up at all**. Two cells frequently resolve to the same contract (a thin
+ladder offers one in-band expiry); they are still stored as separate rows, because
+collapsing them would make the series depend on which other cells happened to match.
 
 `source` is the provenance stamp: source / solver version / **and the selection config**,
 e.g. `"schwab-rth/bs-v1/d30/dte11"` — see the `put_delta`/`target_dte` hazard below for why
@@ -132,16 +177,18 @@ is discarded rather than saved, because post-close quotes must not be stamped as
 ## Data flow, per ticker
 
 ```
-otm_put_frame(client, tk, target_dte)
+otm_put_frame(client, tk)                       ← ONE API call per ticker
   → chain_from_json    (existing: drops bid<=0/ask<=0, missing delta,
                         nonStandard, multiplier != 100)
   → + rate, div_yield columns from the chain header
-select_contract(day, obs, "P", cfg.put_delta, cfg.target_dte, tk)
-  → applies its own derived_band(11) = DTE 9-14, then nearest |delta| to 0.30
-  → None  ⇒  no observation today for this ticker (correct, not an error)
-implied_vol_put(price=mid, underlying=..., strike=..., dte=...,
-                rate=rate/100, div_yield=div_yield/100)
-  → one record, appended to today's file
+
+for (put_delta, target_dte) in ACCRUAL_GRID:    ← 6 cells, pure CPU
+    select_contract(day, obs, "P", put_delta, target_dte, tk)
+      → applies its own derived_band(target_dte), then nearest |delta|
+      → None  ⇒  no observation for THIS CELL today (correct, not an error)
+    implied_vol_put(price=mid, underlying=..., strike=..., dte=...,
+                    rate=rate/100, div_yield=div_yield/100)
+      → one record, appended to today's file
 ```
 
 `select_contract` is called verbatim rather than reimplemented. That is what makes the
@@ -150,8 +197,10 @@ quantity every prior measurement was taken on. `IVHistory.from_chains` states th
 requirement: recording a chain-wide average or an ATM proxy instead "silently redefines"
 the statistic.
 
-A date with no selectable put contributes **no observation**, never a NaN, so gaps shorten
-a history instead of poisoning the percentile. Same rule as `from_chains`.
+A date with no selectable put contributes **no observation for that cell**, never a NaN, so
+gaps shorten a history instead of poisoning the percentile. Same rule as `from_chains`.
+Cells are independent: a ticker can legitimately produce a DTE-11 row and no DTE-7 row on
+the same day.
 
 `implied_vol_put` refuses ITM puts by design. The OTM-only pull means it should never see
 one; the runner still skips rather than propagates if it ever does, so an unexpected input
@@ -169,22 +218,36 @@ is internal consistency. **Gets a dedicated test.**
 
 ### ⚠ Hazard: `put_delta` and `target_dte` are part of the scale
 
-The runner takes `put_delta` and `target_dte` from `FROZEN` (0.30 / 11), so the recorded
-contract is the one the live bot would sell. That coupling is the point — and it means
-**changing either config value mid-window redefines the observed quantity exactly as a
+**Changing either config value mid-window redefines the observed quantity exactly as a
 solver change would.** A series that switches from "the 0.30-delta put at 11 DTE" to "the
-0.20-delta put at 7 DTE" is two scales in one window: every later observation shifts
-relative to its own past and the rank pins toward 0 or 1, with nothing in the logs looking
-wrong.
+0.20-delta put at 7 DTE" holds two scales in one window: every later observation shifts
+relative to its own past, the rank pins toward 0 or 1, and nothing in the logs looks wrong.
+A 0.20-delta put is further OTM and cheaper, so every post-switch day would read as
+near-record-cheap on a series that never actually got cheap.
 
 This is not hypothetical. `_STATUS` records an open question over whether the strategy is
 0.30 delta or the 0.20 the owner described on 2026-08-03, and the sweep's top arm was
 delta 0.40 / DTE 7.
 
-The provenance stamp must therefore encode them — `"schwab-rth/bs-v1/d30/dte11"` or
-equivalent — so `IVHistory.append`'s existing refusal fires on a config change the same way
-it fires on a source change. Settle the exact stamp format during implementation; the
-requirement is that a `put_delta` or `target_dte` change cannot silently append.
+**Two mitigations, and they are different things.**
+
+*The grid removes the cost* for configs inside it. Every cell accrues in parallel from day
+1, so moving `FROZEN` from 0.30/11 to 0.20/7 means reading a different series that is
+already warm — no rebuild, no 150-day wait, no data loss. This is why the grid was chosen
+over recording the live contract alone.
+
+*The stamp keeps the guard* for configs outside it. Each record's `source` encodes the
+cell — `"schwab-rth/bs-v1/d30/dte11"` — so `IVHistory.append`'s existing refusal fires on a
+config change the same way it fires on a source change. Moving to a config with **no grid
+cell** (say 0.25/9) is still a genuine rebuild; the stamp makes it loud instead of silent.
+Settle the exact stamp format during implementation; the requirement is that a `put_delta`
+or `target_dte` change cannot silently append.
+
+**Guard the coupling itself:** the runner must assert that `FROZEN`'s
+`(put_delta, target_dte)` is a member of `ACCRUAL_GRID` and refuse to run otherwise.
+Without it, changing `FROZEN` to an off-grid config leaves the accrual store quietly not
+covering the live strategy at all — the store would keep filling, healthily, with six
+series none of which is the one being traded.
 
 ### ⚠ Hazard: bytecode caching on same-length constant edits
 
@@ -201,7 +264,7 @@ constant edit during mutation checks.
 | `select_contract` returns `None` | No record. Counted and logged, **never a failure** — AOS was measured with an in-band expiry on only 17% of days. |
 | One ticker's chain pull raises | Skipped, counted, run continues. |
 | Failure ratio over `zombie_threshold` | Save what exists, **exit 1**, no marker → the next in-window tick resumes. |
-| Retry inside the window | `load_iv_day(obs)` first; re-pull **only tickers with no record yet today**. A retry after 500 successes costs 47 calls, not 547. |
+| Retry inside the window | `load_iv_day(obs)` first; re-pull **only tickers with no records yet today**. Resume is keyed on the ticker, not the grid cell — one API call produces all six cells, so a ticker is either done or not. A retry after 500 successes costs 47 calls, not 547. |
 | Trading snapshot marker absent | Refuse, exit non-zero, no marker. |
 | Pull finishes past the save deadline | Discard; do not stamp post-close quotes as RTH. |
 
@@ -256,15 +319,25 @@ TDD, and every test mutation-verified — the pattern used for `iv_solve` and `i
 8. **Config is in the stamp.** A record written under `put_delta=0.30` and one written
    under `0.20` carry different `source` values, and `IVHistory.append` raises when the
    second is appended to the first.
+9. **Grid coverage.** One `otm_put_frame` fixture yields up to 6 records for one ticker,
+   keyed by `(put_delta, target_dte)`, and the DTE-7 cells are non-empty — the test that
+   would catch a request window sized for DTE 11 alone.
+10. **`FROZEN` must be on the grid.** With `FROZEN` set to an off-grid
+    `(put_delta, target_dte)`, the runner refuses to run.
 
 Baseline to hold: 669 passing, 0 failing.
 
 ## Cost and consequences
 
 - **~547 chain calls/day instead of ~12**, roughly 5 minutes of pulling, inside a window
-  that already reserves 15:20-15:50 and starts only after the trading snapshot saves.
-- **~90 KB/day of new state**, ~23 MB/year, one new file per day, never modified — the
-  cheapest possible git-mirror diff.
+  that already reserves 15:20-15:50 and starts only after the trading snapshot saves. The
+  grid adds **zero** API cost: six `select_contract` calls against a frame already in
+  memory.
+- **~550 KB/day of new state**, ~140 MB/year, one new file per day, never modified. Six
+  times the single-contract store, still a cheap git-mirror diff (one added file, no
+  rewrites). Rejected at the other end: recording the full 0.10-0.50 delta band would be
+  ~1.4 MB/day and ~350 MB/year into a mirror that force-pushes daily and clones to the Mac,
+  for configs nobody has proposed.
 - **The counter reads 0 until day 1.** The 252-day clock only advances on days the bot
   runs. The owner has kept day 1 deferred, so this ships, deploys, and accrues nothing
   until the timer is enabled. Stated here so it is on the record rather than discovered
