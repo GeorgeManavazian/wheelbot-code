@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from live.data import _CHAIN_COLS
+from live.data import _CHAIN_COLS, throttle
 from live.marks import occ_symbol, _contract_field, _num
 
 
@@ -131,7 +131,7 @@ def pull_held_quotes(client, position_lists, obs) -> dict:
     if not contracts:
         return out
     try:
-        resp = client.get_quotes([c["symbol"] for c in contracts])
+        resp = throttle(client.get_quotes, [c["symbol"] for c in contracts])
         data = resp.json() if hasattr(resp, "json") else resp
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"

@@ -14,6 +14,11 @@ import pandas as pd
 _ET = ZoneInfo("America/New_York")
 
 from src.engine_v2.options.chain import Mark
+# Every Schwab call site in this repo retries a transient 429/502. These quote
+# pulls were the exception, which was survivable only while everything Schwab-
+# facing ran serialized inside one tick. The IV accrual pull now has its own
+# systemd timer and CAN overlap the intraday manager, so contention is real.
+from live.data import throttle
 
 
 def occ_symbol(root: str, expiry, strike: float, right: str) -> str:
@@ -69,7 +74,7 @@ def live_marks(client, positions) -> dict:
     if not legs:
         return {}
     try:
-        resp = client.get_quotes(list(legs.keys()))
+        resp = throttle(client.get_quotes, list(legs.keys()))
         data = resp.json() if hasattr(resp, "json") else resp
     except Exception:
         return {}
@@ -113,7 +118,7 @@ def live_asks(client, positions) -> dict:
     if not legs:
         return {}
     try:
-        resp = client.get_quotes(list(legs))
+        resp = throttle(client.get_quotes, list(legs))
         data = resp.json() if hasattr(resp, "json") else resp
     except Exception:
         return {}
@@ -152,7 +157,20 @@ def contract_quotes(client, positions) -> dict:
     if not sym_to_tk:
         return {}
     try:
-        resp = client.get_quotes(list(sym_to_tk))
+        resp = throttle(client.get_quotes, list(sym_to_tk))
+        # A refused pull returns {} -- correct, there are no prices -- but it
+        # must not be SILENT. run_intraday does `if not quotes: continue`, so a
+        # leg sitting at its take-profit is simply not closed, with nothing
+        # printed and exit 0: indistinguishable from an account holding nothing.
+        # The wording deliberately avoids "error"/"Traceback"; the tick greps for
+        # those case-insensitively and would turn a transient quote refusal into
+        # a failed trading day and an alert page.
+        code = getattr(resp, "status_code", None)
+        if code is not None and code != 200:
+            print(f"quote pull refused: HTTP {code} -- {len(sym_to_tk)} held "
+                  f"leg(s) unpriced this pass; a take-profit due now waits for "
+                  f"a later tick")
+            return {}
         data = resp.json() if hasattr(resp, "json") else resp
     except Exception:
         return {}
