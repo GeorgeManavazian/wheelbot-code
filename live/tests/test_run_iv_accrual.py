@@ -73,8 +73,8 @@ def test_the_real_frozen_is_on_the_real_grid():
 def wired(monkeypatch, tmp_path):
     """Returns a helper that runs main() with everything external stubbed."""
     def _run(*, universe=("GDX", "SPY"), snapshot={"GDX": None},
-             prior=None, frames=None, start=None, done=None,
-             threshold=0.5, frozen=None):
+             prior=None, pulled_prior=None, frames=None, start=None, done=None,
+             threshold=0.5, frozen=None, observations=None):
         import live.chain_store as cs
         import live.config as lc
         import live.data as ld
@@ -104,11 +104,15 @@ def wired(monkeypatch, tmp_path):
         if frozen is not None:
             monkeypatch.setattr(rd, "FROZEN", frozen)
         monkeypatch.setattr(ivs, "load_iv_day", lambda obs: prior)
+        monkeypatch.setattr(ivs, "tickers_pulled", lambda obs: pulled_prior)
 
         saved = {}
         monkeypatch.setattr(ivs, "save_iv_day",
-                            lambda obs, records, pulled_at, **kw:
-                            saved.update(obs=obs, records=records)
+                            lambda obs, records, pulled_at, pulled_tickers=(),
+                            **kw:
+                            saved.update(obs=obs, records=records,
+                                         pulled_at=pulled_at,
+                                         pulled_tickers=list(pulled_tickers))
                             or str(tmp_path / "iv.json"))
 
         pulled = []
@@ -123,8 +127,16 @@ def wired(monkeypatch, tmp_path):
             raise RuntimeError(f"{tk} boom")
 
         monkeypatch.setattr(ld, "otm_put_frame", _frame)
-        monkeypatch.setattr(ria, "observations_for",
-                            lambda tk, frame, obs: [{"ticker": tk, "iv": 0.3}])
+
+        def _obs(tk, frame, obs):
+            if observations is not None:
+                out = observations(tk)
+                if isinstance(out, Exception):
+                    raise out
+                return out
+            return [{"ticker": tk, "iv": 0.3}]
+
+        monkeypatch.setattr(ria, "observations_for", _obs)
         rc = ria.main()
         return rc, saved, pulled, client_calls
     return _run
@@ -161,10 +173,85 @@ def test_happy_path_saves_and_exits_zero(wired):
     assert {r["ticker"] for r in saved["records"]} == {"GDX", "SPY"}
 
 
-def test_wholesale_pull_failure_saves_nothing_useful_and_exits_one(wired):
+def test_wholesale_pull_failure_exits_one(wired):
     rc, saved, pulled, _ = wired(frames={})       # every ticker raises
     assert rc != 0
     assert sorted(pulled) == ["GDX", "SPY"], "it tried all of them"
+
+
+def test_a_wholesale_failure_day_still_saves_what_answered(wired):
+    """Schwab degrades at 15:30 and most chains 503. The failure ratio is over
+    the threshold, so this is an outage and exits 1 with no marker -- but the
+    chains that DID answer are RTH observations that cannot be re-derived
+    (no historical chain endpoint), and the retries at 15:35/15:40 hit the same
+    outage until the window closes at 15:55. Discarding them loses them
+    permanently."""
+    df = pd.DataFrame({"x": [1]})
+    good = [f"OK{i}" for i in range(4)]
+    bad = [f"BAD{i}" for i in range(6)]           # 6/10 fail, over the 0.5 thr
+    rc, saved, pulled, _ = wired(universe=tuple(good + bad),
+                                 frames={tk: df for tk in good})
+    assert rc != 0, "an outage must still exit nonzero (no marker, retries)"
+    assert {r["ticker"] for r in saved["records"]} == set(good), \
+        "the chains that answered must not be thrown away"
+    assert sorted(saved["pulled_tickers"]) == good
+
+
+def test_a_wholesale_failure_past_the_deadline_still_saves_nothing(wired):
+    """Saving on failure must not sneak past the RTH guard: post-close quotes
+    are never stamped RTH, outage or not."""
+    df = pd.DataFrame({"x": [1]})
+    rc, saved, _, _ = wired(universe=("GDX", "SPY", "IWM", "QQQ"),
+                            frames={"GDX": df},
+                            start=_at(15, 50), done=_at(16, 30))
+    assert rc != 0 and saved == {}
+
+
+def test_an_unexpected_raise_in_observations_for_does_not_kill_the_day(wired):
+    """observations_for used to sit OUTSIDE the try guarding the pull, so one
+    unexpected row killed the process before any save and lost every ticker
+    pulled so far in the pass."""
+    df = pd.DataFrame({"x": [1]})
+    rc, saved, pulled, _ = wired(
+        universe=("GDX", "SPY", "IWM"),
+        frames={"GDX": df, "SPY": df, "IWM": df},
+        observations=lambda tk: (KeyError("delta") if tk == "SPY"
+                                 else [{"ticker": tk, "iv": 0.3}]))
+    assert sorted(pulled) == ["GDX", "IWM", "SPY"], "the run continued"
+    assert {r["ticker"] for r in saved["records"]} == {"GDX", "IWM"}
+    assert "SPY" not in saved["pulled_tickers"], \
+        "counted exactly like a pull failure, so a later tick retries it"
+    assert rc != 0
+
+
+def test_resume_does_not_repull_a_zero_yield_ticker(wired):
+    """IWM's chain pulled fine and had no in-band expiry, so it wrote no
+    record. It is DONE. Keying the resume on records re-pulled it on every
+    remaining in-window tick -- the design promises 47 calls, not 547."""
+    df = pd.DataFrame({"x": [1]})
+    rc, saved, pulled, _ = wired(universe=("GDX", "SPY", "IWM"),
+                                 frames={"SPY": df},
+                                 prior=[{"ticker": "GDX", "iv": 0.2}],
+                                 pulled_prior=["GDX", "IWM"])
+    assert pulled == ["SPY"], "IWM yielded nothing but was already pulled"
+    assert sorted(saved["pulled_tickers"]) == ["GDX", "IWM", "SPY"], \
+        "the roster must carry forward, or the next tick re-pulls them"
+
+
+def test_each_record_carries_its_own_pull_time(wired):
+    """A carried-forward record keeps the time it was really measured; only
+    this pass's records get this pass's clock."""
+    df = pd.DataFrame({"x": [1]})
+    earlier = "2026-07-17T15:28:00-04:00"
+    rc, saved, _, _ = wired(frames={"SPY": df},
+                            prior=[{"ticker": "GDX", "iv": 0.2,
+                                    "pulled_at": earlier}],
+                            pulled_prior=["GDX"],
+                            start=_at(15, 40))
+    by_tk = {r["ticker"]: r for r in saved["records"]}
+    assert by_tk["GDX"]["pulled_at"] == earlier, \
+        "an earlier pass's real pull time must not be overwritten"
+    assert by_tk["SPY"]["pulled_at"] == _at(15, 40).isoformat()
 
 
 def test_partial_failure_saves_the_good_records_and_exits_one(wired):
@@ -180,10 +267,11 @@ def test_partial_failure_saves_the_good_records_and_exits_one(wired):
         "the two good chains are saved even though IWM failed"
 
 
-def test_resume_skips_tickers_already_recorded_today(wired):
+def test_resume_skips_tickers_already_pulled_today(wired):
     df = pd.DataFrame({"x": [1]})
     rc, saved, pulled, _ = wired(frames={"SPY": df},
-                                 prior=[{"ticker": "GDX", "iv": 0.2}])
+                                 prior=[{"ticker": "GDX", "iv": 0.2}],
+                                 pulled_prior=["GDX"])
     assert pulled == ["SPY"], "GDX was already done"
     assert {r["ticker"] for r in saved["records"]} == {"GDX", "SPY"}, \
         "prior records are carried forward, not dropped"

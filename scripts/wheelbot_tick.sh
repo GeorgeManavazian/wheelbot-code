@@ -117,27 +117,6 @@ if [ "$DOW" -le 5 ] && [ "$HM" -ge 1520 ] && [ "$HM" -le 1555 ] && [ ! -f "$SNAP
   [ "$RC" -eq 0 ] && touch "$SNAPMARKER"
 fi
 
-# --- Universe-wide IV accrual: weekdays 15:20-15:55 ET, once per day -------
-# 547 chains (~5 min) so the whole universe accrues an IV observation, not just
-# the ~12 gate-passers -- without this the forward series gets ~5-6 obs/ticker/
-# year against MIN_RANK_OBS=150 and any purchased history decays to NEUTRAL
-# about a year after launch.
-#
-# GATED on $SNAPMARKER: trading's ~12-chain pull owns the window and the API
-# budget first; this only ever runs on its leftovers. Deliberately does NOT set
-# FAIL -- an IV outage must never alert-storm or mark a trading day failed. The
-# runner itself re-checks every one of these conditions; the shell gate just
-# avoids spawning it 60 times a day for nothing.
-IVMARKER="$LOGDIR/.ivaccrual-$TODAY"
-if [ "$DOW" -le 5 ] && [ "$HM" -ge 1520 ] && [ "$HM" -le 1555 ] \
-   && [ -f "$SNAPMARKER" ] && [ ! -f "$IVMARKER" ]; then
-  log "iv accrual start"
-  py live/run_iv_accrual.py >> "$LOGDIR/iv-$TODAY.log" 2>&1
-  RC=$?
-  log "iv accrual exit $RC"
-  [ "$RC" -eq 0 ] && touch "$IVMARKER"
-fi
-
 # --- EOD daily run: weekdays, 17:00-23:30 ET, once per day ------------------
 # Fires on every tick inside the window; the marker stops the second success.
 # That repetition IS the retry mechanism for a failed run. The window runs

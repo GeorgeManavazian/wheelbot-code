@@ -45,7 +45,13 @@ EPOCH_RE = re.compile(r"\.epoch-(\d{4}-\d{2}-\d{2})$")
 #                  real_money), not track record. A reset that silently
 #                  reverted it to built-in defaults would change how the bot
 #                  trades as a side effect of clearing the books.
-PRESERVE = ("config.json",)
+#   iv/         -- accrued IV observations. NOT track record either: it is a
+#                  measurement of the market, not of this store's trading. It
+#                  takes 150 trading days to rebuild and CANNOT be re-derived
+#                  (Schwab has no historical chain endpoint), so archiving it
+#                  would cost a year of ranking for a bookkeeping action.
+#                  `chains/` is deliberately NOT here (owner, 2026-08-07).
+PRESERVE = ("config.json", "iv")
 KEEP_IN_PLACE = (".git",) + PRESERVE
 
 
@@ -107,7 +113,13 @@ def reset_store(root: str = None, stamp: str = None, confirm: bool = False) -> d
         for name in plan["moves"]:
             shutil.move(os.path.join(root, name), os.path.join(archive, name))
         for name in plan["copies"]:
-            shutil.copy2(os.path.join(root, name), os.path.join(archive, name))
+            src, dst = os.path.join(root, name), os.path.join(archive, name)
+            # A preserved entry can be a DIRECTORY (iv/); copy2 raises on one,
+            # which would abort the reset half-moved.
+            if os.path.isdir(src):
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
 
     logs = os.path.join(root, "logs")
     os.makedirs(os.path.join(root, "accounts"), exist_ok=True)

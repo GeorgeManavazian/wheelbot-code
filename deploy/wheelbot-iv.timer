@@ -1,0 +1,20 @@
+[Unit]
+Description=Fire the Wheel Bot IV accrual tick every 5 minutes
+
+[Timer]
+# Wall-clock anchored, same reasoning as wheelbot.timer: the old
+# OnUnitActiveSec chain measured 5.18-6.85 min of phase slip (every fixed
+# window was entered by luck) and left NO next trigger after `systemctl stop`.
+# Persistent= only applies to OnCalendar timers. The VPS clock is UTC; the
+# script does all ET gating internally.
+#
+# Runs on its own cadence, NOT chained to wheelbot.timer: the whole point of
+# splitting this out is that a ~5 min accrual pull can no longer sit in front
+# of the intraday take-profit manager in a serialized oneshot tick.
+OnCalendar=*:0/5
+OnBootSec=2min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

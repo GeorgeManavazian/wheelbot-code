@@ -18,8 +18,13 @@ and force those thresholds to be re-derived. This one is gated on the trading
 snapshot ALREADY existing, so trading gets the window and the API budget first,
 and its own exit code touches nothing but its own marker.
 
-Exit codes: 0 = observations saved (tick writes the marker); non-zero = nothing
-saved / partial, tick retries on every remaining in-window tick.
+Exit codes: 0 = the whole universe was reached (the wrapper writes the marker);
+non-zero = partial or a wholesale outage -- WHAT WAS REACHED IS STILL SAVED, no
+marker, and every remaining in-window tick resumes the names still missing.
+
+Fired by scripts/wheelbot_iv_tick.sh on its own systemd timer, NOT from
+scripts/wheelbot_tick.sh: that tick is a serialized oneshot on a 5-minute
+cadence, so a ~5 min pull inside it delayed the intraday take-profit manager.
 """
 from __future__ import annotations
 
@@ -89,7 +94,7 @@ def main() -> int:
     from live.chain_store import load_chain_snapshot
     from live.config import load_run_config
     from live.data import otm_put_frame
-    from live.iv_store import load_iv_day, save_iv_day, tickers_done
+    from live.iv_store import load_iv_day, save_iv_day, tickers_pulled
     from live.run_daily import FROZEN
     from live.universe import UNIVERSE
 
@@ -117,10 +122,14 @@ def main() -> int:
         return 1
 
     prior = load_iv_day(obs) or []
-    done = tickers_done(prior)
+    # Keyed on what was PULLED, never on what produced records. A ticker whose
+    # chain came back clean but had no in-band expiry yields nothing and is
+    # still done; resuming on records re-pulled every such name on every
+    # remaining tick -- 547 calls again instead of the 47 the design promises.
+    done = set(tickers_pulled(obs) or [])
     todo = [tk for tk in UNIVERSE if tk not in done]
     if done:
-        print(f"IV accrual resuming: {len(done)} ticker(s) already recorded "
+        print(f"IV accrual resuming: {len(done)} ticker(s) already pulled "
               f"today, {len(todo)} to go.")
 
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
@@ -128,24 +137,36 @@ def main() -> int:
     from schwab_client import get_client
     client = get_client()
 
+    stamped_at = now.isoformat()
     records, attempted, ok, skipped = list(prior), 0, 0, []
+    pulled = sorted(done)
     for tk in todo:
         attempted += 1
         try:
             frame = otm_put_frame(client, tk, obs_date=obs)
+            # observations_for is INSIDE the try on purpose: an unexpected row
+            # raising here used to kill the process before any save, losing
+            # every ticker pulled so far this pass. An unexpected input must
+            # not kill the day -- it counts exactly like a pull failure, so the
+            # ticker stays un-pulled and a later tick retries it.
+            new = observations_for(tk, frame, obs)
         except Exception as e:      # one bad symbol must not stop the run
             skipped.append((tk, f"{type(e).__name__}: {e}"))
             continue
         ok += 1
-        records.extend(observations_for(tk, frame, obs))
+        pulled.append(tk)
+        for rec in new:
+            # Per-record, at creation. A carried-forward record keeps the time
+            # it was really measured; stamping the whole file's records with
+            # this pass's clock erased the earlier subset's true pull time.
+            rec["pulled_at"] = stamped_at
+        records.extend(new)
 
     thr = load_run_config()["zombie_threshold"]
-    if pull_failed(attempted, ok, thr):
-        print(f"IV accrual FAILED {obs.date()}: chains {ok}/{attempted} usable "
-              f"(threshold {thr:.0%}). Nothing saved; the next in-window tick "
-              f"resumes.")
-        return 1
+    failed = pull_failed(attempted, ok, thr)
 
+    # The deadline is re-checked BEFORE any save, on both paths: post-close
+    # quotes must never be stamped RTH, however the pass went.
     finished = dt.datetime.now(ET)
     if not args.force and not save_still_rth(finished):
         print(f"IV accrual DISCARDED: pull finished {finished:%H:%M} ET, past "
@@ -153,11 +174,21 @@ def main() -> int:
               f"must not be stamped RTH. Nothing saved.")
         return 1
 
-    path = save_iv_day(obs, records, pulled_at=now.isoformat())
+    # SAVE FIRST, judge after. A wholesale outage that discarded the day's good
+    # chains would throw away RTH observations permanently -- Schwab has no
+    # historical chain endpoint, so a 15:30 outage that lasts past 15:55 makes
+    # every ticker that DID answer unmeasurable forever.
+    path = save_iv_day(obs, records, pulled_at=stamped_at, pulled_tickers=pulled)
     cells = len(records)
     names = len({r["ticker"] for r in records})
     print(f"IV accrual {obs.date()}: {ok}/{attempted} chains, {cells} "
           f"observation(s) across {names} ticker(s) -> {path}")
+
+    if failed:
+        print(f"IV accrual FAILED {obs.date()}: chains {ok}/{attempted} usable "
+              f"(threshold {thr:.0%}). What DID answer is saved; no marker, so "
+              f"the next in-window tick resumes the rest.")
+        return 1
     if skipped:
         print(f"PARTIAL: {len(skipped)} chain(s) failed "
               f"({[tk for tk, _ in skipped][:8]}); saved anyway; exiting 1 so "

@@ -229,6 +229,28 @@ def test_config_json_survives_the_reset(tmp_path):
         == {"n": 3, "capital": 250000}
 
 
+def test_iv_history_survives_the_reset(tmp_path):
+    """The accrued IV store is a measurement of the MARKET, not of this store's
+    trading. It takes 150 trading days to rebuild and cannot be re-derived --
+    Schwab has no historical chain endpoint -- so archiving it would cost a
+    year of ranking for a bookkeeping action. (`chains/` is deliberately not
+    preserved; owner 2026-08-07.)"""
+    root = _store(tmp_path)
+    (root / "iv").mkdir()
+    (root / "iv" / "2026-07-17.json").write_text('{"obs": "2026-07-17"}')
+    (root / "chains").mkdir()
+    (root / "chains" / "2026-07-17.json").write_text("{}")
+    reset_store(str(root), "2026-08-03", confirm=True)
+
+    assert (root / "iv" / "2026-07-17.json").exists(), \
+        "150 trading days of unrecoverable observations were archived away"
+    # and the archive is still a complete snapshot of the day
+    assert (tmp_path / "archive-2026-08-03" / "iv" / "2026-07-17.json").exists()
+    # chains ARE track record and still move
+    assert not (root / "chains").exists()
+    assert (tmp_path / "archive-2026-08-03" / "chains").exists()
+
+
 def test_preserved_config_is_still_reported(tmp_path, capsys):
     root = _store(tmp_path)
     (root / "config.json").write_text("{}")

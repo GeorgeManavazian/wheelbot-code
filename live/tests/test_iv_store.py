@@ -13,7 +13,7 @@ import json
 
 import pandas as pd
 
-from live.iv_store import iv_path, save_iv_day, load_iv_day, tickers_done
+from live.iv_store import iv_path, save_iv_day, load_iv_day, tickers_pulled
 
 OBS = pd.Timestamp("2026-07-17")
 
@@ -24,9 +24,10 @@ REC = {"ticker": "GDX", "put_delta": 0.30, "target_dte": 11,
        "source": "schwab-rth/bs-v1/d30/dte11"}
 
 
-def _roundtrip(tmp_path, records, obs=OBS, load_obs=None):
+def _roundtrip(tmp_path, records, obs=OBS, load_obs=None, pulled=("GDX",)):
     p = str(tmp_path / "iv.json")
-    save_iv_day(obs, records, pulled_at="2026-07-17T15:35:00-04:00", path=p)
+    save_iv_day(obs, records, pulled_at="2026-07-17T15:35:00-04:00",
+                pulled_tickers=pulled, path=p)
     return p, load_iv_day(load_obs or obs, path=p)
 
 
@@ -53,10 +54,16 @@ def test_missing_or_corrupt_file_returns_none(tmp_path):
     for name, body in (("corrupt.json", "{not json"),
                        ("notdict.json", '["nope"]'),
                        ("norecords.json", '{"obs": "2026-07-17"}'),
-                       ("badrecords.json", '{"obs": "2026-07-17", "records": 7}')):
+                       ("badrecords.json", '{"obs": "2026-07-17", "records": 7}'),
+                       ("noroster.json",
+                        '{"obs": "2026-07-17", "records": []}'),
+                       ("badroster.json",
+                        '{"obs": "2026-07-17", "records": [], '
+                        '"pulled_tickers": 7}')):
         p = tmp_path / name
         p.write_text(body)
         assert load_iv_day(OBS, path=str(p)) is None, name
+        assert tickers_pulled(OBS, path=str(p)) is None, name
 
 
 def test_write_is_atomic_no_tmp_file_left_behind(tmp_path):
@@ -67,12 +74,36 @@ def test_write_is_atomic_no_tmp_file_left_behind(tmp_path):
     assert payload["pulled_at"] == "2026-07-17T15:35:00-04:00"
 
 
-def test_tickers_done_powers_the_resume(tmp_path):
+def test_tickers_pulled_powers_the_resume(tmp_path):
     """Resume is keyed on the TICKER, not the grid cell: one API call produces
-    all six cells, so a ticker is either done or not."""
-    recs = [dict(REC), dict(REC, target_dte=7), dict(REC, ticker="SPY")]
-    assert tickers_done(recs) == {"GDX", "SPY"}
-    assert tickers_done([]) == set()
+    all six cells, so a ticker is either pulled or not."""
+    p = str(tmp_path / "iv.json")
+    save_iv_day(OBS, [REC], pulled_at="x", pulled_tickers=["SPY", "GDX", "GDX"],
+                path=p)
+    assert tickers_pulled(OBS, path=p) == ["GDX", "SPY"]
+    assert tickers_pulled(OBS + pd.Timedelta(days=1), path=p) is None
+
+
+def test_a_zero_yield_ticker_is_still_pulled(tmp_path):
+    """THE distinction the store exists to keep. IWM's chain came back clean
+    and had no expiry in any DTE band, so it produced no record -- it is still
+    done. Keying the resume on records re-pulls it on every remaining tick."""
+    p = str(tmp_path / "iv.json")
+    save_iv_day(OBS, [REC], pulled_at="x", pulled_tickers=["GDX", "IWM"],
+                path=p)
+    recs = load_iv_day(OBS, path=p)
+    assert {r["ticker"] for r in recs} == {"GDX"}, "IWM yielded nothing"
+    assert "IWM" in tickers_pulled(OBS, path=p), \
+        "a zero-yield ticker must not look un-pulled"
+
+
+def test_an_empty_roster_is_present_not_missing(tmp_path):
+    """Same discipline as the empty record list: 'a pass ran and reached
+    nobody' must stay distinguishable from 'no usable file'."""
+    p = str(tmp_path / "iv.json")
+    save_iv_day(OBS, [], pulled_at="x", pulled_tickers=[], path=p)
+    got = tickers_pulled(OBS, path=p)
+    assert got == [] and got is not None
 
 
 def test_path_lives_under_the_state_root_so_it_rides_the_mirror():

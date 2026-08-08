@@ -1,0 +1,20 @@
+[Unit]
+Description=Wheel Bot universe-wide IV accrual pull (547 chains, RTH window)
+After=network-online.target
+Wants=network-online.target
+# DELIBERATELY NO OnFailure=. wheelbot.service alerts because a failed TRADING
+# tick is an incident. This unit is data accrual: it is gated on the trading
+# snapshot, it sets nothing the trading path reads, and the script always exits
+# 0 anyway. An OnFailure= here would page the owner for a Schwab hiccup that
+# the next in-window tick retries on its own.
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/etf-bot
+ExecStart=/bin/bash /home/ubuntu/etf-bot/scripts/wheelbot_iv_tick.sh
+# A 547-ticker sequential chain pull was estimated at ~5 min; the same Schwab
+# degradation that makes the EOD run take 7 min applies here, so this gets the
+# same order of margin wheelbot.service gets rather than a tight 2x. The
+# runner's own SAVE_DEADLINE (1605 ET) is the real stop, not this timeout.
+TimeoutStartSec=1800

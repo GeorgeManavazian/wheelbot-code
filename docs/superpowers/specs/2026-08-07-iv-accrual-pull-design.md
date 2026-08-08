@@ -87,7 +87,11 @@ ACCRUAL_GRID = [(0.20, 7), (0.20, 11), (0.30, 7), (0.30, 11), (0.40, 7), (0.40, 
 | `live/data.py` | **new** `otm_put_frame()` |
 | `live/iv_store.py` | **new** — `save_iv_day()` / `load_iv_day()` |
 | `live/run_iv_accrual.py` | **new** — the runner |
-| `scripts/wheelbot_tick.sh` | **new block** after the chain-snapshot block |
+| `scripts/wheelbot_iv_tick.sh` | **new** — the window/marker wrapper, its own script |
+| `deploy/wheelbot-iv.service` | **new** — `Type=oneshot`, and deliberately **no** `OnFailure=` |
+| `deploy/wheelbot-iv.timer` | **new** — `OnCalendar=*:0/5`, `Persistent=true` |
+
+`scripts/wheelbot_tick.sh` is **unchanged** — see "Placement", below.
 
 No existing function's behavior changes. `chain_from_json`, `_CHAIN_COLS`, `chain_store`,
 `market_live.py` and `run_daily.py` are all read-only to this work.
@@ -146,8 +150,14 @@ change can rebuild the series from disk without re-pulling or re-purchasing anyt
 ```
 ticker, put_delta, target_dte,          ← which grid cell this row answers
 expiry, strike, dte, delta, bid, ask, mid,
-underlying, rate, div_yield, iv, source
+underlying, rate, div_yield, iv, source,
+pulled_at                               ← set per record, at creation
 ```
+
+The file also carries a **`pulled_tickers` roster** beside `records`: what the pull
+*reached*, as distinct from what it *yielded*. See the retry row in Error handling.
+`pulled_at` is per record rather than per file so a resumed day does not restamp the
+earlier pass's records with the later pass's clock.
 
 `(ticker, put_delta, target_dte)` is the series key. Six grid cells means six independent
 series per ticker, each accruing in parallel from day 1 and each warming up to
@@ -267,7 +277,7 @@ constant edit during mutation checks.
 | `select_contract` returns `None` | No record. Counted and logged, **never a failure** — AOS was measured with an in-band expiry on only 17% of days. |
 | One ticker's chain pull raises | Skipped, counted, run continues. |
 | Failure ratio over `zombie_threshold` | Save what exists, **exit 1**, no marker → the next in-window tick resumes. |
-| Retry inside the window | `load_iv_day(obs)` first; re-pull **only tickers with no records yet today**. Resume is keyed on the ticker, not the grid cell — one API call produces all six cells, so a ticker is either done or not. A retry after 500 successes costs 47 calls, not 547. |
+| Retry inside the window | `tickers_pulled(obs)` first; re-pull **only tickers whose chain was not successfully PULLED yet today** — persisted separately from the records, because a ticker with a clean chain and no in-band expiry writes no record and is still done. Keyed on the ticker, not the grid cell — one API call produces all six cells. A retry after 500 successes costs 47 calls, not 547. |
 | Trading snapshot marker absent | Refuse, exit non-zero, no marker. |
 | Pull finishes past the save deadline | Discard; do not stamp post-close quotes as RTH. |
 
@@ -286,20 +296,29 @@ Rejected: never failing. A total endpoint outage would then be indistinguishable
 week of thin ladders, which is the 2026-07-24 shape (all 547 tickers failed, exit 0, the
 wrapper wrote the done-marker, the day was recorded complete and became unrecoverable).
 
-The runner's exit code gates **only its own marker**. The tick's `FAIL` variable is not set
-by this block, so an IV outage cannot alert-storm and cannot mark a trading day failed.
+The runner's exit code gates **only its own marker**. `wheelbot_iv_tick.sh` exits 0
+regardless and `wheelbot-iv.service` has no `OnFailure=`, so an IV outage cannot alert-storm
+and cannot mark a trading day failed.
 
-## Tick placement
+## Placement: its own script, its own systemd unit
 
-New block after the chain-snapshot block in `scripts/wheelbot_tick.sh`:
+This was originally specified as a new block inside `scripts/wheelbot_tick.sh`. **Owner
+approved moving it to its own timer on 2026-08-07, and that is what shipped**, because the
+tick is serialized — `wheelbot.service` is `Type=oneshot` on `OnCalendar=*:0/5`, so a tick
+that runs long absorbs the next trigger, and intraday → chain snapshot (~7 min) → accrual
+(~5 min) ended ~15:32, delaying the intraday take-profit manager from 15:25 and 15:30 out
+to ~15:35 on every accrual retry tick. A trading-behavior change arriving without touching
+a trading file is exactly what this design exists to prevent.
+
+`scripts/wheelbot_iv_tick.sh`, fired by `wheelbot-iv.timer` on its own `*:0/5` cadence, so
+it runs *concurrently with* the trading tick and can never sit in front of it:
 
 - weekdays, inside the window, `.ivaccrual-$TODAY` absent, **and `.chainsnap-$TODAY`
-  present**
+  present** — trading's ~12-chain pull still owns the window and the API budget first
 - marker written only on exit 0, so a failed pull retries on every remaining in-window tick
-- does not set `FAIL`
-
-Placement after the chain-snapshot block matches the existing reasoning for placing that
-block after the intraday block: a time-sensitive job is never queued behind a long pull.
+- the script **always exits 0**, and `wheelbot-iv.service` carries **no `OnFailure=`**: an
+  IV outage must never alert-storm or look like a failed unit. `wheelbot.service` keeps its
+  alert, because a failed *trading* tick is an incident.
 
 ## Testing
 
@@ -317,8 +336,10 @@ TDD, and every test mutation-verified — the pattern used for `iv_solve` and `i
    tickers.
 6. **Failure judging.** Attempted 547 / ok 12 → exit 1, no marker. Attempted 547 / ok 541
    with only 200 observations written → exit 0.
-7. **Tick gating.** The IV block does not run without `.chainsnap-$TODAY`, via the existing
-   `WHEELBOT_FAKE_*` hooks in `live/tests/test_tick_script.py`.
+7. **Wrapper gating.** `scripts/wheelbot_iv_tick.sh` does not run without `.chainsnap-$TODAY`,
+   via the same `WHEELBOT_FAKE_*` sandbox harness, in `live/tests/test_iv_tick_script.py`.
+   Plus deploy-unit lint in `live/tests/test_deploy_units.py`: the timer is wall-clock
+   anchored and `Persistent`, and `wheelbot-iv.service` has **no `OnFailure=`**.
 8. **Config is in the stamp.** A record written under `put_delta=0.30` and one written
    under `0.20` carry different `source` values, and `IVHistory.append` raises when the
    second is appended to the first.
