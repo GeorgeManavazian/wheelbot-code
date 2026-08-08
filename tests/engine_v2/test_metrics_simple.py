@@ -11,7 +11,7 @@ def test_infer_periods_per_year_daily():
     assert m.infer_periods_per_year(idx) == pytest.approx(252, abs=6)
 
 def test_infer_periods_per_year_minute():
-    idx = pd.date_range("2010-01-04 09:30", periods=400, freq="T")
+    idx = pd.date_range("2010-01-04 09:30", periods=400, freq="min")
     # ~390 trading minutes/day * 252 days
     assert m.infer_periods_per_year(idx) > 90_000
 

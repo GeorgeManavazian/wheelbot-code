@@ -4,6 +4,8 @@ from src.engine_v2.backtest.simple import run_simple, Result
 from src.engine_v2.backtest.orchestrator import BacktestConfig, position_history
 from src.engine_v2.strategy.counter_trend import CounterTrendDipBuy as Strat
 
+pytestmark = pytest.mark.slow
+
 BARS = pd.read_parquet("fixtures/bars_2007_2010_small.parquet")
 
 def test_run_simple_equity_matches_position_history():

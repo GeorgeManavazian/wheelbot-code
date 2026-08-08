@@ -118,6 +118,7 @@ def test_time_exit_after_time_index_bars():
     assert fcs[entry + 3] == 0.0, "did not exit on the 4th bar"
 
 
+@pytest.mark.slow
 def test_golden_master_on_real_data_entries_are_genuine():
     """On real SPY history, every flat->position transition must coincide with an
     independently-computed gap + trend-filter, in the matching direction. And it must

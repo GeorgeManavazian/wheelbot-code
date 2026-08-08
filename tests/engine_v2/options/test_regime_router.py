@@ -1,10 +1,12 @@
 """Regime router (spec 2026-07-14-regime-router-design): uptrend->hold shares,
 chop->wheel+basis, downtrend+stressed->wheel, downtrend+quiet->cash,
 unknown->wheel. Approach A borders. Zero knobs, EOD, strictly-prior-day state."""
+import os
 import pandas as pd
 import pytest
 from src.engine_v2.options.wheel import WheelConfig, run_wheel
 from src.engine_v2.options.regime_router import run_regime_router
+from src.engine_v2.options.data import chain_path
 
 COLS = ["date","expiry","dte","strike","right","bid","ask","mid","close","delta","iv","underlying"]
 
@@ -31,6 +33,9 @@ CHOP = [("2024-01-01","chop","normal",0.5)]
 
 # ---- anchor: WHEEL posture == solo wheel+basis, byte for byte ----
 
+@pytest.mark.slow
+@pytest.mark.skipif(not os.path.exists(chain_path("SPY")),
+                    reason="chain data not pulled (gitignored) -- runs locally, skipped in CI")
 def test_all_chop_states_byte_identical_to_solo_wheel():
     ch = pd.read_parquet("data/options/spy_greeks_eod_all.parquet")
     dates = pd.to_datetime(ch["date"]).sort_values().unique()
@@ -201,6 +206,9 @@ def test_trend_sale_can_redeploy_same_day_into_panic():
 def _states_trim(rows):  # alias for readability
     return _states(rows)
 
+@pytest.mark.slow
+@pytest.mark.skipif(not os.path.exists(chain_path("SPY")),
+                    reason="chain data not pulled (gitignored) -- runs locally, skipped in CI")
 def test_trim_off_is_byte_identical():
     from src.engine_v2.regime.state import regime_series
     from src.engine_v2.regime.data import closes_for

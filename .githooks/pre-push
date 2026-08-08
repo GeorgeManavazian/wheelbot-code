@@ -1,0 +1,17 @@
+#!/bin/sh
+# Fast regression gate: runs before every push.
+# The slow tests (pytest -m slow) run in CI, not here.
+#
+# Emergency bypass:  git push --no-verify
+#
+# Enabled by:  git config core.hooksPath .githooks
+
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+PY=.venv-live/bin/python
+[ -x "$PY" ] || PY=python3
+
+echo "pre-push: running fast test suite (pytest -m 'not slow')..."
+"$PY" -m pytest -q -m "not slow"
+echo "pre-push: OK"

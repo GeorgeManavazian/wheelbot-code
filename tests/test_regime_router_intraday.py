@@ -1,5 +1,7 @@
+import os
 import pandas as pd
 import numpy as np
+import pytest
 from src.engine_v2.options.regime_router import run_regime_router
 from src.engine_v2.options.wheel import WheelConfig
 from src.engine_v2.options.data import chain_path
@@ -7,6 +9,13 @@ from src.engine_v2.options.portfolio import DEFAULT_CLEAN_START
 from src.engine_v2.options.intraday import intraday_marks
 from src.engine_v2.regime.state import regime_series
 from src.engine_v2.regime.data import closes_for
+
+pytestmark = pytest.mark.slow
+
+# These read real chains from data/options/ (gitignored): local-only, skipped in CI.
+needs_chains = pytest.mark.skipif(
+    not os.path.exists(chain_path("SPY")),
+    reason="chain data not pulled (gitignored) -- runs locally, skipped in CI")
 
 BASE = dict(put_delta=0.20, call_delta=0.20, target_dte=7,
             take_profit_pct=0.50, starting_capital=100_000.0,
@@ -21,6 +30,7 @@ def _load(t):
     return ch, regime_series(closes_for(t))
 
 
+@needs_chains
 def test_intraday_none_is_byte_identical():
     # The load-bearing invariant: intraday=None must equal the current router
     # exactly, on every seen ticker. Protects the deep-audit-clean status.
@@ -37,6 +47,7 @@ def test_intraday_none_is_byte_identical():
         assert a.intraday_tp_fills == 0 and a.eod_tp_fills >= 0
 
 
+@needs_chains
 def test_intraday_tp_fills_at_next_valid_bar():
     # A synthetic short whose price crosses the TP threshold mid-day fills at
     # the NEXT valid bar's close, not the crossing bar, and is booked intraday.
@@ -66,6 +77,7 @@ def test_intraday_tp_fills_at_next_valid_bar():
     assert res.intraday_tp_fills >= 1
 
 
+@needs_chains
 def test_last_bar_cross_falls_through_to_eod():
     # A cross on the day's LAST bar has no next bar -> no intraday fill.
     ch, states = _load("SPY")
@@ -85,6 +97,7 @@ def test_last_bar_cross_falls_through_to_eod():
                 and pd.Timestamp(t.date) == day + pd.Timedelta(hours=11)]
 
 
+@needs_chains
 def test_zero_close_bar_never_triggers():
     # A zero-close bar below threshold is not a price and must not fill.
     ch, states = _load("SPY")
@@ -160,6 +173,7 @@ def test_intraday_tp_close_then_trend_entry_preserves_whipsaw_index():
     assert res.whipsaw_pairs == 1
 
 
+@needs_chains
 def test_wrapper_equals_manual_intraday_call():
     from src.engine_v2.options.intraday import run_regime_router_intraday
     ch, states = _load("GDX")

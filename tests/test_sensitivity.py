@@ -1,8 +1,11 @@
 import pandas as pd
+import pytest
 from dashboard import sensitivity
 from src.engine_v2.backtest.orchestrator import BacktestConfig
 from src.engine_v2.data.source import default_source
 from src.engine_v2.strategy.registry import STRATEGIES, get_strategy
+
+pytestmark = pytest.mark.slow
 
 def test_cost_sweep_returns_one_row_per_spread_level():
     src = default_source()

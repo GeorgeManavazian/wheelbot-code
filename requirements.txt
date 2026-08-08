@@ -8,3 +8,6 @@ pytest-cov>=4.0
 streamlit>=1.37
 plotly>=5.20
 scikit-learn>=1.3
+# live/ only: live/data.py imports schwab.client inside its chain-pull functions.
+# Was absent while pytest.ini's testpaths excluded live/, so CI never needed it.
+schwab-py>=1.5

@@ -4,6 +4,8 @@ from src.engine_v2.data.source import intraday_source, INTRADAY_FIXTURE_PATH
 from src.engine_v2.backtest.simple import run_simple
 from src.engine_v2.strategy.counter_trend import CounterTrendDipBuy as Strat
 
+pytestmark = pytest.mark.slow
+
 def _src():
     return intraday_source(INTRADAY_FIXTURE_PATH)
 
